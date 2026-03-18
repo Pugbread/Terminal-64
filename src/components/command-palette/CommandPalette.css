@@ -65,37 +65,40 @@
 
 .command-palette-item {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 2px;
   padding: 8px 14px;
   cursor: pointer;
-  color: var(--fg-secondary, #bac2de);
-  font-size: 12.5px;
-  font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
   border-radius: 6px;
-  transition: background 0.08s, color 0.08s;
+  transition: background 0.08s;
 }
 
 .command-palette-item.selected {
   background: var(--accent, #89b4fa);
+}
+
+.command-palette-item.selected .qp-label {
   color: var(--bg-tertiary, #11111b);
 }
 
-.command-palette-item.selected .command-category {
+.command-palette-item.selected .qp-command {
   color: var(--bg-tertiary, #11111b);
   opacity: 0.6;
 }
 
-.command-label {
-  flex: 1;
+.qp-label {
+  font-size: 12.5px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  color: var(--fg-secondary, #bac2de);
 }
 
-.command-category {
+.qp-command {
   font-size: 10.5px;
+  font-family: 'Cascadia Code', Consolas, monospace;
   color: var(--fg-muted, #6c7086);
-  margin-left: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .command-palette-empty {

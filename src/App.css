@@ -79,6 +79,27 @@
   transition: background 0.1s, color 0.1s;
 }
 
+.header-update {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  height: 24px;
+  border: none;
+  background: rgba(166, 227, 161, 0.12);
+  color: #a6e3a1;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-right: 4px;
+  transition: background 0.15s;
+}
+
+.header-update:hover {
+  background: rgba(166, 227, 161, 0.2);
+}
+
 .header-btn:hover {
   color: var(--fg, #cdd6f4);
   background: rgba(255, 255, 255, 0.06);

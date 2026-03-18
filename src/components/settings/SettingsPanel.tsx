@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useThemeStore } from "../../stores/themeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import "./SettingsPanel.css";
@@ -16,11 +17,22 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
 
   const apiKey = useSettingsStore((s) => s.openaiApiKey);
   const model = useSettingsStore((s) => s.openaiModel);
+  const quickPastes = useSettingsStore((s) => s.quickPastes);
   const setSetting = useSettingsStore((s) => s.set);
+  const addQuickPaste = useSettingsStore((s) => s.addQuickPaste);
+  const removeQuickPaste = useSettingsStore((s) => s.removeQuickPaste);
+
+  const [newCommand, setNewCommand] = useState("");
 
   if (!isOpen) return null;
 
   const opacityPercent = Math.round(bgAlpha * 100);
+
+  const handleAddQuickPaste = () => {
+    if (!newCommand.trim()) return;
+    addQuickPaste("", newCommand.trim());
+    setNewCommand("");
+  };
 
   return (
     <div className="settings-overlay" onClick={onClose}>
@@ -72,6 +84,49 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
 
           <div className="settings-divider" />
 
+          {/* Quick Pastes */}
+          <div className="settings-group">
+            <label className="settings-label">Quick Pastes</label>
+            <span className="settings-hint">Ctrl+Shift+P to open quick paste palette</span>
+
+            {quickPastes.length > 0 && (
+              <div className="qp-list">
+                {quickPastes.map((qp) => (
+                  <div key={qp.id} className="qp-item">
+                    <div className="qp-item-info">
+                        <span className="qp-item-cmd" style={{ fontSize: "11.5px", color: "var(--fg-secondary)" }}>{qp.command}</span>
+                    </div>
+                    <button
+                      className="qp-item-delete"
+                      onClick={() => removeQuickPaste(qp.id)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="qp-add">
+              <input
+                className="settings-input"
+                placeholder="e.g. claude --dangerously-skip-permissions"
+                value={newCommand}
+                onChange={(e) => setNewCommand(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAddQuickPaste()}
+              />
+              <button
+                className="qp-add-btn"
+                onClick={handleAddQuickPaste}
+                disabled={!newCommand.trim()}
+              >
+                + Add
+              </button>
+            </div>
+          </div>
+
+          <div className="settings-divider" />
+
           <div className="settings-group">
             <label className="settings-label">OpenAI API Key</label>
             <input
@@ -96,19 +151,6 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
               <option value="gpt-4o-mini">gpt-4o-mini (cheap)</option>
               <option value="gpt-4o">gpt-4o</option>
             </select>
-          </div>
-        </div>
-
-        <div className="settings-shortcuts">
-          <div className="settings-shortcuts-title">Keyboard Shortcuts</div>
-          <div className="shortcut-grid">
-            <div className="shortcut-row"><kbd>Ctrl+Shift+P</kbd><span>Command Palette</span></div>
-            <div className="shortcut-row"><kbd>Ctrl+C</kbd><span>Copy / Interrupt</span></div>
-            <div className="shortcut-row"><kbd>Ctrl+V</kbd><span>Paste</span></div>
-            <div className="shortcut-row"><kbd>Ctrl+A</kbd><span>Select All</span></div>
-            <div className="shortcut-row"><kbd>Ctrl+Scroll</kbd><span>Zoom Canvas</span></div>
-            <div className="shortcut-row"><kbd>Double-click</kbd><span>New Terminal</span></div>
-            <div className="shortcut-row"><kbd>Ctrl+Enter</kbd><span>Send (in editor)</span></div>
           </div>
         </div>
       </div>

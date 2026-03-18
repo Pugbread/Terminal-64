@@ -13,6 +13,7 @@ import { useThemeStore } from "./stores/themeStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { registerCommand } from "./lib/commands";
 import { closeTerminal } from "./lib/tauriApi";
+import { checkForUpdate, UpdateInfo } from "./lib/updater";
 import "./App.css";
 
 const appWindow = getCurrentWindow();
@@ -23,9 +24,15 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
 
   useTheme();
   useKeybindings();
+
+  // Check for updates on startup
+  useEffect(() => {
+    checkForUpdate().then(setUpdate);
+  }, []);
 
   // Restore saved settings (theme, opacity) on startup
   useEffect(() => {
@@ -133,6 +140,25 @@ function App() {
 
         <div className="header-drag" data-tauri-drag-region />
 
+        {update && (
+          <button
+            className="header-update"
+            onClick={() => window.open(update.url)}
+            title={`Update available: v${update.version}`}
+          >
+            v{update.version}
+          </button>
+        )}
+
+        <button
+          className="header-btn"
+          onClick={() => setPaletteOpen(true)}
+          title="Quick Pastes (Ctrl+Shift+P)"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M2 3H12M2 7H9M2 11H11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+          </svg>
+        </button>
         <button
           className="header-btn"
           onClick={() => setSettingsOpen(true)}

@@ -7,8 +7,12 @@ import monokai from "../themes/monokai.json";
 import defaultDark from "../themes/default-dark.json";
 import tokyoNight from "../themes/tokyo-night.json";
 import black from "../themes/black.json";
+import dark from "../themes/dark.json";
+import discord from "../themes/discord.json";
 
 const builtInThemes: ThemeDefinition[] = [
+  discord as ThemeDefinition,
+  dark as ThemeDefinition,
   black as ThemeDefinition,
   catppuccinMocha as ThemeDefinition,
   dracula as ThemeDefinition,

@@ -229,9 +229,13 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
             cwd={term.cwd || undefined}
             onFocus={() => handleFocus()}
             onActivity={() => handleActivity()}
-            onTitleChange={(_, title) =>
-              useCanvasStore.getState().setTitle(term.id, title)
-            }
+            onTitleChange={(_, title) => {
+              useCanvasStore.getState().setTitle(term.id, title);
+              // PowerShell sets window title to CWD path
+              if (/^[A-Z]:\\/.test(title)) {
+                useCanvasStore.getState().setCwd(term.id, title);
+              }
+            }}
             onCwdChange={(_, dir) =>
               useCanvasStore.getState().setCwd(term.id, dir)
             }

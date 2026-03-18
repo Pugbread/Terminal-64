@@ -1,13 +1,29 @@
 import { create } from "zustand";
+import { v4 as uuidv4 } from "uuid";
+
+export interface QuickPaste {
+  id: string;
+  command: string;
+  lastUsed: number;
+}
 
 export interface Settings {
   openaiApiKey: string;
   openaiModel: string;
   theme: string;
   bgAlpha: number;
+  quickPastes: QuickPaste[];
 }
 
 const STORAGE_KEY = "terminal64-settings";
+
+const defaultSettings: Settings = {
+  openaiApiKey: "",
+  openaiModel: "gpt-5.4-mini",
+  theme: "Catppuccin Mocha",
+  bgAlpha: 1,
+  quickPastes: [],
+};
 
 function loadSettings(): Settings {
   try {
@@ -17,16 +33,18 @@ function loadSettings(): Settings {
   return defaultSettings;
 }
 
-const defaultSettings: Settings = {
-  openaiApiKey: "",
-  openaiModel: "gpt-5.4-mini",
-  theme: "Catppuccin Mocha",
-  bgAlpha: 1,
-};
+function persist(state: Settings) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {}
+}
 
 interface SettingsState extends Settings {
   set: (partial: Partial<Settings>) => void;
   save: () => void;
+  addQuickPaste: (label: string, command: string) => void;
+  removeQuickPaste: (id: string) => void;
+  touchQuickPaste: (id: string) => void;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -34,33 +52,29 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   set: (partial) => {
     set(partial);
-    // Auto-save on every change
-    const state = { ...get(), ...partial };
-    try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          openaiApiKey: state.openaiApiKey,
-          openaiModel: state.openaiModel,
-          theme: state.theme,
-          bgAlpha: state.bgAlpha,
-        })
-      );
-    } catch {}
+    persist({ ...get(), ...partial });
   },
 
-  save: () => {
-    const s = get();
-    try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          openaiApiKey: s.openaiApiKey,
-          openaiModel: s.openaiModel,
-          theme: s.theme,
-          bgAlpha: s.bgAlpha,
-        })
-      );
-    } catch {}
+  save: () => persist(get()),
+
+  addQuickPaste: (_label, command) => {
+    const qp: QuickPaste = { id: uuidv4(), command, lastUsed: 0 };
+    const updated = [...get().quickPastes, qp];
+    set({ quickPastes: updated });
+    persist({ ...get(), quickPastes: updated });
+  },
+
+  removeQuickPaste: (id) => {
+    const updated = get().quickPastes.filter((q) => q.id !== id);
+    set({ quickPastes: updated });
+    persist({ ...get(), quickPastes: updated });
+  },
+
+  touchQuickPaste: (id) => {
+    const updated = get().quickPastes.map((q) =>
+      q.id === id ? { ...q, lastUsed: Date.now() } : q
+    );
+    set({ quickPastes: updated });
+    persist({ ...get(), quickPastes: updated });
   },
 }));
