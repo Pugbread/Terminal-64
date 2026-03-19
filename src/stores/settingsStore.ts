@@ -13,6 +13,7 @@ export interface Settings {
   theme: string;
   bgAlpha: number;
   quickPastes: QuickPaste[];
+  recentDirs: string[];
 }
 
 const STORAGE_KEY = "terminal64-settings";
@@ -23,6 +24,7 @@ const defaultSettings: Settings = {
   theme: "Catppuccin Mocha",
   bgAlpha: 1,
   quickPastes: [],
+  recentDirs: [],
 };
 
 function loadSettings(): Settings {
@@ -42,9 +44,10 @@ function persist(state: Settings) {
 interface SettingsState extends Settings {
   set: (partial: Partial<Settings>) => void;
   save: () => void;
-  addQuickPaste: (label: string, command: string) => void;
+  addQuickPaste: (command: string) => void;
   removeQuickPaste: (id: string) => void;
   touchQuickPaste: (id: string) => void;
+  addRecentDir: (dir: string) => void;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -57,7 +60,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   save: () => persist(get()),
 
-  addQuickPaste: (_label, command) => {
+  addQuickPaste: (command) => {
     const qp: QuickPaste = { id: uuidv4(), command, lastUsed: 0 };
     const updated = [...get().quickPastes, qp];
     set({ quickPastes: updated });
@@ -76,5 +79,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     );
     set({ quickPastes: updated });
     persist({ ...get(), quickPastes: updated });
+  },
+
+  addRecentDir: (dir) => {
+    const current = get().recentDirs.filter((d) => d !== dir);
+    const updated = [dir, ...current].slice(0, 3);
+    set({ recentDirs: updated });
+    persist({ ...get(), recentDirs: updated });
   },
 }));

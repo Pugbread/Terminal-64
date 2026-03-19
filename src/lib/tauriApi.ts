@@ -22,6 +22,10 @@ export function onTerminalOutput(callback: (payload: TerminalOutput) => void): P
   return listen<TerminalOutput>("terminal-output", (event) => callback(event.payload));
 }
 
+export async function getClaudeSessionId(projectDir: string): Promise<string> {
+  return invoke("get_claude_session_id", { projectDir });
+}
+
 export function onTerminalExit(callback: (payload: TerminalExit) => void): Promise<UnlistenFn> {
   return listen<TerminalExit>("terminal-exit", (event) => callback(event.payload));
 }

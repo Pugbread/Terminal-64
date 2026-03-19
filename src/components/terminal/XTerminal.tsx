@@ -17,12 +17,14 @@ import "./XTerminal.css";
 interface XTerminalProps {
   terminalId: string;
   isActive?: boolean;
-  cwd?: string; // start shell in this directory (session restore)
+  cwd?: string;
+  autoCommand?: string; // run this command after shell starts
   onExit?: (id: string) => void;
   onFocus?: (id: string) => void;
   onTitleChange?: (id: string, title: string) => void;
   onActivity?: (id: string) => void;
   onCwdChange?: (id: string, cwd: string) => void;
+  onSessionId?: (id: string, sessionId: string) => void;
 }
 
 export default function XTerminal({
@@ -30,10 +32,12 @@ export default function XTerminal({
   isActive,
   onExit,
   cwd,
+  autoCommand,
   onFocus,
   onTitleChange,
   onActivity,
   onCwdChange,
+  onSessionId,
 }: XTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -258,10 +262,14 @@ export default function XTerminal({
           term.write(payload.data);
           onActivity?.(terminalId);
           // Parse CWD from PowerShell prompt "PS C:\path>" or OSC 7
+          // Parse CWD from PowerShell prompt or OSC 7
           const psMatch = payload.data.match(/PS ([A-Z]:\\[^>]*?)>/);
           if (psMatch) onCwdChange?.(terminalId, psMatch[1]);
           const oscMatch = payload.data.match(/\x1b\]7;file:\/\/[^/]*\/(.*?)(?:\x07|\x1b\\)/);
           if (oscMatch) onCwdChange?.(terminalId, decodeURIComponent(oscMatch[1]));
+          // Detect Claude session ID from output
+          const sessionMatch = payload.data.match(/Session:\s*([a-f0-9-]{36})/i);
+          if (sessionMatch) onSessionId?.(terminalId, sessionMatch[1]);
         }
       });
 
@@ -279,9 +287,13 @@ export default function XTerminal({
         const rows = term.rows;
         lastSizeRef.current = { cols, rows };
         await createTerminal({ id: terminalId, cols, rows, cwd: cwd || undefined });
-        // Force the shell to redraw by sending a resize
-        // This fixes state when reconnecting to an existing PTY (pop-out)
         await resizeTerminal(terminalId, cols, rows);
+        // Auto-run command after shell starts (e.g. launching claude)
+        if (autoCommand) {
+          setTimeout(() => {
+            writeTerminal(terminalId, autoCommand + "\r").catch(() => {});
+          }, 2000);
+        }
       } catch (err) {
         term.write(`\r\n\x1b[31mFailed to start shell: ${err}\x1b[0m\r\n`);
       }

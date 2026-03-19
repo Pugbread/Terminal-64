@@ -30,7 +30,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
 
   const handleAddQuickPaste = () => {
     if (!newCommand.trim()) return;
-    addQuickPaste("", newCommand.trim());
+    addQuickPaste(newCommand.trim());
     setNewCommand("");
   };
 

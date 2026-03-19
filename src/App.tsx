@@ -6,6 +6,7 @@ import Canvas from "./components/canvas/Canvas";
 import CommandPalette from "./components/command-palette/CommandPalette";
 import SettingsPanel from "./components/settings/SettingsPanel";
 import PopOutTerminal from "./components/canvas/PopOutTerminal";
+import ClaudeDialog from "./components/canvas/ClaudeDialog";
 import { useTheme } from "./hooks/useTheme";
 import { useKeybindings } from "./hooks/useKeybindings";
 import { useCanvasStore } from "./stores/canvasStore";
@@ -25,6 +26,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [claudeDialogOpen, setClaudeDialogOpen] = useState(false);
 
   useTheme();
   useKeybindings();
@@ -138,6 +140,17 @@ function App() {
           <span>New</span>
         </button>
 
+        <button
+          className="header-action header-action--claude"
+          onClick={() => setClaudeDialogOpen(true)}
+          title="New Claude Session"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M2 9L5 3L8 7L10 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          <span>&gt;_ Code</span>
+        </button>
+
         <div className="header-drag" data-tauri-drag-region />
 
         {update && (
@@ -193,6 +206,13 @@ function App() {
       {/* Overlays */}
       <CommandPalette isOpen={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <SettingsPanel isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <ClaudeDialog
+        isOpen={claudeDialogOpen}
+        onClose={() => setClaudeDialogOpen(false)}
+        onConfirm={(cwd, skip) =>
+          useCanvasStore.getState().addClaudeTerminal(cwd, skip)
+        }
+      />
     </div>
   );
 }

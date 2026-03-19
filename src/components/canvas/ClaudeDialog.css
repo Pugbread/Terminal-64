@@ -1,0 +1,231 @@
+.claude-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.claude-dialog {
+  width: 440px;
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.claude-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border, #313244);
+}
+
+.claude-dialog-title {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: #cba6f7;
+}
+
+.claude-dialog-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted, #6c7086);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.claude-dialog-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg, #cdd6f4);
+}
+
+.claude-dialog-body {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.claude-dialog-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.claude-dialog-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary, #11111b);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--fg-secondary, #bac2de);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.claude-dialog-recent-item:hover {
+  background: rgba(203, 166, 247, 0.06);
+  border-color: rgba(203, 166, 247, 0.3);
+}
+
+.claude-dialog-recent-item span:first-of-type {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-dialog-recent-full {
+  font-size: 9px;
+  color: var(--fg-muted, #6c7086);
+  display: none;
+}
+
+.claude-dialog-recent-item:hover .claude-dialog-recent-full {
+  display: block;
+}
+
+.claude-dialog-recent-item:hover span:first-of-type {
+  display: none;
+}
+
+.claude-dialog-label {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  color: var(--fg-secondary, #bac2de);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.claude-dialog-dir-row {
+  display: flex;
+  gap: 8px;
+}
+
+.claude-dialog-input {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg-tertiary, #11111b);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--fg, #cdd6f4);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  outline: none;
+}
+
+.claude-dialog-input:focus {
+  border-color: #cba6f7;
+}
+
+.claude-dialog-browse {
+  padding: 0 14px;
+  background: var(--bg-tertiary, #11111b);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--fg-secondary, #bac2de);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.claude-dialog-browse:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--fg-muted, #6c7086);
+}
+
+.claude-dialog-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  color: var(--fg-secondary, #bac2de);
+  padding: 4px 0;
+}
+
+.claude-dialog-check {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border, #313244);
+  border-radius: 4px;
+  background: var(--bg-tertiary, #11111b);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, border-color 0.1s;
+  flex-shrink: 0;
+}
+
+.claude-dialog-check.checked {
+  background: #cba6f7;
+  border-color: #cba6f7;
+  color: #11111b;
+}
+
+.claude-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border, #313244);
+}
+
+.claude-dialog-cancel {
+  padding: 8px 16px;
+  background: transparent;
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--fg-muted, #6c7086);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.claude-dialog-cancel:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.claude-dialog-confirm {
+  padding: 8px 18px;
+  background: #cba6f7;
+  border: none;
+  border-radius: 6px;
+  color: #11111b;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.1s;
+}
+
+.claude-dialog-confirm:hover {
+  opacity: 0.85;
+}
+
+.claude-dialog-confirm:disabled {
+  opacity: 0.3;
+  cursor: default;
+}

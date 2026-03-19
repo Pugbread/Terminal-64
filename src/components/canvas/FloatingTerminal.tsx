@@ -1,11 +1,22 @@
 import { useCallback, useRef, useState, useEffect } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useCanvasStore, CanvasTerminal } from "../../stores/canvasStore";
-import { closeTerminal, writeTerminal } from "../../lib/tauriApi";
+import { closeTerminal, writeTerminal, getClaudeSessionId } from "../../lib/tauriApi";
 import { BORDER_COLORS, ACTIVITY_TIMEOUT_MS } from "../../lib/constants";
 import XTerminal from "../terminal/XTerminal";
 import TextEditor from "./TextEditor";
 import "./FloatingTerminal.css";
+
+function buildClaudeCommand(term: CanvasTerminal): string {
+  let cmd = "claude";
+  if (term.claudeSessionId && term.claudeSessionId !== "active") {
+    cmd += ` --resume ${term.claudeSessionId}`;
+  }
+  if (term.claudeSkipPermissions) {
+    cmd += " --dangerously-skip-permissions";
+  }
+  return cmd;
+}
 
 interface FloatingTerminalProps {
   term: CanvasTerminal;
@@ -227,17 +238,34 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
             terminalId={term.terminalId}
             isActive={isActive}
             cwd={term.cwd || undefined}
+            autoCommand={
+              term.isClaudeSession
+                ? buildClaudeCommand(term)
+                : undefined
+            }
             onFocus={() => handleFocus()}
-            onActivity={() => handleActivity()}
+            onActivity={() => {
+              handleActivity();
+              // Fetch real session ID from Claude's local files
+              if (term.isClaudeSession && !term.claudeSessionId && term.cwd) {
+                getClaudeSessionId(term.cwd)
+                  .then((sid) => {
+                    if (sid) useCanvasStore.getState().setClaudeSessionId(term.id, sid);
+                  })
+                  .catch(() => {});
+              }
+            }}
             onTitleChange={(_, title) => {
               useCanvasStore.getState().setTitle(term.id, title);
-              // PowerShell sets window title to CWD path
               if (/^[A-Z]:\\/.test(title)) {
                 useCanvasStore.getState().setCwd(term.id, title);
               }
             }}
             onCwdChange={(_, dir) =>
               useCanvasStore.getState().setCwd(term.id, dir)
+            }
+            onSessionId={(_, sid) =>
+              useCanvasStore.getState().setClaudeSessionId(term.id, sid)
             }
             onExit={() => handleClose()}
           />

@@ -22,3 +22,4 @@ tauri = { version = "2", features = ["devtools"] }
 portable-pty = "0.8"
 uuid = { version = "1", features = ["v4"] }
 dirs = "6"
+tauri-plugin-dialog = "2.6.0"
