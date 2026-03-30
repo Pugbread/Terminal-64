@@ -199,7 +199,7 @@ function summarizeFallback(input: Record<string, unknown>): string {
 }
 
 // Render the expanded body based on tool type
-function ToolBody({ tc }: { tc: ToolCall }) {
+function ToolBody({ tc, onEditClick }: { tc: ToolCall; onEditClick?: (tcId: string, filePath: string, oldStr: string, newStr: string) => void }) {
   const i = tc.input;
   const result = tc.result;
 
@@ -207,9 +207,9 @@ function ToolBody({ tc }: { tc: ToolCall }) {
   if (tc.name === "Edit" && i.old_string !== undefined) {
     return (
       <div className="cc-tc-body">
-        <div className="cc-tc-diff">
-          <div className="cc-tc-diff-del">{String(i.old_string)}</div>
+        <div className="cc-tc-diff" onClick={() => onEditClick?.(tc.id, String(i.file_path || ""), String(i.old_string), String(i.new_string))} style={{ cursor: onEditClick ? "pointer" : undefined }}>
           <div className="cc-tc-diff-add">{String(i.new_string)}</div>
+          <div className="cc-tc-diff-del">{String(i.old_string)}</div>
         </div>
         {result && <pre className="cc-tc-output">{result}</pre>}
       </div>
@@ -248,8 +248,10 @@ function ToolBody({ tc }: { tc: ToolCall }) {
   );
 }
 
-function ToolCallCard({ tc }: { tc: ToolCall }) {
-  const [expanded, setExpanded] = useState(false);
+const EXPAND_BY_DEFAULT = new Set(["Write", "Edit", "MultiEdit"]);
+
+function ToolCallCard({ tc, onEditClick }: { tc: ToolCall; onEditClick?: (tcId: string, filePath: string, oldStr: string, newStr: string) => void }) {
+  const [expanded, setExpanded] = useState(EXPAND_BY_DEFAULT.has(tc.name));
   const hasResult = tc.result !== undefined;
   const hdr = toolHeader(tc);
 
@@ -264,12 +266,41 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
         <span className="cc-tc-detail">{hdr.detail}</span>
         <span className="cc-tc-expand">{expanded ? "▾" : "▸"}</span>
       </button>
-      {expanded && <ToolBody tc={tc} />}
+      {expanded && <ToolBody tc={tc} onEditClick={onEditClick} />}
     </div>
   );
 }
 
-function ChatMessageInner({ message, onRewind }: { message: ChatMessageType; onRewind?: (messageId: string, content: string) => void }) {
+export function ReadGroupCard({ tcs }: { tcs: ToolCall[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const allDone = tcs.every((tc) => tc.result !== undefined);
+  const anyError = tcs.some((tc) => tc.isError);
+
+  return (
+    <div className={`cc-tc ${anyError ? "cc-tc--error" : ""}`}>
+      <button className="cc-tc-header" onClick={() => setExpanded((v) => !v)}>
+        <span className={`cc-tc-status ${allDone ? (anyError ? "cc-tc-status--err" : "cc-tc-status--ok") : "cc-tc-status--pending"}`}>
+          {allDone ? (anyError ? "✕" : "✓") : "⋯"}
+        </span>
+        <span className="cc-tc-icon">◉</span>
+        <span className="cc-tc-name">Read {tcs.length} files</span>
+        <span className="cc-tc-detail">{tcs.map((tc) => shortPath(tc.input.file_path)).join(", ")}</span>
+        <span className="cc-tc-expand">{expanded ? "▾" : "▸"}</span>
+      </button>
+      {expanded && (
+        <div className="cc-tc-body">
+          {tcs.map((tc) => (
+            <div key={tc.id} className="cc-tc-group-item">
+              <div className="cc-tc-group-file">{shortPath(tc.input.file_path)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatMessageInner({ message, onRewind, onEditClick }: { message: ChatMessageType; onRewind?: (messageId: string, content: string) => void; onEditClick?: (tcId: string, filePath: string, oldStr: string, newStr: string) => void }) {
   if (message.role === "user") {
     return (
       <div className="cc-message cc-message--user">
@@ -297,7 +328,7 @@ function ChatMessageInner({ message, onRewind }: { message: ChatMessageType; onR
       {message.toolCalls && message.toolCalls.length > 0 && (
         <div className="cc-tc-list">
           {message.toolCalls.map((tc) => (
-            <ToolCallCard key={tc.id} tc={tc} />
+            <ToolCallCard key={tc.id} tc={tc} onEditClick={onEditClick} />
           ))}
         </div>
       )}

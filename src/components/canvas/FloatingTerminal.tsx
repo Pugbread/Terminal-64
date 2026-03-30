@@ -156,6 +156,15 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
 
   const isClaude = term.panelType === "claude";
   const claudeSessionName = useClaudeStore((s) => isClaude ? s.sessions[term.terminalId]?.name : undefined);
+  const claudeCwd = useClaudeStore((s) => isClaude ? s.sessions[term.terminalId]?.cwd : undefined);
+
+  const claudeTitle = (() => {
+    const name = claudeSessionName || "Unnamed Session";
+    if (!claudeCwd) return name;
+    const parts = claudeCwd.replace(/\\/g, "/").replace(/\/+$/, "").split("/");
+    const short = parts.slice(-2).join("/");
+    return short ? `${short}: ${name}` : name;
+  })();
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -217,7 +226,7 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
             </>
           ) : (
             <>
-              <span className="ft-title">{claudeSessionName || "Unnamed Session"}</span>
+              <span className="ft-title">{claudeTitle}</span>
               <button className="ft-btn ft-btn--edit" onClick={(e) => {
                 e.stopPropagation();
                 setNameDraft(claudeSessionName || "");

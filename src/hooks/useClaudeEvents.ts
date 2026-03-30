@@ -73,6 +73,13 @@ export function useClaudeEvents() {
         if (type === "system" && parsed.subtype === "init") {
           store.setModel(session_id, parsed.model || "");
           store.setStreaming(session_id, true);
+          // Extract MCP server status
+          if (Array.isArray(parsed.mcp_servers)) {
+            store.setMcpServers(session_id, parsed.mcp_servers.map((s: any) => ({
+              name: String(s.name || ""),
+              status: String(s.status || "unknown"),
+            })));
+          }
           return;
         }
 

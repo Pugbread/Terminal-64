@@ -4,18 +4,34 @@ import { emit } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useClaudeStore } from "../../stores/claudeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { createClaudeSession, sendClaudePrompt, cancelClaude, listSlashCommands, resolvePermission } from "../../lib/tauriApi";
+import { useThemeStore } from "../../stores/themeStore";
+import { createClaudeSession, sendClaudePrompt, cancelClaude, listSlashCommands, resolvePermission, readFile, writeFile, listMcpServers } from "../../lib/tauriApi";
+import type { McpServer } from "../../lib/types";
 import { SlashCommand, PermissionMode } from "../../lib/types";
 import { rewritePromptStream } from "../../lib/ai";
-import ChatMessage, { toolHeader, renderContent } from "./ChatMessage";
+import ChatMessage, { toolHeader, renderContent, ReadGroupCard } from "./ChatMessage";
+import Editor from "@monaco-editor/react";
+import FileTree from "./FileTree";
 import { fontStack } from "../../lib/fonts";
 import ChatInput from "./ChatInput";
 import "./ClaudeChat.css";
 
+function guessLanguage(filePath: string): string {
+  const ext = filePath.split(".").pop()?.toLowerCase() || "";
+  const map: Record<string, string> = {
+    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+    rs: "rust", py: "python", go: "go", java: "java", json: "json",
+    css: "css", scss: "scss", html: "html", md: "markdown", yaml: "yaml",
+    yml: "yaml", toml: "toml", sh: "shell", bash: "shell", zsh: "shell",
+    sql: "sql", xml: "xml", swift: "swift", kt: "kotlin", rb: "ruby",
+    c: "c", cpp: "cpp", h: "c", hpp: "cpp",
+  };
+  return map[ext] || "plaintext";
+}
+
 const MODELS = [
   { id: "sonnet", label: "Sonnet" },
   { id: "opus", label: "Opus" },
-  { id: "claude-opus-4-6[1m]", label: "Opus Max" },
   { id: "haiku", label: "Haiku" },
 ];
 
@@ -49,6 +65,12 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
+  const [configMcpServers, setConfigMcpServers] = useState<McpServer[]>([]);
+  const [showMcpDrop, setShowMcpDrop] = useState(false);
+  const [showFileTree, setShowFileTree] = useState(false);
+  const liveMcp = useClaudeStore((s) => s.sessions[sessionId]?.mcpServers);
+  // Live status from session init takes priority; fall back to config-file list
+  const mcpServers = (liveMcp && liveMcp.length > 0) ? liveMcp : configMcpServers;
   const [selectedModel, setSelectedModel] = useState(
     () => useSettingsStore.getState().claudeModel || "sonnet"
   );
@@ -74,6 +96,12 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [isRewriting, setIsRewriting] = useState(false);
   const [rewindText, setRewindText] = useState<string | null>(null);
+  const [editOverlay, setEditOverlay] = useState<{ tcId: string; filePath: string; fullContent: string; changedLines: Set<number> } | null>(null);
+  const editOverrides = useRef<Record<string, string>>({});
+  const savedScrollTop = useRef<number>(0);
+  const modifiedEditorRef = useRef<any>(null);
+  const [editorDirty, setEditorDirty] = useState(false);
+  const editorSavedContent = useRef<string>("");
 
   const permMode = PERMISSION_MODES[permModeIdx];
 
@@ -85,6 +113,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     }
   }, [sessionId, createSession, cwd]);
   useEffect(() => { listSlashCommands().then(setSlashCommands).catch(() => {}); }, []);
+  useEffect(() => { listMcpServers(cwd).then(setConfigMcpServers).catch(() => {}); }, [cwd]);
   // Apply persisted font on mount (once per app, harmless if called multiple times)
   useEffect(() => {
     document.documentElement.style.setProperty("--claude-font", fontStack(useSettingsStore.getState().claudeFont || "system"));
@@ -113,7 +142,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     if (el) el.scrollTop = el.scrollHeight;
   }, [session?.streamingText]);
   useEffect(() => {
-    const handler = () => { setShowModelDrop(false); setShowEffortDrop(false); };
+    const handler = () => { setShowModelDrop(false); setShowEffortDrop(false); setShowMcpDrop(false); };
     window.addEventListener("click", handler);
     return () => window.removeEventListener("click", handler);
   }, []);
@@ -259,6 +288,51 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     setRewindText(content);
   }, [sessionId]);
 
+  const handleEditClick = useCallback(async (tcId: string, filePath: string, _oldStr: string, newStr: string) => {
+    // Save scroll position before opening overlay
+    const el = messagesEndRef.current?.parentElement;
+    if (el) savedScrollTop.current = el.scrollTop;
+    // Use persisted full-file content if available
+    if (editOverrides.current[tcId]) {
+      const cached = editOverrides.current[tcId];
+      const idx = cached.indexOf(newStr);
+      const changed = new Set<number>();
+      if (idx >= 0) {
+        const startLine = cached.substring(0, idx).split("\n").length;
+        const numLines = newStr.split("\n").length;
+        for (let i = 0; i < numLines; i++) changed.add(startLine + i);
+      }
+      setEditOverlay({ tcId, filePath, fullContent: cached, changedLines: changed });
+      return;
+    }
+    // Read full file from disk
+    try {
+      const content = await readFile(filePath);
+      const idx = content.indexOf(newStr);
+      const changed = new Set<number>();
+      if (idx >= 0) {
+        const startLine = content.substring(0, idx).split("\n").length;
+        const numLines = newStr.split("\n").length;
+        for (let i = 0; i < numLines; i++) changed.add(startLine + i);
+      }
+      setEditOverlay({ tcId, filePath, fullContent: content, changedLines: changed });
+    } catch {
+      // Fallback: show just the new string with all lines marked changed
+      const lines = newStr.split("\n");
+      const changed = new Set(lines.map((_, i) => i + 1));
+      setEditOverlay({ tcId, filePath, fullContent: newStr, changedLines: changed });
+    }
+  }, []);
+
+  const handleFileTreeOpen = useCallback(async (filePath: string) => {
+    const el = messagesEndRef.current?.parentElement;
+    if (el) savedScrollTop.current = el.scrollTop;
+    try {
+      const content = await readFile(filePath);
+      setEditOverlay({ tcId: `file:${filePath}`, filePath, fullContent: content, changedLines: new Set() });
+    } catch {}
+  }, []);
+
   const handleAttach = useCallback(async () => {
     try {
       const selected = await open({ multiple: true, title: "Attach files" });
@@ -288,10 +362,42 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     >
       {/* Topbar */}
       <div className="cc-topbar">
+        <button className={`cc-filetree-toggle ${showFileTree ? "cc-filetree-toggle--open" : ""}`} onClick={() => setShowFileTree((v) => !v)} title="Toggle file browser">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1L7 5L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
         <div className="cc-topbar-left">
+          {/* MCP servers */}
+          <div className="cc-dropdown-wrap" onClick={(e) => e.stopPropagation()}>
+            <button className={`cc-dropdown-trigger cc-mcp-btn ${mcpServers.length > 0 ? "cc-mcp-btn--active" : ""} ${mcpServers.some((s: any) => s.status === "failed" || s.status === "error") ? "cc-mcp-btn--error" : ""}`} onClick={() => { setShowMcpDrop((v) => !v); setShowModelDrop(false); setShowEffortDrop(false); }}>
+              MCP{mcpServers.length > 0 ? ` (${mcpServers.length})` : ""}<span className="cc-chevron">▾</span>
+            </button>
+            {showMcpDrop && (
+              <div className="cc-dropdown cc-mcp-dropdown">
+                {mcpServers.length === 0 ? (
+                  <div className="cc-mcp-empty">No MCP servers configured</div>
+                ) : (
+                  mcpServers.map((s: any) => {
+                    const status = s.status || "configured";
+                    const isError = status === "failed" || status === "error";
+                    const isConnected = status === "connected";
+                    return (
+                      <div key={s.name} className="cc-mcp-item">
+                        <span className={`cc-mcp-dot ${isError ? "cc-mcp-dot--error" : isConnected ? "cc-mcp-dot--ok" : "cc-mcp-dot--idle"}`} />
+                        <div className="cc-mcp-info">
+                          <span className="cc-mcp-name">{s.name}</span>
+                          <span className="cc-mcp-meta">{status}{s.transport ? ` · ${s.transport}` : ""}{s.scope ? ` · ${s.scope}` : ""}</span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Model dropdown */}
           <div className="cc-dropdown-wrap" onClick={(e) => e.stopPropagation()}>
-            <button className="cc-dropdown-trigger" onClick={() => { setShowModelDrop((v) => !v); setShowEffortDrop(false); }}>
+            <button className="cc-dropdown-trigger" onClick={() => { setShowModelDrop((v) => !v); setShowEffortDrop(false); setShowMcpDrop(false); }}>
               {currentModel.label}<span className="cc-chevron">▾</span>
             </button>
             {showModelDrop && (
@@ -306,7 +412,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
 
           {/* Effort dropdown */}
           <div className="cc-dropdown-wrap" onClick={(e) => e.stopPropagation()}>
-            <button className="cc-dropdown-trigger" onClick={() => { setShowEffortDrop((v) => !v); setShowModelDrop(false); }}>
+            <button className="cc-dropdown-trigger" onClick={() => { setShowEffortDrop((v) => !v); setShowModelDrop(false); setShowMcpDrop(false); }}>
               {currentEffort.label}<span className="cc-chevron">▾</span>
             </button>
             {showEffortDrop && (
@@ -339,10 +445,108 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
 
       {isDragOver && <div className="cc-drag-overlay"><span>Drop files to attach</span></div>}
 
+      {/* File tree sidebar */}
+      {showFileTree && (
+        <FileTree cwd={effectiveCwd} onFileClick={handleFileTreeOpen} onClose={() => setShowFileTree(false)} />
+      )}
+
       {/* Main area */}
       <div className="cc-main">
         <div className="cc-chat-col">
-          {showPlanViewer && planContent ? (
+          {editOverlay ? (
+            <div className="cc-messages cc-edit-overlay">
+              <div className="cc-edit-overlay-header">
+                <span className="cc-edit-overlay-path">{editOverlay.filePath}</span>
+                <div className="cc-edit-overlay-actions">
+                  <span className={`cc-edit-overlay-tag ${editorDirty ? "cc-edit-overlay-tag--unsaved" : "cc-edit-overlay-tag--saved"}`}>{editorDirty ? "Unsaved" : "Saved"}</span>
+                  <button className="cc-edit-overlay-btn cc-edit-overlay-save" onClick={() => {
+                    if (modifiedEditorRef.current && editorDirty) {
+                      const content = modifiedEditorRef.current.getValue();
+                      writeFile(editOverlay.filePath, content).catch(() => {});
+                      editOverrides.current[editOverlay.tcId] = content;
+                      editorSavedContent.current = content;
+                      setEditorDirty(false);
+                    }
+                  }}><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M12.5 2H3.5C2.67 2 2 2.67 2 3.5V12.5C2 13.33 2.67 14 3.5 14H12.5C13.33 14 14 13.33 14 12.5V3.5C14 2.67 13.33 2 12.5 2ZM8 12C6.9 12 6 11.1 6 10S6.9 8 8 8S10 8.9 10 10S9.1 12 8 12ZM11 6H4V3H11V6Z" fill="currentColor"/></svg></button>
+                  <button className="cc-edit-overlay-btn cc-edit-overlay-close" onClick={() => {
+                    if (modifiedEditorRef.current) {
+                      editOverrides.current[editOverlay.tcId] = modifiedEditorRef.current.getValue();
+                    }
+                    setEditOverlay(null);
+                    requestAnimationFrame(() => {
+                      const el = messagesEndRef.current?.parentElement;
+                      if (el) el.scrollTop = savedScrollTop.current;
+                    });
+                  }}>Close</button>
+                </div>
+              </div>
+              <div className="cc-edit-overlay-editor">
+                <Editor
+                  value={editOverlay.fullContent}
+                  language={guessLanguage(editOverlay.filePath)}
+                  theme="terminal64"
+                  beforeMount={(monaco) => {
+                    const ui = useThemeStore.getState().currentTheme.ui;
+                    monaco.editor.defineTheme("terminal64", {
+                      base: "vs-dark",
+                      inherit: true,
+                      rules: [],
+                      colors: {
+                        "editor.background": ui.bg,
+                        "editor.foreground": ui.fg,
+                        "editorLineNumber.foreground": ui.fgMuted,
+                        "editor.selectionBackground": ui.accent + "44",
+                        "editor.lineHighlightBackground": ui.bgSecondary,
+                        "editorWidget.background": ui.bgSecondary,
+                        "editorWidget.border": ui.border,
+                      },
+                    });
+                  }}
+                  onMount={(editor, monaco) => {
+                    modifiedEditorRef.current = editor;
+                    editorSavedContent.current = editOverlay!.fullContent;
+                    setEditorDirty(false);
+                    const changed = editOverlay!.changedLines;
+                    // Green decorations on changed lines
+                    if (changed.size > 0) {
+                      editor.createDecorationsCollection(
+                        [...changed].map((line) => ({
+                          range: new monaco.Range(line, 1, line, 1),
+                          options: {
+                            isWholeLine: true,
+                            className: "cc-editor-changed-line",
+                            glyphMarginClassName: "cc-editor-changed-gutter",
+                          },
+                        }))
+                      );
+                      // Auto-scroll to center of changed region
+                      const sorted = [...changed].sort((a, b) => a - b);
+                      const mid = sorted[Math.floor(sorted.length / 2)];
+                      editor.revealLineInCenter(mid);
+                    }
+                    // Track dirty state
+                    editor.onDidChangeModelContent(() => {
+                      const current = editor.getValue();
+                      setEditorDirty(current !== editorSavedContent.current);
+                    });
+                  }}
+                  options={{
+                    minimap: { enabled: false },
+                    fontSize: 12,
+                    fontFamily: "'Cascadia Code', Consolas, monospace",
+                    scrollBeyondLastLine: false,
+                    lineNumbers: "on",
+                    wordWrap: "on",
+                    glyphMargin: true,
+                    folding: false,
+                    lineDecorationsWidth: 0,
+                    renderLineHighlight: "none",
+                    padding: { top: 8, bottom: 8 },
+                  }}
+                />
+              </div>
+            </div>
+          ) : showPlanViewer && planContent ? (
             <div className="cc-messages cc-plan-viewer">
               <div className="cc-bubble cc-bubble--assistant">
                 {renderContent(planContent)}
@@ -361,9 +565,34 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
                 <span className="cc-empty-sub">Send a message, type / for commands, or drop files</span>
               </div>
             )}
-            {session.messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} onRewind={handleRewind} />
-            ))}
+            {(() => {
+              const elements: React.ReactNode[] = [];
+              const msgs = session.messages;
+              let i = 0;
+              while (i < msgs.length) {
+                const msg = msgs[i];
+                // Check for consecutive Read-only assistant messages
+                if (msg.role === "assistant" && !msg.content && msg.toolCalls?.length && msg.toolCalls.every((tc) => tc.name === "Read")) {
+                  const readTcs = [...msg.toolCalls];
+                  let j = i + 1;
+                  while (j < msgs.length) {
+                    const next = msgs[j];
+                    if (next.role === "assistant" && !next.content && next.toolCalls?.length && next.toolCalls.every((tc) => tc.name === "Read")) {
+                      readTcs.push(...next.toolCalls);
+                      j++;
+                    } else break;
+                  }
+                  if (j > i + 1) {
+                    elements.push(<div key={`rg-${i}`} className="cc-message cc-message--assistant"><div className="cc-tc-list"><ReadGroupCard tcs={readTcs} /></div></div>);
+                    i = j;
+                    continue;
+                  }
+                }
+                elements.push(<ChatMessage key={msg.id} message={msg} onRewind={handleRewind} onEditClick={handleEditClick} />);
+                i++;
+              }
+              return elements;
+            })()}
             {session.streamingText && (
               <div className="cc-message cc-message--assistant">
                 <div className="cc-bubble cc-bubble--assistant cc-bubble--streaming">
@@ -453,9 +682,8 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
                 <div className="cc-plan-finished-actions">
                   <button className="cc-plan-finished-btn cc-plan-finished-btn--accept" onClick={() => {
                     setPlanFinished(false);
-                    // Compact first, then build after compact finishes
+                    setShowPlanViewer(false);
                     handleSend("/compact Keep the plan file and key decisions only. Discard everything else.", "bypass_all");
-                    // Queue the build command — it'll run after compact since Claude processes sequentially
                     setTimeout(() => {
                       setPermModeIdx(4); // YOLO
                       handleSend("Build the plan now. Execute every step. Do not skip anything. Do not re-read files you already know about.", "bypass_all");
@@ -463,6 +691,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
                   }}>Compact &amp; Build</button>
                   <button className="cc-plan-finished-btn cc-plan-finished-btn--compact" onClick={() => {
                     setPlanFinished(false);
+                    setShowPlanViewer(false);
                     setPermModeIdx(4); // YOLO
                     handleSend(
                       "Build the plan now. Execute every step. Do not skip anything. Do not re-read files you already know about.",

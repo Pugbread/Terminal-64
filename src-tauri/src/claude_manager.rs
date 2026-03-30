@@ -5,6 +5,27 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
+pub fn resolve_claude_path() -> String {
+    // Check common locations since macOS GUI apps don't inherit shell PATH
+    if let Ok(p) = std::process::Command::new("which").arg("claude").output() {
+        if p.status.success() {
+            let s = String::from_utf8_lossy(&p.stdout).trim().to_string();
+            if !s.is_empty() { return s; }
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let candidates = [
+        format!("{}/.local/bin/claude", home),
+        "/usr/local/bin/claude".to_string(),
+        format!("{}/.npm-global/bin/claude", home),
+        "/opt/homebrew/bin/claude".to_string(),
+    ];
+    for c in &candidates {
+        if std::path::Path::new(c).exists() { return c.clone(); }
+    }
+    "claude".to_string()
+}
+
 struct ClaudeInstance {
     child: Child,
     generation: u64,
@@ -29,7 +50,8 @@ fn build_command(
     disallowed_tools: &Option<String>,
     settings_path: &Option<String>,
 ) -> Command {
-    let mut cmd = Command::new("claude");
+    let claude_bin = resolve_claude_path();
+    let mut cmd = Command::new(&claude_bin);
     cmd.arg("-p")
         .arg(prompt)
         .arg("--output-format").arg("stream-json")

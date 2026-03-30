@@ -111,7 +111,8 @@ fn rewrite_prompt(app_handle: tauri::AppHandle, prompt: String) -> Result<String
     let rewrite_id = format!("rw-{}", REWRITE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
 
     let full_prompt = format!("{}\n\nRewrite this prompt:\n{}", SYSTEM_PROMPT, prompt);
-    let mut cmd = std::process::Command::new("claude");
+    let claude_bin = claude_manager::resolve_claude_path();
+    let mut cmd = std::process::Command::new(&claude_bin);
     cmd.arg("-p").arg(&full_prompt)
         .arg("--output-format").arg("stream-json")
         .arg("--verbose")
@@ -210,8 +211,31 @@ async fn search_files(cwd: String, query: String) -> Result<Vec<String>, String>
 #[derive(serde::Serialize)]
 struct DiskSession {
     id: String,
-    modified: u64,  // unix timestamp seconds
-    size: u64,      // file size bytes
+    modified: u64,
+    size: u64,
+    summary: String,
+}
+
+fn extract_session_summary(path: &std::path::Path) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    // Read the tail of the file to find the last "last-prompt" event
+    let mut file = match std::fs::File::open(path) { Ok(f) => f, Err(_) => return String::new() };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let tail_size = 4096u64.min(len);
+    if tail_size == 0 { return String::new(); }
+    let _ = file.seek(SeekFrom::End(-(tail_size as i64)));
+    let mut buf = String::new();
+    let _ = file.read_to_string(&mut buf);
+
+    for line in buf.lines().rev() {
+        let val: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => continue };
+        if val["type"] == "last-prompt" {
+            if let Some(s) = val["lastPrompt"].as_str() {
+                return s.chars().take(120).collect();
+            }
+        }
+    }
+    String::new()
 }
 
 #[tauri::command]
@@ -235,7 +259,8 @@ fn list_disk_sessions(cwd: String) -> Result<Vec<DiskSession>, String> {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             let size = meta.map(|m| m.len()).unwrap_or(0);
-            sessions.push(DiskSession { id, modified, size });
+            let summary = extract_session_summary(&path);
+            sessions.push(DiskSession { id, modified, size, summary });
         }
     }
     // Sort newest first
@@ -252,6 +277,94 @@ fn resolve_permission(
     let reason = if allow { "Approved by user" } else { "Denied by user" };
     state.permission_server.resolve(&request_id, allow, reason);
     Ok(())
+}
+
+#[tauri::command]
+fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
+    let root = std::path::Path::new(&path);
+    if !root.is_dir() { return Err("Not a directory".into()); }
+    let skip = ["node_modules", ".git", "target", "dist", ".next", "__pycache__", ".venv", "vendor", ".DS_Store"];
+    let mut entries = Vec::new();
+    let Ok(rd) = std::fs::read_dir(root) else { return Ok(entries); };
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if skip.iter().any(|s| name == *s) { continue; }
+        if name.starts_with('.') && name != ".." { continue; }
+        let is_dir = entry.path().is_dir();
+        entries.push(DirEntry { name, is_dir });
+    }
+    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
+    Ok(entries)
+}
+
+#[tauri::command]
+fn read_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {}", path, e))
+}
+
+#[tauri::command]
+fn write_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, &content).map_err(|e| format!("Failed to write {}: {}", path, e))
+}
+
+#[tauri::command]
+fn list_mcp_servers(cwd: String) -> Result<Vec<McpServer>, String> {
+    let mut servers = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Read global MCPs from ~/.claude/settings.json
+    if let Some(home) = dirs::home_dir() {
+        for name in &["settings.json", "settings.local.json"] {
+            let path = home.join(".claude").join(name);
+            if let Ok(data) = std::fs::read_to_string(&path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+                    if let Some(obj) = val.get("mcpServers").and_then(|v| v.as_object()) {
+                        for (name, cfg) in obj {
+                            if seen.insert(name.clone()) {
+                                servers.push(McpServer {
+                                    name: name.clone(),
+                                    transport: cfg.get("type").or(cfg.get("transport"))
+                                        .and_then(|v| v.as_str()).unwrap_or("stdio").to_string(),
+                                    command: cfg.get("command").and_then(|v| v.as_str())
+                                        .or_else(|| cfg.get("url").and_then(|v| v.as_str()))
+                                        .unwrap_or("").to_string(),
+                                    scope: "user".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Read project MCPs from <cwd>/.mcp.json
+    let project_mcp = std::path::Path::new(&cwd).join(".mcp.json");
+    if let Ok(data) = std::fs::read_to_string(&project_mcp) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+            if let Some(obj) = val.get("mcpServers").and_then(|v| v.as_object()) {
+                for (name, cfg) in obj {
+                    if seen.insert(name.clone()) {
+                        servers.push(McpServer {
+                            name: name.clone(),
+                            transport: cfg.get("type").or(cfg.get("transport"))
+                                .and_then(|v| v.as_str()).unwrap_or("stdio").to_string(),
+                            command: cfg.get("command").and_then(|v| v.as_str())
+                                .or_else(|| cfg.get("url").and_then(|v| v.as_str()))
+                                .unwrap_or("").to_string(),
+                            scope: "project".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(servers)
 }
 
 #[tauri::command]
@@ -504,6 +617,14 @@ fn rename_discord_session(
     bot.rename_or_link_session(session_id, session_name, cwd)
 }
 
+#[tauri::command]
+fn discord_cleanup_orphaned(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let bot = state.discord_bot.lock().map_err(|e| e.to_string())?;
+    bot.cleanup_orphaned()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -535,10 +656,15 @@ pub fn run() {
             link_session_to_discord,
             unlink_session_from_discord,
             rename_discord_session,
+            discord_cleanup_orphaned,
             resolve_permission,
             rewrite_prompt,
             search_files,
             list_disk_sessions,
+            read_file,
+            write_file,
+            list_mcp_servers,
+            list_directory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

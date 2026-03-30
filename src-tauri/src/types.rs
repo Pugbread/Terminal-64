@@ -64,3 +64,17 @@ pub struct SlashCommand {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServer {
+    pub name: String,
+    pub transport: String,
+    pub command: String,
+    pub scope: String,
+}

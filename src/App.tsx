@@ -14,7 +14,7 @@ import { useCanvasStore } from "./stores/canvasStore";
 import { useThemeStore } from "./stores/themeStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { registerCommand } from "./lib/commands";
-import { closeTerminal, closeClaudeSession, linkSessionToDiscord, unlinkSessionFromDiscord, startDiscordBot } from "./lib/tauriApi";
+import { closeTerminal, closeClaudeSession, linkSessionToDiscord, unlinkSessionFromDiscord, startDiscordBot, discordCleanupOrphaned } from "./lib/tauriApi";
 import { useClaudeStore } from "./stores/claudeStore";
 import { checkForUpdate, UpdateInfo } from "./lib/updater";
 import "./App.css";
@@ -46,25 +46,27 @@ function App() {
     if (saved.bgAlpha < 1) useThemeStore.getState().setBgAlpha(saved.bgAlpha);
     // Auto-connect Discord bot if credentials are saved, then link open sessions
     if (saved.discordBotToken && saved.discordServerId) {
-      startDiscordBot(saved.discordBotToken, saved.discordServerId).then(() => {
-        // Wait a moment for bot to be ready, then link all open Claude panels
-        setTimeout(() => {
-          const terminals = useCanvasStore.getState().terminals;
-          for (const t of terminals) {
-            if (t.panelType === "claude") {
-              const title = t.title;
-              if (title && title !== "Claude") {
-                // Try to get CWD from stored session
-                let cwd = t.cwd || "";
-                try {
-                  const raw = localStorage.getItem("terminal64-claude-sessions");
-                  if (raw) { const d = JSON.parse(raw); cwd = d[t.terminalId]?.cwd || cwd; }
-                } catch {}
-                linkSessionToDiscord(t.terminalId, title, cwd).catch(() => {});
-              }
+      startDiscordBot(saved.discordBotToken, saved.discordServerId).then(async () => {
+        // Wait for gateway to be ready, then link all open Claude panels
+        await new Promise((r) => setTimeout(r, 2000));
+        const terminals = useCanvasStore.getState().terminals;
+        const linkPromises: Promise<void>[] = [];
+        for (const t of terminals) {
+          if (t.panelType === "claude") {
+            const title = t.title;
+            if (title && title !== "Claude") {
+              let cwd = t.cwd || "";
+              try {
+                const raw = localStorage.getItem("terminal64-claude-sessions");
+                if (raw) { const d = JSON.parse(raw); cwd = d[t.terminalId]?.cwd || cwd; }
+              } catch {}
+              linkPromises.push(linkSessionToDiscord(t.terminalId, title, cwd).catch(() => {}));
             }
           }
-        }, 2000);
+        }
+        await Promise.all(linkPromises);
+        // Clean up Discord channels that no longer match any linked session
+        discordCleanupOrphaned().catch(() => {});
       }).catch(() => {});
     }
   }, []);

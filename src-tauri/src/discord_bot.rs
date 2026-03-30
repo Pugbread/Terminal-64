@@ -67,21 +67,20 @@ impl DiscordBot {
 
         self.state = bot_state.clone();
 
-        // Find or create category
+        // Fetch guild channels once, then find/create category and restore session mappings
         let state_for_init = bot_state.clone();
         let token_for_init = token.clone();
         rt.block_on(async {
-            if let Err(e) = ensure_category(&state_for_init, &token_for_init).await {
+            let channels = match fetch_guild_channels(&state_for_init, &token_for_init).await {
+                Ok(ch) => ch,
+                Err(e) => { eprintln!("[discord] Failed to fetch channels: {}", e); return; }
+            };
+            if let Err(e) = ensure_category(&state_for_init, &token_for_init, &channels).await {
                 eprintln!("[discord] Failed to ensure category: {}", e);
+                return;
             }
-        });
-
-        // Clean up orphaned channels in the category
-        let state_for_cleanup = bot_state.clone();
-        let token_for_cleanup = token.clone();
-        rt.block_on(async {
-            if let Err(e) = cleanup_orphaned_channels(&state_for_cleanup, &token_for_cleanup).await {
-                eprintln!("[discord] Cleanup error: {}", e);
+            if let Err(e) = restore_channel_mappings(&state_for_init, &channels).await {
+                eprintln!("[discord] Channel restore error: {}", e);
             }
         });
 
@@ -301,6 +300,24 @@ impl DiscordBot {
         handle.join().map_err(|_| "Thread panicked".to_string())?
     }
 
+    pub fn cleanup_orphaned(&self) -> Result<(), String> {
+        if self.runtime.is_none() { return Ok(()); }
+        let state = self.state.clone();
+
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all().build().map_err(|e| e.to_string())?;
+            rt.block_on(async {
+                let s = state.lock().await;
+                let bs = s.as_ref().ok_or("No state".to_string())?;
+                let token = bs.token.clone();
+                drop(s);
+                cleanup_orphaned_channels(&state, &token).await
+            })
+        });
+        handle.join().map_err(|_| "Thread panicked".to_string())?
+    }
+
     pub fn rename_or_link_session(&self, session_id: String, session_name: String, cwd: String) -> Result<(), String> {
         if self.runtime.is_none() { return Ok(()); }
         let state = self.state.clone();
@@ -353,17 +370,21 @@ impl DiscordBot {
     }
 }
 
-async fn ensure_category(state: &Arc<TokioMutex<Option<BotState>>>, token: &str) -> Result<(), String> {
-    let mut s = state.lock().await;
-    let bs = s.as_mut().ok_or("No state")?;
-
+/// Fetch all guild channels once. Used by ensure_category and restore_channel_mappings.
+async fn fetch_guild_channels(state: &Arc<TokioMutex<Option<BotState>>>, token: &str) -> Result<Vec<serde_json::Value>, String> {
+    let s = state.lock().await;
+    let bs = s.as_ref().ok_or("No state")?;
     let resp = bs.http.get(format!("{}/guilds/{}/channels", DISCORD_API, bs.guild_id))
         .header("Authorization", format!("Bot {}", token))
         .send().await.map_err(|e| e.to_string())?;
+    resp.json().await.map_err(|e| e.to_string())
+}
 
-    let channels: Vec<serde_json::Value> = resp.json().await.map_err(|e| e.to_string())?;
+async fn ensure_category(state: &Arc<TokioMutex<Option<BotState>>>, token: &str, channels: &[serde_json::Value]) -> Result<(), String> {
+    let mut s = state.lock().await;
+    let bs = s.as_mut().ok_or("No state")?;
 
-    for ch in &channels {
+    for ch in channels {
         if ch["type"] == 4 && ch["name"].as_str() == Some("Terminal 64") {
             let id = ch["id"].as_str().unwrap_or("0").parse::<u64>().unwrap_or(0);
             bs.category_id = Some(id);
@@ -632,6 +653,37 @@ fn summarize_tool(name: &str, input: &serde_json::Value) -> String {
         "Grep" => format!("`/{}/`", input["pattern"].as_str().unwrap_or("")),
         _ => String::new(),
     }
+}
+
+async fn restore_channel_mappings(state: &Arc<TokioMutex<Option<BotState>>>, channels: &[serde_json::Value]) -> Result<(), String> {
+    let mut s = state.lock().await;
+    let bs = s.as_mut().ok_or("No state")?;
+    let cat_id = bs.category_id.ok_or("No category")?;
+
+    let mut restored = 0usize;
+    for ch in channels {
+        let parent = ch["parent_id"].as_str().and_then(|s| s.parse::<u64>().ok());
+        if parent != Some(cat_id) { continue; }
+        if ch["type"] != 0 { continue; }
+
+        let ch_id = ch["id"].as_str().unwrap_or("0").parse::<u64>().unwrap_or(0);
+        if ch_id == 0 { continue; }
+
+        // Channel topics are "Terminal 64: {session_id}"
+        if let Some(topic) = ch["topic"].as_str() {
+            if let Some(session_id) = topic.strip_prefix("Terminal 64: ") {
+                let sid = session_id.trim().to_string();
+                if !sid.is_empty() {
+                    bs.session_to_channel.insert(sid.clone(), ch_id);
+                    bs.channel_to_session.insert(ch_id, sid);
+                    restored += 1;
+                }
+            }
+        }
+    }
+
+    eprintln!("[discord] Restored {} channel mappings from existing channels", restored);
+    Ok(())
 }
 
 async fn cleanup_orphaned_channels(state: &Arc<TokioMutex<Option<BotState>>>, token: &str) -> Result<(), String> {

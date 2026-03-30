@@ -165,7 +165,7 @@ export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: C
                   <div className="claude-dialog-session-list">
                     {otherDiskSessions.map((s) => (
                       <button key={s.id} className="claude-dialog-session" onClick={() => handleOpenSession(s.id)}>
-                        <span className="claude-dialog-session-id">{s.id.slice(0, 8)}</span>
+                        <span className="claude-dialog-session-id">{s.summary || s.id.slice(0, 8)}</span>
                         <span className="claude-dialog-session-meta">{timeAgo(s.modified)}</span>
                         <span className="claude-dialog-session-size">{formatSize(s.size)}</span>
                       </button>

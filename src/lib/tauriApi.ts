@@ -9,6 +9,8 @@ import {
   ClaudeEvent,
   ClaudeDone,
   SlashCommand,
+  McpServer,
+  DirEntry,
 } from "./types";
 
 // PTY terminal commands
@@ -79,6 +81,7 @@ export interface DiskSession {
   id: string;
   modified: number;
   size: number;
+  summary: string;
 }
 
 export async function listDiskSessions(cwd: string): Promise<DiskSession[]> {
@@ -109,4 +112,24 @@ export async function renameDiscordSession(sessionId: string, sessionName: strin
 
 export async function unlinkSessionFromDiscord(sessionId: string): Promise<void> {
   return invoke("unlink_session_from_discord", { sessionId });
+}
+
+export async function discordCleanupOrphaned(): Promise<void> {
+  return invoke("discord_cleanup_orphaned");
+}
+
+export async function readFile(path: string): Promise<string> {
+  return invoke("read_file", { path });
+}
+
+export async function writeFile(path: string, content: string): Promise<void> {
+  return invoke("write_file", { path, content });
+}
+
+export async function listMcpServers(cwd: string): Promise<McpServer[]> {
+  return invoke("list_mcp_servers", { cwd });
+}
+
+export async function listDirectory(path: string): Promise<DirEntry[]> {
+  return invoke("list_directory", { path });
 }

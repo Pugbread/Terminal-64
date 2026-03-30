@@ -36,6 +36,11 @@ export interface PendingPermission {
   toolInput: Record<string, unknown>;
 }
 
+export interface McpServerStatus {
+  name: string;
+  status: string; // "connected" | "failed" | "error" etc.
+}
+
 export interface ClaudeSession {
   sessionId: string;
   messages: ChatMessage[];
@@ -52,6 +57,7 @@ export interface ClaudeSession {
   pendingPermission: PendingPermission | null;
   name: string;
   cwd: string;
+  mcpServers: McpServerStatus[];
 }
 
 interface ClaudeState {
@@ -78,6 +84,7 @@ interface ClaudeState {
   answerQuestion: (sessionId: string, answer: string) => void;
   setName: (sessionId: string, name: string) => void;
   setCwd: (sessionId: string, cwd: string) => void;
+  setMcpServers: (sessionId: string, servers: McpServerStatus[]) => void;
   deleteSession: (sessionId: string) => void;
   truncateFromMessage: (sessionId: string, messageId: string) => void;
 }
@@ -149,6 +156,7 @@ function loadSession(sessionId: string): ClaudeSession | null {
       pendingPermission: null,
       name: saved.name || "",
       cwd: saved.cwd || "",
+      mcpServers: [],
     };
   } catch {
     return null;
@@ -188,7 +196,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
         [sessionId]: {
           sessionId, messages: [], tasks: [], isStreaming: false, streamingText: "",
           model: "", totalCost: 0, totalTokens: 0, error: null, promptCount: 0, planModeActive: false,
-          pendingQuestions: null, pendingPermission: null, name: initialName || "", cwd: "",
+          pendingQuestions: null, pendingPermission: null, name: initialName || "", cwd: "", mcpServers: [],
         },
       },
     }));
@@ -387,6 +395,10 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
       debouncedSave(updated);
       return { sessions: updated };
     });
+  },
+
+  setMcpServers: (sessionId, servers) => {
+    set((s) => ({ sessions: updateSession(s.sessions, sessionId, { mcpServers: servers }) }));
   },
 
   // Permanently delete a session from both memory and localStorage

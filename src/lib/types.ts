@@ -183,6 +183,18 @@ export interface SlashCommand {
   usage?: string;
 }
 
+export interface DirEntry {
+  name: string;
+  is_dir: boolean;
+}
+
+export interface McpServer {
+  name: string;
+  transport: string;
+  command: string;
+  scope: string; // "user" | "project"
+}
+
 export interface ToolCall {
   id: string;
   name: string;
