@@ -152,9 +152,68 @@ export function renderContent(text: string) {
         continue;
       }
 
+      // Tables — lines starting with |
+      if (trimmed.startsWith("|") && trimmed.includes("|", 1)) {
+        const tableLines: string[] = [];
+        while (i < lines.length && lines[i].trim().startsWith("|")) {
+          tableLines.push(lines[i].trim());
+          i++;
+        }
+        if (tableLines.length >= 2) {
+          const parseRow = (row: string) =>
+            row.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+
+          const headers = parseRow(tableLines[0]);
+          // Check if second line is a separator (|---|---|)
+          const hasSep = /^\|[\s:]*-+[\s:]*(\|[\s:]*-+[\s:]*)*\|?$/.test(tableLines[1]);
+          const bodyStart = hasSep ? 2 : 1;
+
+          // Parse alignment from separator
+          const aligns: ("left" | "center" | "right" | undefined)[] = [];
+          if (hasSep) {
+            parseRow(tableLines[1]).forEach((cell) => {
+              const l = cell.startsWith(":");
+              const r = cell.endsWith(":");
+              if (l && r) aligns.push("center");
+              else if (r) aligns.push("right");
+              else if (l) aligns.push("left");
+              else aligns.push(undefined);
+            });
+          }
+
+          elements.push(
+            <div key={key++} className="cc-table-wrap">
+              <table className="cc-table">
+                <thead>
+                  <tr>
+                    {headers.map((h, j) => (
+                      <th key={j} style={aligns[j] ? { textAlign: aligns[j] } : undefined}>
+                        {renderInline(h)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableLines.slice(bodyStart).map((row, ri) => (
+                    <tr key={ri}>
+                      {parseRow(row).map((cell, ci) => (
+                        <td key={ci} style={aligns[ci] ? { textAlign: aligns[ci] } : undefined}>
+                          {renderInline(cell)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+          continue;
+        }
+      }
+
       // Regular paragraph — collect consecutive non-empty, non-special lines
       const paraLines: string[] = [];
-      while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|[-*+]\s|\d+[.)]\s|>\s?|(-{3,}|\*{3,}|_{3,})$)/.test(lines[i].trimStart())) {
+      while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|[-*+]\s|\d+[.)]\s|>\s?|\|.|(-{3,}|\*{3,}|_{3,})$)/.test(lines[i].trimStart())) {
         paraLines.push(lines[i]);
         i++;
       }
