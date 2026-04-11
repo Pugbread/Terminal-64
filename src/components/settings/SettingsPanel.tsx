@@ -22,6 +22,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   const setSetting = useSettingsStore((s) => s.set);
   const addQuickPaste = useSettingsStore((s) => s.addQuickPaste);
   const removeQuickPaste = useSettingsStore((s) => s.removeQuickPaste);
+  const snapToGrid = useSettingsStore((s) => s.snapToGrid);
 
   const [newCommand, setNewCommand] = useState("");
   const discordToken = useSettingsStore((s) => s.discordBotToken);
@@ -115,7 +116,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
               <input
                 type="checkbox"
                 className="settings-checkbox"
-                checked={useSettingsStore.getState().snapToGrid}
+                checked={snapToGrid}
                 onChange={(e) => setSetting({ snapToGrid: e.target.checked })}
               />
             </label>

@@ -30,7 +30,7 @@ const defaultSettings: Settings = {
   claudeFont: "system",
   theme: "Catppuccin Mocha",
   bgAlpha: 1,
-  snapToGrid: true,
+  snapToGrid: false,
   quickPastes: [],
   recentDirs: [],
   discordBotToken: "",
