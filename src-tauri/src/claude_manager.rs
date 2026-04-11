@@ -6,20 +6,52 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
 pub fn resolve_claude_path() -> String {
-    // Check common locations since macOS GUI apps don't inherit shell PATH
-    if let Ok(p) = std::process::Command::new("which").arg("claude").output() {
+    // Try the platform-appropriate PATH lookup (GUI apps often have a limited PATH)
+    let lookup = {
+        let (cmd, arg) = if cfg!(windows) { ("where", "claude.exe") } else { ("which", "claude") };
+        let mut c = std::process::Command::new(cmd);
+        c.arg(arg)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        c.output()
+    };
+    if let Ok(p) = lookup {
         if p.status.success() {
-            let s = String::from_utf8_lossy(&p.stdout).trim().to_string();
+            // `where` on Windows may return multiple lines; take the first
+            let s = String::from_utf8_lossy(&p.stdout)
+                .lines().next().unwrap_or("").trim().to_string();
             if !s.is_empty() { return s; }
         }
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    let candidates = [
-        format!("{}/.local/bin/claude", home),
-        "/usr/local/bin/claude".to_string(),
-        format!("{}/.npm-global/bin/claude", home),
-        "/opt/homebrew/bin/claude".to_string(),
-    ];
+
+    // Fall back to well-known install locations
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok();
+
+    let mut candidates: Vec<String> = Vec::new();
+
+    if cfg!(windows) {
+        if let Some(ref h) = home {
+            candidates.push(format!("{}\\.local\\bin\\claude.exe", h));
+        }
+        // npm users without .exe fall through to the bare "claude" fallback below,
+        // which lets Windows resolve claude.cmd via PATHEXT automatically.
+    } else {
+        if let Some(ref h) = home {
+            candidates.push(format!("{}/.local/bin/claude", h));
+            candidates.push(format!("{}/.npm-global/bin/claude", h));
+        }
+        candidates.push("/usr/local/bin/claude".to_string());
+        candidates.push("/opt/homebrew/bin/claude".to_string());
+    }
+
     for c in &candidates {
         if std::path::Path::new(c).exists() { return c.clone(); }
     }
