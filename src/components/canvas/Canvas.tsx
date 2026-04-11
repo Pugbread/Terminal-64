@@ -6,11 +6,12 @@ import LeftPanelContainer from "../panels/LeftPanelContainer";
 import "./Canvas.css";
 
 export default function Canvas() {
-  const { terminals, panX, panY, zoom } = useCanvasStore(useShallow((s) => ({
+  const { terminals, panX, panY, zoom, snapGuides } = useCanvasStore(useShallow((s) => ({
     terminals: s.terminals,
     panX: s.panX,
     panY: s.panY,
     zoom: s.zoom,
+    snapGuides: s.snapGuides,
   })));
   // Actions are stable refs — no need for shallow comparison
   const pan = useCanvasStore((s) => s.pan);
@@ -104,6 +105,21 @@ export default function Canvas() {
       >
         {terminals.map((term) => (
           <FloatingTerminal key={term.id} term={term} />
+        ))}
+        {snapGuides.map((g, i) => (
+          <div
+            key={i}
+            className={`snap-guide snap-guide--${g.orientation}`}
+            style={g.orientation === "vertical" ? {
+              left: g.position,
+              top: g.start,
+              height: g.end - g.start,
+            } : {
+              left: g.start,
+              top: g.position,
+              width: g.end - g.start,
+            }}
+          />
         ))}
         <LeftPanelContainer />
       </div>

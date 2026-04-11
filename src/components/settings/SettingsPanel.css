@@ -95,6 +95,13 @@
   letter-spacing: 0;
 }
 
+.settings-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent, #89b4fa);
+  cursor: pointer;
+}
+
 .settings-select {
   padding: 8px 12px;
   background: var(--bg-tertiary, #11111b);

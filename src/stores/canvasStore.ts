@@ -8,6 +8,7 @@ import {
   MIN_TERMINAL_HEIGHT,
   AUTO_SAVE_INTERVAL_MS,
 } from "../lib/constants";
+import type { SnapGuide } from "../lib/snapUtils";
 
 export type PanelType = "terminal" | "claude" | "shared-chat";
 
@@ -34,6 +35,7 @@ interface CanvasState {
   zoom: number;
   nextZ: number;
   activeTerminalId: string | null;
+  snapGuides: SnapGuide[];
 
   addTerminal: (x?: number, y?: number) => void;
   addClaudeTerminal: (cwd: string, skipPermissions: boolean, sessionName?: string, existingSessionId?: string) => void;
@@ -49,6 +51,8 @@ interface CanvasState {
   popOut: (id: string) => void;
   popIn: (terminalId: string) => void;
   setActive: (id: string) => void;
+  setSnapGuides: (guides: SnapGuide[]) => void;
+  clearSnapGuides: () => void;
   pan: (dx: number, dy: number) => void;
   setZoom: (zoom: number) => void;
   getAllTerminalIds: () => string[];
@@ -144,6 +148,7 @@ function getInitialState() {
           zoom: session.zoom ?? 1,
           nextZ: terminals.length + 1,
           activeTerminalId: terminals[0]?.terminalId ?? null,
+          snapGuides: [],
         };
       }
     }
@@ -157,6 +162,7 @@ function getInitialState() {
     zoom: 1,
     nextZ: 2,
     activeTerminalId: def.terminalId,
+    snapGuides: [],
   };
 }
 
@@ -341,6 +347,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     setActive: (id: string) => {
       set({ activeTerminalId: id });
+    },
+
+    setSnapGuides: (guides: SnapGuide[]) => {
+      set({ snapGuides: guides });
+    },
+
+    clearSnapGuides: () => {
+      set({ snapGuides: [] });
     },
 
     pan: (dx: number, dy: number) => {

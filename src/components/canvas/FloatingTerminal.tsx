@@ -4,6 +4,8 @@ import { useCanvasStore, CanvasTerminal } from "../../stores/canvasStore";
 import { useClaudeStore } from "../../stores/claudeStore";
 import { closeTerminal, writeTerminal, closeClaudeSession, renameDiscordSession } from "../../lib/tauriApi";
 import { BORDER_COLORS, ACTIVITY_TIMEOUT_MS } from "../../lib/constants";
+import { computeDragSnap, computeResizeSnap } from "../../lib/snapUtils";
+import { useSettingsStore } from "../../stores/settingsStore";
 import XTerminal from "../terminal/XTerminal";
 import ClaudeChat from "../claude/ClaudeChat";
 import SharedChat from "../claude/SharedChat";
@@ -61,11 +63,31 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
       const onMove = (ev: MouseEvent) => {
         const dx = (ev.clientX - d.startX) / zoom;
         const dy = (ev.clientY - d.startY) / zoom;
-        moveTerminal(term.id, d.origX + dx, d.origY + dy);
+        const rawX = d.origX + dx;
+        const rawY = d.origY + dy;
+
+        if (!useSettingsStore.getState().snapToGrid) {
+          moveTerminal(term.id, rawX, rawY);
+          return;
+        }
+
+        const state = useCanvasStore.getState();
+        const self = state.terminals.find((t) => t.id === term.id);
+        const dragW = self?.width ?? term.width;
+        const dragH = self?.height ?? term.height;
+
+        const others = state.terminals
+          .filter((t) => t.id !== term.id && !t.poppedOut)
+          .map((t) => ({ x: t.x, y: t.y, width: t.width, height: t.height }));
+
+        const snap = computeDragSnap({ x: rawX, y: rawY, width: dragW, height: dragH }, others);
+        moveTerminal(term.id, snap.x, snap.y);
+        useCanvasStore.getState().setSnapGuides(snap.guides);
       };
       const onUp = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
+        useCanvasStore.getState().clearSnapGuides();
       };
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
@@ -95,20 +117,37 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
         if (edge.includes("e")) newW = origW + dx;
         if (edge.includes("s")) newH = origH + dy;
         if (edge.includes("w")) { newW = origW - dx; newX = origX + dx; }
-        if (edge === "n" || edge === "nw" || edge === "ne") { newH = origH - dy; newY = origY + dy; }
+        if (edge.includes("n")) { newH = origH - dy; newY = origY + dy; }
 
-        newW = Math.max(300, newW);
-        newH = Math.max(200, newH);
-        // Clamp position if size hit minimum
-        if (newW === 300 && edge.includes("w")) newX = origX + origW - 300;
-        if (newH === 200 && (edge === "n" || edge === "nw" || edge === "ne")) newY = origY + origH - 200;
+        if (!useSettingsStore.getState().snapToGrid) {
+          newW = Math.max(300, newW);
+          newH = Math.max(200, newH);
+          if (newW === 300 && edge.includes("w")) newX = origX + origW - 300;
+          if (newH === 200 && edge.includes("n")) newY = origY + origH - 200;
+          resizeTerminal(term.id, newW, newH);
+          moveTerminal(term.id, newX, newY);
+          return;
+        }
 
-        resizeTerminal(term.id, newW, newH);
-        moveTerminal(term.id, newX, newY);
+        const others = useCanvasStore.getState().terminals
+          .filter((t) => t.id !== term.id && !t.poppedOut)
+          .map((t) => ({ x: t.x, y: t.y, width: t.width, height: t.height }));
+
+        const snap = computeResizeSnap({ x: newX, y: newY, width: newW, height: newH }, edge, others);
+
+        snap.width = Math.max(300, snap.width);
+        snap.height = Math.max(200, snap.height);
+        if (snap.width === 300 && edge.includes("w")) snap.x = origX + origW - 300;
+        if (snap.height === 200 && edge.includes("n")) snap.y = origY + origH - 200;
+
+        resizeTerminal(term.id, snap.width, snap.height);
+        moveTerminal(term.id, snap.x, snap.y);
+        useCanvasStore.getState().setSnapGuides(snap.guides);
       };
       const onUp = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
+        useCanvasStore.getState().clearSnapGuides();
       };
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);

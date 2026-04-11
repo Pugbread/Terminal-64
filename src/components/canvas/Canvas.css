@@ -37,6 +37,26 @@
   pointer-events: none;
 }
 
+/* ---- Snap guides ---- */
+
+.snap-guide {
+  position: absolute;
+  pointer-events: none;
+  z-index: 999999;
+}
+
+.snap-guide--vertical {
+  width: 1px;
+  background: rgba(137, 180, 250, 0.5);
+  box-shadow: 0 0 4px rgba(137, 180, 250, 0.3);
+}
+
+.snap-guide--horizontal {
+  height: 1px;
+  background: rgba(137, 180, 250, 0.5);
+  box-shadow: 0 0 4px rgba(137, 180, 250, 0.3);
+}
+
 .canvas-empty {
   position: absolute;
   inset: 0;

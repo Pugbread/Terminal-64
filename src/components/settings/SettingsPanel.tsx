@@ -109,6 +109,19 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
             />
           </div>
 
+          <div className="settings-group">
+            <label className="settings-label settings-label--row">
+              <span>Snap to Grid</span>
+              <input
+                type="checkbox"
+                className="settings-checkbox"
+                checked={useSettingsStore.getState().snapToGrid}
+                onChange={(e) => setSetting({ snapToGrid: e.target.checked })}
+              />
+            </label>
+            <span className="settings-hint">Snap windows to edges and sizes of nearby windows when dragging or resizing</span>
+          </div>
+
           <div className="settings-divider" />
 
           {/* Quick Pastes */}

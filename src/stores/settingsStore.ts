@@ -14,6 +14,7 @@ export interface Settings {
   claudeFont: string;
   theme: string;
   bgAlpha: number;
+  snapToGrid: boolean;
   quickPastes: QuickPaste[];
   recentDirs: string[];
   discordBotToken: string;
@@ -29,6 +30,7 @@ const defaultSettings: Settings = {
   claudeFont: "system",
   theme: "Catppuccin Mocha",
   bgAlpha: 1,
+  snapToGrid: true,
   quickPastes: [],
   recentDirs: [],
   discordBotToken: "",

@@ -11,3 +11,4 @@ export const MIN_TERMINAL_WIDTH = 300;
 export const MIN_TERMINAL_HEIGHT = 200;
 export const AUTO_SAVE_INTERVAL_MS = 5000;
 export const ACTIVITY_TIMEOUT_MS = 3000;
+export const SNAP_THRESHOLD = 15;
