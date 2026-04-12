@@ -23,12 +23,14 @@ pub fn resolve_claude_path() -> String {
     };
     if let Ok(p) = lookup {
         if p.status.success() {
+            // `where` on Windows may return multiple lines; take the first
             let s = String::from_utf8_lossy(&p.stdout)
                 .lines().next().unwrap_or("").trim().to_string();
             if !s.is_empty() { return s; }
         }
     }
 
+    // Fall back to well-known install locations
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok();
@@ -39,6 +41,8 @@ pub fn resolve_claude_path() -> String {
         if let Some(ref h) = home {
             candidates.push(format!("{}\\.local\\bin\\claude.exe", h));
         }
+        // npm users without .exe fall through to the bare "claude" fallback below,
+        // which lets Windows resolve claude.cmd via PATHEXT automatically.
     } else {
         if let Some(ref h) = home {
             candidates.push(format!("{}/.local/bin/claude", h));
@@ -81,8 +85,7 @@ fn build_command(
 ) -> Command {
     let claude_bin = resolve_claude_path();
     let mut cmd = Command::new(&claude_bin);
-    cmd.arg("-p")
-        .arg(prompt)
+    cmd.arg("--print")
         .arg("--output-format").arg("stream-json")
         .arg("--verbose")
         .arg("--include-partial-messages")
@@ -130,6 +133,9 @@ fn build_command(
         }
     }
     if !cwd.is_empty() && cwd != "." { cmd.current_dir(cwd); }
+
+    // Prompt must be the last positional argument, after all flags
+    cmd.arg(prompt);
 
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
 
