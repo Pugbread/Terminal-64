@@ -39,7 +39,7 @@ interface CanvasState {
   activeTerminalId: string | null;
   snapGuides: SnapGuide[];
 
-  addTerminal: (x?: number, y?: number) => void;
+  addTerminal: (x?: number, y?: number, cwd?: string, width?: number, height?: number, title?: string) => CanvasTerminal;
   addClaudeTerminal: (cwd: string, skipPermissions: boolean, sessionName?: string, existingSessionId?: string) => void;
   addClaudeTerminalAt: (cwd: string, skipPermissions: boolean, sessionName?: string, existingSessionId?: string, x?: number, y?: number, width?: number, height?: number) => CanvasTerminal;
   addWidgetTerminal: (widgetId: string, widgetName?: string) => CanvasTerminal;
@@ -177,12 +177,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
   return {
     ...initial,
 
-    addTerminal: (x?: number, y?: number) => {
+    addTerminal: (x?: number, y?: number, cwd?: string, width?: number, height?: number, title?: string) => {
       const state = get();
       const count = state.terminals.length;
       const newTerm = makeTerminal(state.nextZ, {
         x: x ?? 80 + (count % 5) * 30,
         y: y ?? 80 + (count % 5) * 30,
+        ...(cwd ? { cwd } : {}),
+        ...(width ? { width } : {}),
+        ...(height ? { height } : {}),
+        ...(title ? { title } : {}),
       });
       set({
         terminals: [...state.terminals, newTerm],
@@ -190,6 +194,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         activeTerminalId: newTerm.terminalId,
       });
       markDirty();
+      return newTerm;
     },
 
     addClaudeTerminal: (cwd: string, skipPermissions: boolean, sessionName?: string, existingSessionId?: string) => {
@@ -334,6 +339,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         nextZ: state.nextZ + 1,
         activeTerminalId: term.terminalId,
       });
+      markDirty();
     },
 
     setTitle: (id: string, title: string) => {
@@ -342,6 +348,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           t.id === id ? { ...t, title } : t
         ),
       }));
+      markDirty();
     },
 
     setCwd: (id: string, cwd: string) => {
@@ -378,6 +385,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           t.terminalId === terminalId ? { ...t, poppedOut: false } : t
         ),
       }));
+      markDirty();
     },
 
     setActive: (id: string) => {
@@ -397,12 +405,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     setZoom: (zoom: number) => {
-      set({ zoom: Math.max(0.3, Math.min(2, zoom)) });
+      set({ zoom: Math.max(0.1, Math.min(5, zoom)) });
     },
 
     zoomAtPoint: (newZoom: number, cx: number, cy: number) => {
       const s = get();
-      const clamped = Math.max(0.3, Math.min(2, newZoom));
+      const clamped = Math.max(0.1, Math.min(5, newZoom));
       const ratio = clamped / s.zoom;
       set({
         zoom: clamped,
@@ -425,7 +433,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const contentW = maxX - minX;
       const contentH = maxY - minY;
       const pad = 40; // padding around content
-      const zoom = Math.max(0.3, Math.min(1, Math.min(
+      const zoom = Math.max(0.1, Math.min(1, Math.min(
         (viewportW - pad * 2) / contentW,
         (viewportH - pad * 2) / contentH,
       )));

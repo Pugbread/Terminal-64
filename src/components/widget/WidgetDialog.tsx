@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { listWidgetFolders, createWidgetFolder, deleteWidgetFolder, createClaudeSession, WidgetInfo } from "../../lib/tauriApi";
+import { listWidgetFolders, createWidgetFolder, deleteWidgetFolder, createClaudeSession, shellExec, WidgetInfo } from "../../lib/tauriApi";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { useClaudeStore } from "../../stores/claudeStore"; // used for createSession/addUserMessage
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -408,6 +408,13 @@ export default function WidgetDialog({ isOpen, onClose }: WidgetDialogProps) {
               No widgets yet. Create one to get started.
             </div>
           )}
+
+          <button
+            className="wdg-open-folder"
+            onClick={() => shellExec('open "$HOME/.terminal64/widgets"').catch(() => {})}
+          >
+            Open Widgets Folder
+          </button>
         </div>
       </div>
     </div>

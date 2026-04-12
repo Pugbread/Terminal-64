@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useClaudeStore } from "../../stores/claudeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useThemeStore } from "../../stores/themeStore";
-import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, writeFile, loadSessionHistory, mapHistoryMessages, truncateSessionJsonl, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, revertFilesGit, ensureT64Mcp, setT64DelegationEnv, getDelegationPort } from "../../lib/tauriApi";
+import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, writeFile, loadSessionHistory, mapHistoryMessages, truncateSessionJsonl, truncateSessionJsonlAfterUuid, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, revertFilesGit, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret } from "../../lib/tauriApi";
 import { SlashCommand, PermissionMode, McpServer } from "../../lib/types";
 import { rewritePromptStream } from "../../lib/ai";
 import ChatMessage, { toolHeader, renderContent, ToolGroupCard, GROUPABLE_TOOLS } from "./ChatMessage";
@@ -277,15 +277,13 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   // Resolve CWD: use prop, fall back to stored session CWD
   const effectiveCwd = (cwd && cwd !== ".") ? cwd : (session?.cwd || ".");
 
-  // Safety: if no events received for >5 min while streaming, force-reset.
-  // Uses lastEventAt (updated on every event) so long-running but active
-  // sessions aren't killed — only truly stuck ones.
+  // Safety: if streaming has been stuck for >5 min, force-reset it
   useEffect(() => {
-    if (!session?.isStreaming) return;
+    if (!session?.isStreaming || !session?.streamingStartedAt) return;
     const timer = setInterval(() => {
       const s = useClaudeStore.getState().sessions[sessionId];
-      if (s?.isStreaming && s.lastEventAt && Date.now() - s.lastEventAt > 5 * 60 * 1000) {
-        console.warn(`[queue-safety] No events for 5min on ${sessionId}, force-resetting`);
+      if (s?.isStreaming && s.streamingStartedAt && Date.now() - s.streamingStartedAt > 5 * 60 * 1000) {
+        console.warn(`[queue-safety] Streaming stuck for ${sessionId}, force-resetting`);
         useClaudeStore.getState().setStreaming(sessionId, false);
         useClaudeStore.getState().clearStreamingText(sessionId);
       }
@@ -526,7 +524,6 @@ Rules:
 
       // If the last remaining message is an unpaired user message (we removed its assistant response),
       // also remove it — the user gets its content prefilled so they can resend.
-      // This keeps the frontend and JSONL in sync (both end at a complete turn).
       if (lastMsg?.role === "user") {
         rewindContent = lastMsg.content;
         store.truncateFromMessage(sessionId, lastMsg.id);
@@ -534,22 +531,27 @@ Rules:
 
       const updatedSess = useClaudeStore.getState().sessions[sessionId];
       const keepTurns = updatedSess ? updatedSess.messages.filter(m => m.role === "user").length : 0;
+      const lastKeptMsg = updatedSess?.messages[updatedSess.messages.length - 1];
 
-      // Await truncation so --resume reads the correct JSONL
+      // Truncate JSONL to match frontend exactly — use UUID of the last kept message
+      // so we don't lose context from turn-count mismatches with tool-result-only records
       try {
-        await truncateSessionJsonl(sessionId, effectiveCwd, keepTurns);
+        if (lastKeptMsg?.id) {
+          await truncateSessionJsonlAfterUuid(sessionId, effectiveCwd, lastKeptMsg.id);
+        } else {
+          // No messages left — truncate to 0 turns
+          await truncateSessionJsonl(sessionId, effectiveCwd, 0);
+        }
       } catch (err) {
         console.warn("[rewind] Failed to truncate JSONL:", err);
       }
 
       // Force-cancel any active delegation group FIRST — rewind must not trigger a merge
-      // Use parentToGroup directly to find group regardless of status (getGroupByParent skips cancelled)
       const delState = useDelegationStore.getState();
       const delGroupId = delState.parentToGroup[sessionId];
       const delGroup = delGroupId ? delState.groups[delGroupId] : undefined;
       let childModifiedFiles: string[] = [];
       if (delGroup) {
-        // Collect all files modified by child delegation sessions before tearing them down
         const claudeState = useClaudeStore.getState();
         for (const task of delGroup.tasks) {
           if (task.sessionId) {
@@ -567,14 +569,12 @@ Rules:
       // Restore parent's own modified files from checkpoint
       try {
         const restored = await restoreCheckpoint(sessionId, keepTurns + 1);
-        void restored; // checkpoint restored successfully
+        if (restored.length > 0) console.log("[rewind] Restored files from checkpoint:", restored);
       } catch (err) {
         console.warn("[rewind] No checkpoint to restore:", err);
       }
 
       // Revert ALL files modified by delegation children using git
-      // This handles: new files (deleted), modified files (restored to HEAD),
-      // and deleted files (restored from HEAD) — zero trace after rewind
       if (childModifiedFiles.length > 0) {
         const uniqueFiles = [...new Set(childModifiedFiles)];
         revertFilesGit(effectiveCwd, uniqueFiles)
@@ -667,21 +667,6 @@ Rules:
     } catch {}
   }, []);
 
-  // Listen for widget file-open requests (CustomEvent from WidgetPanel)
-  useEffect(() => {
-    let handled = false;
-    const handler = (e: Event) => {
-      if (handled) return;
-      const path = (e as CustomEvent).detail?.path;
-      if (!path) return;
-      handled = true;
-      requestAnimationFrame(() => { handled = false; });
-      handleFileTreeOpen(path);
-    };
-    window.addEventListener("t64-open-file", handler);
-    return () => window.removeEventListener("t64-open-file", handler);
-  }, [handleFileTreeOpen]);
-
   const handleAttach = useCallback(async () => {
     try {
       const selected = await open({ multiple: true, title: "Attach files" });
@@ -696,7 +681,7 @@ Rules:
   const spawnDelegation = useCallback(
     async (tasks: { description: string }[], sharedContext: string) => {
       const delStore = useDelegationStore.getState();
-      const group = delStore.createGroup(sessionId, tasks, "auto", sharedContext || undefined, permMode.id);
+      const group = delStore.createGroup(sessionId, tasks, "auto", sharedContext || undefined);
 
       // Spawn shared chat panel below the parent
       const canvas = useCanvasStore.getState();
@@ -711,35 +696,33 @@ Rules:
         Math.min(300, parentH * 0.6),
       );
 
-      // Get delegation port + update T64 MCP with delegation env vars
+      // Get delegation port + secret + update T64 MCP with delegation env vars
       let delegationPort = 0;
+      let delegationSecret = "";
       try {
         delegationPort = await getDelegationPort();
+        delegationSecret = await getDelegationSecret();
       } catch (err) {
-        console.warn("[delegation] Could not get port:", err);
+        console.warn("[delegation] Could not get port/secret:", err);
       }
 
       const appDir = effectiveCwd;
 
+      if (delegationPort > 0 && delegationSecret) {
+        try {
+          await setT64DelegationEnv(appDir, delegationPort, delegationSecret, group.id);
+        } catch (err) {
+          console.warn("[delegation] Failed to set delegation env:", err);
+        }
+      }
+
       // Spawn headless child sessions — no canvas panels, ephemeral
-      // Each agent needs its own MCP config with a unique label, and we must
-      // await the file write before spawning so Claude CLI picks up the env vars.
-      const spawnChild = async (task: typeof group.tasks[0], i: number) => {
+      group.tasks.forEach((task, i) => {
         const childSessionId = uuidv4();
         const childName = `[D] ${task.description.slice(0, 30)}`;
-        const agentLabel = `Agent ${i + 1}`;
 
         delStore.setTaskSessionId(group.id, task.id, childSessionId);
         delStore.updateTaskStatus(group.id, task.id, "running");
-
-        // Write per-agent MCP config so this child's MCP server gets the right label
-        if (delegationPort > 0) {
-          try {
-            await setT64DelegationEnv(appDir, delegationPort, group.id, agentLabel);
-          } catch (err) {
-            console.warn(`[delegation] Failed to set env for ${agentLabel}:`, err);
-          }
-        }
 
         const channelNote = delegationPort > 0
           ? `\n\nIMPORTANT — Team Coordination via terminal-64 MCP:
@@ -756,35 +739,26 @@ You are part of a team of ${tasks.length} agents working in the same codebase. Y
 Coordinate actively. If another agent is working on a file you need, mention it in team chat and work around it. Communication prevents conflicts.`
           : "";
 
-        const initialPrompt = `Context: ${sharedContext}\n\nYour task: ${task.description}\n\nYou are "${agentLabel}" — one of ${tasks.length} parallel agents. Focus on YOUR specific task only.${channelNote}\n\nWhen done, call report_done (if available) or explicitly say "task complete" with a summary.`;
+        const initialPrompt = `Context: ${sharedContext}\n\nYour task: ${task.description}\n\nYou are agent "Agent ${i + 1}" — one of ${tasks.length} parallel agents. Focus on YOUR specific task only.${channelNote}\n\nWhen done, call report_done (if available) or state your task is complete.`;
 
         // Create ephemeral session in store (not saved to localStorage)
         useClaudeStore.getState().createSession(childSessionId, childName, true);
         addUserMessage(childSessionId, initialPrompt);
 
-        try {
-          await createClaudeSession({
+        setTimeout(() => {
+          createClaudeSession({
             session_id: childSessionId,
             cwd: appDir,
             prompt: initialPrompt,
             permission_mode: "bypass_all",
+          }).catch((err) => {
+            console.warn(`[delegation] Failed to start child ${childSessionId}:`, err);
+            delStore.updateTaskStatus(group.id, task.id, "failed", String(err));
           });
-        } catch (err) {
-          console.warn(`[delegation] Failed to start child ${childSessionId}:`, err);
-          delStore.updateTaskStatus(group.id, task.id, "failed", String(err));
-        }
-      };
-
-      // Spawn children sequentially with staggered delay so each gets its own
-      // MCP config written before Claude CLI reads .mcp.json at startup
-      (async () => {
-        for (let i = 0; i < group.tasks.length; i++) {
-          if (i > 0) await new Promise((r) => setTimeout(r, 500));
-          spawnChild(group.tasks[i], i);
-        }
-      })();
+        }, i * 500);
+      });
     },
-    [sessionId, effectiveCwd, addUserMessage, permMode.id],
+    [sessionId, effectiveCwd, addUserMessage],
   );
 
   // Detect delegation blocks in assistant messages and auto-spawn (only when /delegate was used)
@@ -1106,10 +1080,10 @@ Coordinate actively. If another agent is working on a file you need, mention it 
               }
               return elements;
             })()}
-            {session.isStreaming && (
+            {session.streamingText && (
               <div className="cc-message cc-message--assistant">
                 <div className="cc-bubble cc-bubble--assistant cc-bubble--streaming">
-                  {session.streamingText || <span className="cc-thinking-text">Thinking...</span>}
+                  {session.streamingText}
                   <span className="cc-cursor" />
                 </div>
               </div>

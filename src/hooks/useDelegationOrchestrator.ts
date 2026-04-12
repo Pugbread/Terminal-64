@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useClaudeStore } from "../stores/claudeStore";
 import { useDelegationStore } from "../stores/delegationStore";
 import { useCanvasStore } from "../stores/canvasStore";
-import { cancelClaude, sendClaudePrompt, cleanupDelegationGroup, clearT64DelegationEnv, onClaudeDone } from "../lib/tauriApi";
+import { cancelClaude, sendClaudePrompt, cleanupDelegationGroup, clearT64DelegationEnv } from "../lib/tauriApi";
 
 const FORWARDING_PREFIX = "[Update from";
 const MAX_SUMMARY_LENGTH = 800;
@@ -54,41 +54,8 @@ export function useDelegationOrchestrator() {
       }
     });
 
-    // Safety net: listen for claude-done events to catch delegation children whose
-    // streaming transition was missed (e.g. process exited before isStreaming was set).
-    let unlistenDone: (() => void) | null = null;
-    onClaudeDone((payload) => {
-      const delStore = useDelegationStore.getState();
-      const group = delStore.getGroupForSession(payload.session_id);
-      if (!group || group.status !== "active") return;
-      const task = group.tasks.find((t) => t.sessionId === payload.session_id);
-      if (!task || task.status !== "running") return;
-      // Delay slightly to let the store subscription fire first
-      setTimeout(() => {
-        const freshTask = useDelegationStore.getState().groups[group.id]?.tasks.find((t) => t.sessionId === payload.session_id);
-        if (freshTask && freshTask.status === "running") {
-          // Store subscription didn't catch it — handle now
-          handleTurnComplete(payload.session_id);
-          // If still running after handleTurnComplete, force-complete with whatever we have
-          const stillRunning = useDelegationStore.getState().groups[group.id]?.tasks.find((t) => t.sessionId === payload.session_id);
-          if (stillRunning && stillRunning.status === "running") {
-            const session = useClaudeStore.getState().sessions[payload.session_id];
-            const msgs = session?.messages || [];
-            const summary = extractReportDone(msgs)
-              || [...msgs].reverse().find((m: any) => m.role === "assistant")?.content
-              || "(agent process exited without result)";
-            delStore.updateTaskStatus(group.id, freshTask.id, "completed", summary.slice(0, MAX_SUMMARY_LENGTH * 2));
-            delStore.setTaskAction(group.id, freshTask.id, "Done");
-            idleTurnCounts.delete(payload.session_id);
-            checkAndMerge(group.id);
-          }
-        }
-      }, 500);
-    }).then((fn) => { unlistenDone = fn; });
-
     return () => {
       unsub();
-      unlistenDone?.();
     };
   }, []);
 }
@@ -132,9 +99,6 @@ function handleTurnComplete(sessionId: string) {
     || "";
 
   const isDone = reportDoneSummary || detectCompletion(resultText);
-
-  // If session errored out or process exited with no streaming, treat as done
-  const processExited = session.error || (!session.isStreaming && msgs.length > 1);
 
   if (isDone) {
     const resultSummary = resultText.slice(0, MAX_SUMMARY_LENGTH * 2);

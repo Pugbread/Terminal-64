@@ -129,6 +129,10 @@ export async function truncateSessionJsonl(sessionId: string, cwd: string, keepT
   return invoke("truncate_session_jsonl", { sessionId, cwd, keepTurns });
 }
 
+export async function truncateSessionJsonlAfterUuid(sessionId: string, cwd: string, lastUuid: string): Promise<void> {
+  return invoke("truncate_session_jsonl_after_uuid", { sessionId, cwd, lastUuid });
+}
+
 export async function forkSessionJsonl(parentSessionId: string, newSessionId: string, cwd: string, keepTurns: number): Promise<void> {
   return invoke("fork_session_jsonl", { parentSessionId, newSessionId, cwd, keepTurns });
 }
@@ -188,6 +192,10 @@ export async function getDelegationPort(): Promise<number> {
   return invoke("get_delegation_port");
 }
 
+export async function getDelegationSecret(): Promise<string> {
+  return invoke("get_delegation_secret");
+}
+
 export interface DelegationMsg {
   group_id: string;
   agent: string;
@@ -230,12 +238,13 @@ export async function ensureT64Mcp(cwd: string): Promise<void> {
 
 /**
  * Update the T64 MCP server entry in .mcp.json with delegation env vars.
- * Adds T64_DELEGATION_PORT, T64_GROUP_ID, T64_AGENT_LABEL so the MCP
- * server exposes delegation tools for child sessions.
+ * Adds T64_DELEGATION_PORT, T64_DELEGATION_SECRET, T64_GROUP_ID, T64_AGENT_LABEL
+ * so the MCP server exposes delegation tools for child sessions.
  */
 export async function setT64DelegationEnv(
   cwd: string,
   delegationPort: number,
+  delegationSecret: string,
   groupId: string,
   agentLabel = "Agent",
 ): Promise<void> {
@@ -254,6 +263,7 @@ export async function setT64DelegationEnv(
     args: [scriptPath],
     env: {
       T64_DELEGATION_PORT: String(delegationPort),
+      T64_DELEGATION_SECRET: delegationSecret,
       T64_GROUP_ID: groupId,
       T64_AGENT_LABEL: agentLabel,
     },

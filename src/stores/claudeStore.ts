@@ -239,10 +239,10 @@ function loadSession(sessionId: string): ClaudeSession | null {
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
-function debouncedSave(sessions: Record<string, ClaudeSession>) {
+function debouncedSave() {
   isDirty = true;
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => saveToStorage(sessions), 1000);
+  saveTimer = setTimeout(() => saveToStorage(useClaudeStore.getState().sessions), 1000);
 }
 
 
@@ -354,7 +354,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
             );
             messages[i] = { ...msg, toolCalls: updatedToolCalls };
             const updated = updateSession(s.sessions, sessionId, { messages });
-            debouncedSave(updated);
+            debouncedSave();
             return { sessions: updated };
           }
         }
@@ -392,7 +392,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
       const session = s.sessions[sessionId];
       if (!session) return s;
       const updated = updateSession(s.sessions, sessionId, { totalCost: session.totalCost + cost });
-      debouncedSave(updated);
+      debouncedSave();
       return { sessions: updated };
     });
   },
@@ -420,7 +420,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
       const session = s.sessions[sessionId];
       if (!session) return s;
       const updated = updateSession(s.sessions, sessionId, { promptCount: session.promptCount + 1, hasBeenStarted: true });
-      debouncedSave(updated);
+      debouncedSave();
       return { sessions: updated };
     });
   },
@@ -432,7 +432,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
       // Don't add duplicates
       if (session.tasks.some((t) => t.id === task.id)) return s;
       const updated = updateSession(s.sessions, sessionId, { tasks: [...session.tasks, task] });
-      debouncedSave(updated);
+      debouncedSave();
       return { sessions: updated };
     });
   },
@@ -443,7 +443,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
       if (!session) return s;
       const tasks = session.tasks.map((t) => t.id === taskId ? { ...t, ...update } : t);
       const updated = updateSession(s.sessions, sessionId, { tasks });
-      debouncedSave(updated);
+      debouncedSave();
       return { sessions: updated };
     });
   },
@@ -490,7 +490,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
   setCwd: (sessionId, cwd) => {
     set((s) => {
       const updated = updateSession(s.sessions, sessionId, { cwd });
-      debouncedSave(updated);
+      debouncedSave();
       return { sessions: updated };
     });
   },
@@ -510,11 +510,15 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
   },
 
   dequeuePrompt: (sessionId) => {
-    const session = get().sessions[sessionId];
-    if (!session || session.promptQueue.length === 0) return undefined;
-    const [first, ...rest] = session.promptQueue;
-    set((s) => ({ sessions: updateSession(s.sessions, sessionId, { promptQueue: rest }) }));
-    return first;
+    let dequeued: QueuedPrompt | undefined;
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session || session.promptQueue.length === 0) return s;
+      const [first, ...rest] = session.promptQueue;
+      dequeued = first;
+      return { sessions: updateSession(s.sessions, sessionId, { promptQueue: rest }) };
+    });
+    return dequeued;
   },
 
   removeQueuedPrompt: (sessionId, promptId) => {
@@ -536,7 +540,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
       if (!session) return s;
       const promptCount = messages.filter((m) => m.role === "user").length;
       const updated = updateSession(s.sessions, sessionId, { messages, promptCount, hasBeenStarted: promptCount > 0 });
-      debouncedSave(updated);
+      debouncedSave();
       return { sessions: updated };
     });
   },
@@ -607,7 +611,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
         messages, promptCount, streamingText: "", isStreaming: false, error: null,
         pendingPermission: null, pendingQuestions: null, activeLoop: null, promptQueue: [],
       });
-      debouncedSave(updated);
+      debouncedSave();
       return { sessions: updated };
     });
   },
@@ -624,7 +628,16 @@ if (typeof window !== "undefined") {
   });
   window.addEventListener("beforeunload", flushSave);
   // Periodic safety-net save every 5 seconds — only fires when state has changed
-  setInterval(() => {
+  const saveIntervalId = setInterval(() => {
     if (isDirty) saveToStorage(useClaudeStore.getState().sessions);
   }, 5000);
+
+  // Clean up on HMR to prevent interval leaks
+  const hot = (import.meta as any).hot;
+  if (hot) {
+    hot.dispose(() => {
+      clearInterval(saveIntervalId);
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    });
+  }
 }

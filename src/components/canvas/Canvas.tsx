@@ -75,7 +75,7 @@ export default function Canvas() {
       const rect = el.getBoundingClientRect();
       const cx = (e.clientX ?? rect.width / 2) - rect.left;
       const cy = (e.clientY ?? rect.height / 2) - rect.top;
-      const newZoom = Math.max(0.3, Math.min(2, gestureStartZoom * e.scale));
+      const newZoom = Math.max(0.1, Math.min(5, gestureStartZoom * e.scale));
       useCanvasStore.getState().zoomAtPoint(newZoom, cx, cy);
     };
     const onGestureEnd = (e: any) => {
@@ -100,7 +100,7 @@ export default function Canvas() {
         const cx = e.clientX - rect.left;
         const cy = e.clientY - rect.top;
         const clampedDelta = Math.max(-10, Math.min(10, e.deltaY));
-        const newZoom = Math.max(0.3, Math.min(2, s.zoom * Math.exp(-clampedDelta * 0.01)));
+        const newZoom = Math.max(0.1, Math.min(5, s.zoom * Math.exp(-clampedDelta * 0.01)));
         s.zoomAtPoint(newZoom, cx, cy);
       } else {
         // Two-finger scroll — pan
@@ -120,27 +120,11 @@ export default function Canvas() {
     };
   }, []);
 
-  // Double-click to spawn terminal at cursor
-  const handleDoubleClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.target !== canvasRef.current) return;
-      const rect = canvasRef.current!.getBoundingClientRect();
-      const z = useCanvasStore.getState().zoom;
-      const px = useCanvasStore.getState().panX;
-      const py = useCanvasStore.getState().panY;
-      const x = (e.clientX - rect.left - px) / z - 350;
-      const y = (e.clientY - rect.top - py) / z - 225;
-      addTerminal(x, y);
-    },
-    [addTerminal]
-  );
-
   return (
     <div
       ref={canvasRef}
       className="canvas"
       onMouseDown={handleMouseDown}
-      onDoubleClick={handleDoubleClick}
       style={{
         backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
         backgroundPosition: `${panX % (24 * zoom)}px ${panY % (24 * zoom)}px`,

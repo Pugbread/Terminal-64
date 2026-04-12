@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { getWidgetServerPort, widgetFileModified, widgetGetState, widgetSetState, widgetClearState, proxyFetch, sendNotification, createBrowser, setBrowserBounds, setBrowserZoom, setBrowserVisible, closeBrowser, navigateBrowser, browserEval, shellExec, readFile, writeFile, listDirectory, searchFiles, deleteFiles, createTerminal, writeTerminal, createClaudeSession, sendClaudePrompt } from "../../lib/tauriApi";
+import { getWidgetServerPort, widgetFileModified, widgetGetState, widgetSetState, widgetClearState, proxyFetch, createBrowser, setBrowserBounds, setBrowserZoom, setBrowserVisible, closeBrowser, navigateBrowser, browserEval, shellExec, readFile, writeFile, listDirectory, searchFiles, deleteFiles, createTerminal, closeTerminal, writeTerminal, createClaudeSession, sendClaudePrompt, onTerminalOutput } from "../../lib/tauriApi";
+import { pushToast } from "../../lib/notifications";
 import { useClaudeStore, ClaudeSession } from "../../stores/claudeStore";
 import { useThemeStore } from "../../stores/themeStore";
 import { useCanvasStore } from "../../stores/canvasStore";
@@ -323,12 +324,32 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
           return;
         }
 
+        // ---- Widget bounds (for positioning relative terminals) ----
+
+        case "t64:get-bounds": {
+          const { id: gbId } = msg.payload || {};
+          const panel = useCanvasStore.getState().terminals.find(
+            (t) => t.panelType === "widget" && t.widgetId === widgetId
+          );
+          if (panel) {
+            post({ type: "t64:bounds", payload: { id: gbId, x: panel.x, y: panel.y, width: panel.width, height: panel.height } });
+          }
+          return;
+        }
+
         // ---- File open (opens in Monaco editor overlay) ----
 
         case "t64:open-file": {
           const { path: filePath } = msg.payload || {};
           if (filePath && typeof filePath === "string") {
-            window.dispatchEvent(new CustomEvent("t64-open-file", { detail: { path: filePath } }));
+            // Validate file exists before dispatching
+            readFile(filePath)
+              .then(() => {
+                window.dispatchEvent(new CustomEvent("t64-open-file", { detail: { path: filePath } }));
+              })
+              .catch(() => {
+                post({ type: "t64:open-file-error", payload: { path: filePath, error: "File not found" } });
+              });
           }
           return;
         }
@@ -394,13 +415,28 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
         // ---- Terminal ----
 
         case "t64:create-terminal": {
-          const { cwd: termCwd, id: ctId } = msg.payload || {};
-          useCanvasStore.getState().addTerminal();
-          const terminals = useCanvasStore.getState().terminals;
-          const last = terminals[terminals.length - 1];
-          if (last?.panelType === "terminal") {
-            post({ type: "t64:terminal-created", payload: { id: ctId, terminalId: last.terminalId } });
-          }
+          const { cwd: termCwd, id: ctId, x: termX, y: termY, width: termW, height: termH, title: termTitle } = msg.payload || {};
+          const newTerm = useCanvasStore.getState().addTerminal(
+            termX ?? undefined, termY ?? undefined, termCwd || undefined,
+            termW ?? undefined, termH ?? undefined, termTitle ?? undefined,
+          );
+          const tid = newTerm.terminalId;
+          // Wait for the PTY to actually spawn (first output = shell prompt)
+          // before telling the widget the terminal is ready to receive writes.
+          let responded = false;
+          const respond = () => {
+            if (responded) return;
+            responded = true;
+            post({ type: "t64:terminal-created", payload: { id: ctId, terminalId: tid } });
+          };
+          onTerminalOutput((out) => {
+            if (out.id === tid) respond();
+          }).then((unlisten) => {
+            // Clean up listener once we've responded (or after timeout)
+            const cleanup = () => { unlisten(); respond(); };
+            if (responded) { unlisten(); return; }
+            setTimeout(cleanup, 3000);
+          });
           return;
         }
 
@@ -408,6 +444,15 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
           const { terminalId, data } = msg.payload || {};
           if (!terminalId || typeof data !== "string") return;
           writeTerminal(terminalId, data).catch(() => {});
+          return;
+        }
+
+        case "t64:close-terminal": {
+          const { terminalId: closeTid } = msg.payload || {};
+          if (!closeTid || typeof closeTid !== "string") return;
+          closeTerminal(closeTid).catch(() => {});
+          const panel = useCanvasStore.getState().terminals.find((t) => t.terminalId === closeTid);
+          if (panel) useCanvasStore.getState().removeTerminal(panel.id);
           return;
         }
 
@@ -490,14 +535,13 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
           return;
         }
 
-        // ---- System notification ----
+        // ---- In-app notification ----
 
         case "t64:notify": {
           const { title, body: notifBody, id: nId } = msg.payload || {};
           if (!title || typeof title !== "string") return;
-          sendNotification(title.slice(0, 256), notifBody ? String(notifBody).slice(0, 1024) : undefined)
-            .then(() => post({ type: "t64:notify-result", payload: { id: nId, error: null } }))
-            .catch((err) => post({ type: "t64:notify-result", payload: { id: nId, error: String(err) } }));
+          pushToast(title.slice(0, 256), notifBody ? String(notifBody).slice(0, 1024) : undefined);
+          post({ type: "t64:notify-result", payload: { id: nId, error: null } });
           return;
         }
 

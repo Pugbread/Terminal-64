@@ -203,3 +203,47 @@ button:focus-visible {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-hover, #6c7086);
 }
+
+/* ---- In-app toast notifications ---- */
+
+.t64-toasts {
+  position: fixed;
+  top: 40px;
+  right: 12px;
+  z-index: 400;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+  max-width: 320px;
+}
+
+.t64-toast {
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 8px;
+  padding: 10px 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  cursor: pointer;
+  animation: toast-in 0.2s ease-out;
+}
+
+.t64-toast-title {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg, #cdd6f4);
+}
+
+.t64-toast-body {
+  font-size: 11px;
+  color: var(--fg-muted, #6c7086);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}

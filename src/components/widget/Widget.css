@@ -77,7 +77,7 @@
 .wdg-dialog-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10000;
+  z-index: 200;
   background: rgba(0,0,0,0.55);
   backdrop-filter: blur(4px);
   display: flex;
@@ -319,3 +319,23 @@
   color: var(--fg-muted, #6c7086);
   font-size: 12px;
 }
+
+.wdg-open-folder {
+  width: 100%;
+  padding: 8px;
+  margin-top: 8px;
+  background: var(--bg-tertiary, #11111b);
+  border: 1px solid var(--border, #313244);
+  color: var(--fg-muted, #6c7086);
+  font-size: 11px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.1s, color 0.1s;
+}
+
+.wdg-open-folder:hover {
+  border-color: #89b4fa;
+  color: #89b4fa;
+}
+

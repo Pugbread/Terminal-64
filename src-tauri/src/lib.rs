@@ -29,6 +29,56 @@ mod pty_manager;
 mod types;
 mod widget_server;
 
+// ---- Security: path sandboxing ----
+
+/// Returns the list of allowed root directories for file operations.
+/// Currently: the current working directory of the app and ~/.terminal64/.
+// ---- Security: shell command validation ----
+
+/// Blocklist of dangerous shell patterns. Returns an error message if the command matches.
+fn validate_shell_command(command: &str) -> Result<(), String> {
+    let lower = command.to_lowercase();
+    let blocked_patterns: &[(&str, &str)] = &[
+        ("rm -rf /", "Refusing to run destructive command targeting root"),
+        ("rm -rf ~", "Refusing to run destructive command targeting home directory"),
+        ("mkfs", "Refusing to run filesystem format command"),
+        ("dd if=", "Refusing to run raw disk write command"),
+        (":(){", "Refusing to run fork bomb"),
+        ("chmod -r 777 /", "Refusing to run recursive permission change on root"),
+        ("chown -r", "Refusing to run recursive ownership change"),
+        ("> /dev/sd", "Refusing to write to raw block device"),
+        ("> /dev/nvme", "Refusing to write to raw block device"),
+        ("curl|sh", "Refusing to pipe remote script to shell"),
+        ("curl|bash", "Refusing to pipe remote script to shell"),
+        ("wget|sh", "Refusing to pipe remote script to shell"),
+        ("wget|bash", "Refusing to pipe remote script to shell"),
+        ("curl | sh", "Refusing to pipe remote script to shell"),
+        ("curl | bash", "Refusing to pipe remote script to shell"),
+        ("wget | sh", "Refusing to pipe remote script to shell"),
+        ("wget | bash", "Refusing to pipe remote script to shell"),
+        ("shutdown", "Refusing to run shutdown command"),
+        ("reboot", "Refusing to run reboot command"),
+        ("halt", "Refusing to run halt command"),
+        ("poweroff", "Refusing to run poweroff command"),
+        ("init 0", "Refusing to run init command"),
+        ("init 6", "Refusing to run init command"),
+        ("systemctl poweroff", "Refusing to run system power command"),
+        ("systemctl reboot", "Refusing to run system reboot command"),
+    ];
+
+    // Remove spaces for pattern matching to catch obfuscation like "rm  -rf  /"
+    let compressed = lower.replace(' ', "");
+
+    for (pattern, reason) in blocked_patterns {
+        let compressed_pattern = pattern.replace(' ', "");
+        if compressed.contains(&compressed_pattern) {
+            return Err(reason.to_string());
+        }
+    }
+
+    Ok(())
+}
+
 use audio_manager::AudioManager;
 use browser_manager::BrowserManager;
 use claude_manager::ClaudeManager;
@@ -447,6 +497,7 @@ fn load_session_history(session_id: String, cwd: String) -> Result<Vec<HistoryMe
 }
 
 /// Collect JSONL lines up to `keep_turns` user messages (actual user prompts, not tool_result-only messages).
+/// A "real" user turn has non-empty, non-whitespace text content — matching load_session_history's filtering.
 fn collect_jsonl_lines_up_to_turns<'a>(content: &'a str, keep_turns: usize) -> Vec<&'a str> {
     let mut kept: Vec<&str> = Vec::new();
     let mut user_turn_count = 0;
@@ -455,7 +506,9 @@ fn collect_jsonl_lines_up_to_turns<'a>(content: &'a str, keep_turns: usize) -> V
         let val: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => { kept.push(line); continue; } };
         if val["type"].as_str().unwrap_or("") == "user" {
             let is_real = val["message"]["content"].as_str().map(|s| !s.is_empty()).unwrap_or_else(||
-                val["message"]["content"].as_array().map(|arr| arr.iter().any(|b| b["type"].as_str() == Some("text"))).unwrap_or(false)
+                val["message"]["content"].as_array().map(|arr| arr.iter().any(|b| {
+                    b["type"].as_str() == Some("text") && b["text"].as_str().map(|t| !t.trim().is_empty()).unwrap_or(false)
+                })).unwrap_or(false)
             );
             if is_real { user_turn_count += 1; }
         }
@@ -473,6 +526,61 @@ fn truncate_session_jsonl(session_id: String, cwd: String, keep_turns: usize) ->
     let truncated = kept.join("\n") + "\n";
     std::fs::write(&path, truncated).map_err(|e| format!("write: {}", e))?;
     safe_eprintln!("[rewind] Truncated JSONL to {} turns (was {} lines, now {} lines)", keep_turns, content.lines().count(), kept.len());
+    Ok(())
+}
+
+/// Truncate JSONL after the record with the given UUID.
+/// Keeps all lines up to and including the line matching the UUID, plus any immediately
+/// following tool-result-only user records (which are part of the same turn).
+#[tauri::command]
+fn truncate_session_jsonl_after_uuid(session_id: String, cwd: String, last_uuid: String) -> Result<(), String> {
+    let path = session_jsonl_path(&cwd, &session_id)?;
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("read: {}", e))?;
+    let mut kept: Vec<&str> = Vec::new();
+    let mut found = false;
+    let mut trailing_tool_results = false;
+    for line in content.lines() {
+        if line.trim().is_empty() { continue; }
+        if found {
+            // After the target UUID, keep tool-result-only user records (they pair with the last assistant's tool_use)
+            if trailing_tool_results {
+                let val: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => break };
+                if val["type"].as_str().unwrap_or("") == "user" {
+                    // Check if this is tool-result-only (no real text content)
+                    let has_text = val["message"]["content"].as_str().map(|s| !s.is_empty()).unwrap_or_else(||
+                        val["message"]["content"].as_array().map(|arr| arr.iter().any(|b| {
+                            b["type"].as_str() == Some("text") && b["text"].as_str().map(|t| !t.trim().is_empty()).unwrap_or(false)
+                        })).unwrap_or(false)
+                    );
+                    if !has_text {
+                        kept.push(line);
+                        continue;
+                    }
+                }
+            }
+            break;
+        }
+        kept.push(line);
+        let val: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => continue };
+        if val["uuid"].as_str() == Some(&last_uuid) {
+            found = true;
+            // If this is an assistant message with tool_use, keep following tool-result records
+            if val["type"].as_str() == Some("assistant") {
+                if let Some(content_arr) = val["message"]["content"].as_array() {
+                    if content_arr.iter().any(|b| b["type"].as_str() == Some("tool_use")) {
+                        trailing_tool_results = true;
+                    }
+                }
+            }
+        }
+    }
+    if !found {
+        safe_eprintln!("[rewind] UUID {} not found in JSONL, falling back to keeping all", last_uuid);
+        return Ok(());
+    }
+    let truncated = kept.join("\n") + "\n";
+    std::fs::write(&path, truncated).map_err(|e| format!("write: {}", e))?;
+    safe_eprintln!("[rewind] Truncated JSONL after UUID {} (was {} lines, now {} lines)", &last_uuid[..8.min(last_uuid.len())], content.lines().count(), kept.len());
     Ok(())
 }
 
@@ -529,6 +637,9 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
 
 #[tauri::command]
 async fn shell_exec(command: String, cwd: Option<String>) -> Result<serde_json::Value, String> {
+    // Validate command against blocklist of dangerous patterns
+    validate_shell_command(&command)?;
+
     let shell = if cfg!(windows) { "cmd" } else { "sh" };
     let flag = if cfg!(windows) { "/C" } else { "-c" };
     let mut cmd = std::process::Command::new(shell);
@@ -952,6 +1063,13 @@ fn get_delegation_port(
 }
 
 #[tauri::command]
+fn get_delegation_secret(
+    state: tauri::State<'_, AppState>,
+) -> String {
+    state.permission_server.secret().to_string()
+}
+
+#[tauri::command]
 fn get_app_dir() -> Result<String, String> {
     // In dev mode, return the project root (where mcp/ lives)
     // In production, this would be the resource directory
@@ -1168,6 +1286,35 @@ async fn proxy_fetch(
         return Err("file:// URLs are not allowed".into());
     }
 
+    // Parse URL and block private/internal IP ranges
+    let parsed = url::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
+    if let Some(host) = parsed.host_str() {
+        let host_lower = host.to_lowercase();
+        if host_lower == "localhost" || host_lower == "0.0.0.0" {
+            return Err("Requests to local addresses are not allowed".into());
+        }
+        let ip_str = host.trim_start_matches('[').trim_end_matches(']');
+        if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
+            let is_blocked = match ip {
+                std::net::IpAddr::V4(v4) => {
+                    let o = v4.octets();
+                    o[0] == 127                                     // 127.0.0.0/8
+                    || o[0] == 10                                   // 10.0.0.0/8
+                    || (o[0] == 172 && o[1] >= 16 && o[1] <= 31)   // 172.16.0.0/12
+                    || (o[0] == 192 && o[1] == 168)                 // 192.168.0.0/16
+                    || (o[0] == 169 && o[1] == 254)                 // 169.254.0.0/16
+                    || o[0] == 0                                    // 0.0.0.0/8
+                }
+                std::net::IpAddr::V6(v6) => {
+                    v6 == std::net::Ipv6Addr::LOCALHOST             // ::1
+                }
+            };
+            if is_blocked {
+                return Err("Requests to private/internal addresses are not allowed".into());
+            }
+        }
+    }
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(timeout_ms.unwrap_or(30_000).min(60_000)))
         .build()
@@ -1234,9 +1381,24 @@ fn send_notification(title: String, body: Option<String>) -> Result<(), String> 
     // Use osascript on macOS as a simple cross-platform notification
     #[cfg(target_os = "macos")]
     {
-        let escaped_title = title.replace('\\', "\\\\").replace('"', "\\\"");
+        // Escape for AppleScript: backslashes, quotes, and control chars
+        // that could break out of the string context
+        fn escape_applescript(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            for c in s.chars() {
+                match c {
+                    '\\' => out.push_str("\\\\"),
+                    '"' => out.push_str("\\\""),
+                    '\n' | '\r' | '\t' => out.push(' '),
+                    c if c.is_control() => {}
+                    c => out.push(c),
+                }
+            }
+            out
+        }
+        let escaped_title = escape_applescript(&title);
         let script = if let Some(b) = &body {
-            let escaped_body = b.replace('\\', "\\\\").replace('"', "\\\"");
+            let escaped_body = escape_applescript(b);
             format!(
                 "display notification \"{}\" with title \"{}\"",
                 escaped_body, escaped_title
@@ -1303,13 +1465,17 @@ fn restore_checkpoint(session_id: String, turn: usize) -> Result<Vec<String>, St
         if parts.len() != 2 { continue; }
         let snap_file = parts[0];
         let original_path = parts[1];
+        // Block path traversal in crafted manifests
+        if original_path.contains("..") {
+            return Err(format!("restore_checkpoint blocked: path traversal in '{}'", original_path));
+        }
         let content = std::fs::read_to_string(dir.join(snap_file))
             .map_err(|e| format!("read snap {}: {}", snap_file, e))?;
-        // Ensure parent directory exists
-        if let Some(parent) = std::path::Path::new(original_path).parent() {
+        let dest = std::path::Path::new(original_path);
+        if let Some(parent) = dest.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        std::fs::write(original_path, &content)
+        std::fs::write(dest, &content)
             .map_err(|e| format!("restore {}: {}", original_path, e))?;
         restored.push(original_path.to_string());
     }
@@ -1614,12 +1780,14 @@ pub fn run() {
             list_disk_sessions,
             load_session_history,
             truncate_session_jsonl,
+            truncate_session_jsonl_after_uuid,
             fork_session_jsonl,
             read_file,
             write_file,
             list_mcp_servers,
             list_directory,
             get_delegation_port,
+            get_delegation_secret,
             get_delegation_messages,
             cleanup_delegation_group,
             get_app_dir,

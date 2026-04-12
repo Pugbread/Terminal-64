@@ -257,3 +257,9 @@ input.ft-title--editing {
   padding: 0 8px 0 14px;
 }
 
+/* Block iframes from stealing mouse events during drag/resize */
+.ft-dragging iframe,
+.ft-dragging webview {
+  pointer-events: none !important;
+}
+

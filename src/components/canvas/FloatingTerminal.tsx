@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect } from "react";
+import { useCallback, useRef, useState, useEffect, useMemo } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useCanvasStore, CanvasTerminal } from "../../stores/canvasStore";
 import { useClaudeStore } from "../../stores/claudeStore";
@@ -13,6 +13,14 @@ import WidgetPanel from "../widget/WidgetPanel";
 import BrowserPanel from "../widget/BrowserPanel";
 import TextEditor from "./TextEditor";
 import "./FloatingTerminal.css";
+
+/** Block iframes from stealing mouse events during drag/resize */
+function blockIframes() {
+  document.body.classList.add("ft-dragging");
+}
+function unblockIframes() {
+  document.body.classList.remove("ft-dragging");
+}
 
 interface FloatingTerminalProps {
   term: CanvasTerminal;
@@ -33,6 +41,8 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
   const [editorOpen, setEditorOpen] = useState(false);
   const workTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragRef = useRef({ startX: 0, startY: 0, origX: 0, origY: 0 });
+  // Track active drag/resize cleanup so we can tear down on unmount
+  const cleanupRef = useRef<(() => void) | null>(null);
   // Keep a live ref to term so drag/resize callbacks don't need term.x/y/w/h in deps
   const termRef = useRef(term);
   termRef.current = term;
@@ -46,6 +56,9 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
   useEffect(() => {
     return () => {
       if (workTimer.current) clearTimeout(workTimer.current);
+      // Clean up any lingering drag/resize window listeners on unmount
+      cleanupRef.current?.();
+      cleanupRef.current = null;
     };
   }, []);
 
@@ -74,6 +87,7 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
       d.origX = t.x;
       d.origY = t.y;
 
+      blockIframes();
       const onMove = (ev: MouseEvent) => {
         const dx = (ev.clientX - d.startX) / curZoom;
         const dy = (ev.clientY - d.startY) / curZoom;
@@ -101,10 +115,13 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
       const onUp = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
+        unblockIframes();
         useCanvasStore.getState().clearSnapGuides();
+        cleanupRef.current = null;
       };
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
+      cleanupRef.current = onUp;
     },
     [term.id, moveTerminal, bringToFront]
   );
@@ -124,6 +141,7 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
       const origW = t.width;
       const origH = t.height;
 
+      blockIframes();
       const onMove = (ev: MouseEvent) => {
         const dx = (ev.clientX - startX) / curZoom;
         const dy = (ev.clientY - startY) / curZoom;
@@ -163,10 +181,13 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
       const onUp = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
+        unblockIframes();
         useCanvasStore.getState().clearSnapGuides();
+        cleanupRef.current = null;
       };
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
+      cleanupRef.current = onUp;
     },
     [term.id, resizeTerminal, moveTerminal, bringToFront]
   );

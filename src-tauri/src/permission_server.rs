@@ -14,9 +14,10 @@ fn next_id() -> String {
 }
 
 fn random_token() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    format!("{:x}{:x}", t.as_nanos(), t.as_secs().wrapping_mul(2654435761))
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 32] = rng.gen();
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -167,6 +168,10 @@ impl PermissionServer {
         self.port.load(Ordering::SeqCst)
     }
 
+    pub fn secret(&self) -> &str {
+        &self.secret
+    }
+
     pub fn cleanup_delegation_group(&self, group_id: &str) {
         if let Ok(mut store) = self.delegation_messages.lock() {
             store.remove(group_id);
@@ -277,8 +282,23 @@ fn handle_connection(
     let method = first_line.split_whitespace().next().unwrap_or("");
     let path = first_line.split_whitespace().nth(1).unwrap_or("");
 
-    // --- Delegation routes (no auth needed, only local) ---
+    // --- Delegation routes (require secret token via Authorization header) ---
     if path.starts_with("/delegation/") {
+        // Verify Authorization: Bearer {secret}
+        let auth_valid = headers
+            .lines()
+            .find(|l| l.to_lowercase().starts_with("authorization:"))
+            .and_then(|l| l.split_once(':'))
+            .map(|(_, v)| v.trim())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(|token| token == secret)
+            .unwrap_or(false);
+
+        if !auth_valid {
+            send_http(&mut stream, 403, r#"{"error":"forbidden"}"#);
+            return Ok(());
+        }
+
         // Parse Content-Length
         let content_length: usize = headers
             .lines()

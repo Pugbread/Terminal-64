@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import Canvas from "./components/canvas/Canvas";
@@ -18,6 +18,7 @@ import { useThemeStore } from "./stores/themeStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { registerCommand } from "./lib/commands";
 import { closeTerminal, closeClaudeSession, linkSessionToDiscord, unlinkSessionFromDiscord, startDiscordBot, discordCleanupOrphaned, loadSessionHistory, mapHistoryMessages, setAllBrowsersVisible } from "./lib/tauriApi";
+import { Toast, subscribeToasts, dismissToast } from "./lib/notifications";
 import { useDelegationStore } from "./stores/delegationStore";
 import { useClaudeStore, flushSave as flushClaudeSave, STORAGE_KEY } from "./stores/claudeStore";
 import { checkForUpdate, UpdateInfo } from "./lib/updater";
@@ -93,11 +94,12 @@ function App() {
 
   // Save ALL state on window close — critical for persistence
   useEffect(() => {
-    const unlisten = appWindow.onCloseRequested(() => {
+    let unlistenFn: (() => void) | undefined;
+    appWindow.onCloseRequested(() => {
       useCanvasStore.getState().saveSession();
       flushClaudeSave();
-    });
-    return () => { unlisten.then((fn) => fn()); };
+    }).then((fn) => { unlistenFn = fn; });
+    return () => { unlistenFn?.(); };
   }, []);
 
   useEffect(() => {
@@ -169,13 +171,14 @@ function App() {
 
   // Listen for popped-out terminals coming back
   useEffect(() => {
-    const unlisten = listen<{ terminalId: string }>(
+    let unlistenFn: (() => void) | undefined;
+    listen<{ terminalId: string }>(
       "terminal-pop-back",
       (event) => {
         useCanvasStore.getState().popIn(event.payload.terminalId);
       }
-    );
-    return () => { unlisten.then((fn) => fn()); };
+    ).then((fn) => { unlistenFn = fn; });
+    return () => { unlistenFn?.(); };
   }, []);
 
   const handleMinimize = () => appWindow.minimize();
@@ -335,6 +338,30 @@ function App() {
         isOpen={widgetDialogOpen}
         onClose={() => setWidgetDialogOpen(false)}
       />
+
+      {/* In-app toast notifications */}
+      <ToastContainer />
+    </div>
+  );
+}
+
+let toastCache: Toast[] = [];
+function getToasts() { return toastCache; }
+function subToasts(cb: () => void) {
+  return subscribeToasts((t) => { toastCache = t; cb(); });
+}
+
+function ToastContainer() {
+  const toasts = useSyncExternalStore(subToasts, getToasts);
+  if (toasts.length === 0) return null;
+  return (
+    <div className="t64-toasts">
+      {toasts.map((t) => (
+        <div key={t.id} className="t64-toast" onClick={() => dismissToast(t.id)}>
+          <div className="t64-toast-title">{t.title}</div>
+          {t.body && <div className="t64-toast-body">{t.body}</div>}
+        </div>
+      ))}
     </div>
   );
 }

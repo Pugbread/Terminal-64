@@ -356,6 +356,9 @@ export function useClaudeEvents() {
               }
             }
           }
+          // Clear per-turn tracking so stale blocks don't leak into the next assistant turn
+          pendingBlocks.delete(session_id);
+          assistantFinalized.delete(session_id);
           return;
         }
 
@@ -400,6 +403,13 @@ export function useClaudeEvents() {
         const session = store.sessions[payload.session_id];
         if (session?.streamingText?.trim()) {
           store.finalizeAssistantMessage(payload.session_id, session.streamingText.trim());
+        }
+        // Guarantee a true→false streaming transition so store subscribers
+        // (e.g. delegation orchestrator) detect process exit even when
+        // isStreaming was already false from an earlier result event.
+        const current = useClaudeStore.getState().sessions[payload.session_id];
+        if (current && !current.isStreaming) {
+          store.setStreaming(payload.session_id, true);
         }
         store.setStreaming(payload.session_id, false);
         store.clearStreamingText(payload.session_id);

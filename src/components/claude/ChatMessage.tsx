@@ -36,8 +36,14 @@ function renderInline(text: string, keyPrefix: string = ""): React.ReactNode[] {
       // `inline code`
       result.push(<code key={key} className="cc-inline-code">{match[7]}</code>);
     } else if (match[8] && match[9]) {
-      // [text](url)
-      result.push(<a key={key} className="cc-link" href={match[9]} title={match[9]}>{match[8]}</a>);
+      // [text](url) — only allow safe protocols
+      const href = match[9].trim();
+      const hrefLower = href.toLowerCase().replace(/\s/g, '');
+      if (/^https?:|^mailto:/i.test(hrefLower)) {
+        result.push(<a key={key} className="cc-link" href={href} title={href}>{match[8]}</a>);
+      } else {
+        result.push(<span key={key}>{match[8]}</span>);
+      }
     }
     lastIndex = pattern.lastIndex;
   }
@@ -155,7 +161,7 @@ export function renderContent(text: string) {
       const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
       if (headingMatch) {
         const level = headingMatch[1].length;
-        const Tag = `h${level}` as any;
+        const Tag = `h${level}` as keyof JSX.IntrinsicElements;
         elements.push(<Tag key={key++} className={`cc-h cc-h${level}`}>{renderInline(headingMatch[2])}</Tag>);
         i++; continue;
       }
@@ -348,16 +354,14 @@ function ToolBody({ tc, onEditClick }: { tc: ToolCall; onEditClick?: (tcId: stri
     );
   }
 
-  // Write — show as diff (all new content) with click-to-open like Edit
+  // Write — show content preview
   if (tc.name === "Write" && i.content) {
     const content = String(i.content);
     const preview = content.length > 500 ? content.slice(0, 500) + "\n..." : content;
     return (
       <div className="cc-tc-body">
-        <div className="cc-tc-diff" onClick={() => onEditClick?.(tc.id, String(i.file_path || ""), "", content)} style={{ cursor: onEditClick ? "pointer" : undefined }}>
-          <div className="cc-tc-diff-add">{preview}</div>
-        </div>
-        {result && <pre className="cc-tc-output">{result}</pre>}
+        <pre className="cc-tc-output"><CopyBtn text={content} />{preview}</pre>
+        {result && <pre className="cc-tc-result-text">{result}</pre>}
       </div>
     );
   }
@@ -488,17 +492,18 @@ function ChatMessageInner({ message, onRewind, onFork, onEditClick }: {
   );
 
   if (message.role === "user") {
-    const isMerge = message.content.startsWith(MERGE_PREFIX);
+    const content = message.content || "";
+    const isMerge = content.startsWith(MERGE_PREFIX);
     return (
       <div className="cc-message cc-message--user">
         {menuBtn}
         {isMerge ? (
-          <MergeResultCard content={message.content} />
-        ) : (
+          <MergeResultCard content={content} />
+        ) : content ? (
           <div className="cc-bubble cc-bubble--user">
-            {message.content}
+            {content}
           </div>
-        )}
+        ) : null}
       </div>
     );
   }

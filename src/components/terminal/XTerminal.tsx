@@ -335,6 +335,8 @@ export default function XTerminal({
       unlistenOutput?.();
       unlistenExit?.();
       xtermTA?.removeEventListener("paste", killPaste, true);
+      webglRef.current?.dispose();
+      webglRef.current = null;
       term.dispose();
       termRef.current = null;
       fitAddonRef.current = null;

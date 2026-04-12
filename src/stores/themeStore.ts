@@ -21,6 +21,28 @@ const builtInThemes: ThemeDefinition[] = [
   tokyoNight as ThemeDefinition,
 ];
 
+const THEME_STORAGE_KEY = "terminal64-theme";
+
+function loadSavedTheme(): { themeName: string; theme: ThemeDefinition; bgAlpha: number } {
+  try {
+    const raw = localStorage.getItem(THEME_STORAGE_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw);
+      const theme = builtInThemes.find((t) => t.name === saved.themeName);
+      if (theme) {
+        return { themeName: saved.themeName, theme, bgAlpha: saved.bgAlpha ?? 1 };
+      }
+    }
+  } catch {}
+  return { themeName: "Catppuccin Mocha", theme: catppuccinMocha as ThemeDefinition, bgAlpha: 1 };
+}
+
+function persistTheme(themeName: string, bgAlpha: number) {
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify({ themeName, bgAlpha }));
+  } catch {}
+}
+
 interface ThemeState {
   themes: ThemeDefinition[];
   currentThemeName: string;
@@ -30,18 +52,23 @@ interface ThemeState {
   setBgAlpha: (alpha: number) => void;
 }
 
+const initial = loadSavedTheme();
+
 export const useThemeStore = create<ThemeState>((set, get) => ({
   themes: builtInThemes,
-  currentThemeName: "Catppuccin Mocha",
-  currentTheme: catppuccinMocha as ThemeDefinition,
-  bgAlpha: 1,
+  currentThemeName: initial.themeName,
+  currentTheme: initial.theme,
+  bgAlpha: initial.bgAlpha,
   setTheme: (name: string) => {
     const theme = get().themes.find((t) => t.name === name);
     if (theme) {
       set({ currentThemeName: name, currentTheme: theme });
+      persistTheme(name, get().bgAlpha);
     }
   },
   setBgAlpha: (alpha: number) => {
-    set({ bgAlpha: Math.max(0, Math.min(1, alpha)) });
+    const clamped = Math.max(0, Math.min(1, alpha));
+    set({ bgAlpha: clamped });
+    persistTheme(get().currentThemeName, clamped);
   },
 }));
