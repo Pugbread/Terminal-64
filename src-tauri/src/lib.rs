@@ -1247,6 +1247,27 @@ fn get_delegation_secret(
     state.permission_server.secret().to_string()
 }
 
+fn resolve_node_path() -> &'static str {
+    static NODE_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NODE_PATH.get_or_init(|| {
+        for p in &["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
+            if std::path::Path::new(p).exists() { return p.to_string(); }
+        }
+        if let Ok(output) = std::process::Command::new("/bin/sh")
+            .args(["-lc", "which node"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+        {
+            if output.status.success() {
+                let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !s.is_empty() && std::path::Path::new(&s).exists() { return s; }
+            }
+        }
+        "node".to_string()
+    })
+}
+
 #[tauri::command]
 fn create_mcp_config_file(
     app_handle: tauri::AppHandle,
@@ -1257,10 +1278,12 @@ fn create_mcp_config_file(
 ) -> Result<String, String> {
     let app_dir = get_app_dir(app_handle)?;
     let script_path = format!("{}/mcp/t64-server.mjs", app_dir);
+    let node_path = resolve_node_path();
+    safe_eprintln!("[mcp] Using node: {}", node_path);
     let config = serde_json::json!({
         "mcpServers": {
             "terminal-64": {
-                "command": "node",
+                "command": node_path,
                 "args": [script_path],
                 "env": {
                     "T64_DELEGATION_PORT": delegation_port.to_string(),

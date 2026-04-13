@@ -282,10 +282,6 @@ impl ClaudeManager {
 
     pub fn create_session(&self, app_handle: &AppHandle, req: CreateClaudeRequest, settings_path: Option<String>, channel_server: Option<String>) -> Result<(), String> {
         safe_eprintln!("[claude] Creating session id={} cwd={} mcp_config={:?}", req.session_id, req.cwd, req.mcp_config.as_deref().map(|s| &s[..s.len().min(80)]));
-        // Debug: write mcp_config to temp file for diagnosis
-        let _ = std::fs::write("/tmp/t64-rust-debug.log", format!(
-            "create_session: id={} mcp_config={:?}\n", req.session_id, req.mcp_config
-        ));
         let cmd = build_command(
             "--session-id", &req.session_id, &req.prompt,
             &req.permission_mode, &req.model, &req.effort, &req.cwd, &None, &settings_path, &channel_server, &req.mcp_config,

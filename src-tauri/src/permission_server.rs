@@ -285,16 +285,19 @@ fn handle_connection(
     // --- Delegation routes (require secret token via Authorization header) ---
     if path.starts_with("/delegation/") {
         // Verify Authorization: Bearer {secret}
-        let auth_valid = headers
+        let auth_header = headers
             .lines()
             .find(|l| l.to_lowercase().starts_with("authorization:"))
             .and_then(|l| l.split_once(':'))
-            .map(|(_, v)| v.trim())
+            .map(|(_, v)| v.trim().to_string());
+        let auth_valid = auth_header.as_deref()
             .and_then(|v| v.strip_prefix("Bearer "))
             .map(|token| token == secret)
             .unwrap_or(false);
 
         if !auth_valid {
+            safe_eprintln!("[delegation] AUTH FAILED for {} {} (got: {:?})",
+                method, path, auth_header.as_deref().map(|h| &h[..h.len().min(20)]));
             send_http(&mut stream, 403, r#"{"error":"forbidden"}"#);
             return Ok(());
         }

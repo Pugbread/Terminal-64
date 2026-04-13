@@ -770,16 +770,14 @@ Rules:
         Math.min(300, parentH * 0.6),
       );
 
-      // Get delegation port + secret + update T64 MCP with delegation env vars
-      const debugLog: string[] = [`[${new Date().toISOString()}] spawnDelegation started`];
+      // Get delegation port + secret
       let delegationPort = 0;
       let delegationSecret = "";
       try {
         delegationPort = await getDelegationPort();
         delegationSecret = await getDelegationSecret();
-        debugLog.push(`port=${delegationPort} hasSecret=${!!delegationSecret}`);
       } catch (err) {
-        debugLog.push(`ERROR getting port/secret: ${err}`);
+        console.warn("[delegation] Failed to get port/secret:", err);
       }
 
       // Resolve a real CWD — never use "." which resolves to process CWD (/ in production)
@@ -789,25 +787,16 @@ Rules:
         : (sessCwd && sessCwd !== "." && sessCwd !== "/")
           ? sessCwd
           : "";
-      debugLog.push(`effectiveCwd=${effectiveCwd} sessCwd=${sessCwd} appDir=${appDir}`);
 
       // Create a temp MCP config file for delegation child sessions
       let mcpConfigPath = "";
       if (delegationPort > 0 && delegationSecret) {
         try {
           mcpConfigPath = await createMcpConfigFile(delegationPort, delegationSecret, group.id, "Agent");
-          debugLog.push(`mcpConfigPath=${mcpConfigPath}`);
         } catch (err) {
-          debugLog.push(`ERROR creating MCP config: ${err}`);
+          console.warn("[delegation] Failed to create MCP config:", err);
         }
-      } else {
-        debugLog.push(`SKIP MCP config: port=${delegationPort} hasSecret=${!!delegationSecret}`);
       }
-
-      // Write debug log to file for production debugging
-      debugLog.push(`mcpConfigPath type=${typeof mcpConfigPath} len=${mcpConfigPath.length}`);
-      debugLog.push(`mcpConfigPath value=${mcpConfigPath.slice(0, 200)}`);
-      writeFile("/tmp/t64-delegation-debug.log", debugLog.join("\n")).catch(() => {});
 
       // Spawn headless child sessions — no canvas panels, ephemeral
       group.tasks.forEach((task, i) => {

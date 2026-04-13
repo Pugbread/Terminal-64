@@ -42,13 +42,6 @@ export function onTerminalExit(callback: (payload: TerminalExit) => void): Promi
 // Claude session commands
 
 export async function createClaudeSession(req: CreateClaudeRequest): Promise<void> {
-  if (req.mcp_config) {
-    console.log("[createClaudeSession] mcp_config:", req.mcp_config);
-    // Also log to file for production debugging
-    writeFile("/tmp/t64-create-session-debug.log",
-      `${new Date().toISOString()} session=${req.session_id} mcp_config=${req.mcp_config}\nfull_req=${JSON.stringify(req).slice(0, 500)}`
-    ).catch(() => {});
-  }
   return invoke("create_claude_session", { req });
 }
 

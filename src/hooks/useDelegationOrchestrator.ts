@@ -6,7 +6,12 @@ import { cancelClaude, sendClaudePrompt, cleanupDelegationGroup, clearT64Delegat
 
 const FORWARDING_PREFIX = "[Update from";
 const MAX_SUMMARY_LENGTH = 800;
-const idleTurnCounts = new Map<string, number>();
+const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// After a delegation child's process exits without calling report_done,
+// wait this long before marking it complete. Gives time for any follow-up
+// prompts (e.g. from DelegationBadge forwarding) to restart streaming.
+const IDLE_TIMEOUT_MS = 15_000;
 
 function closeSharedChatPanel(groupId: string) {
   const canvas = useCanvasStore.getState();
@@ -47,6 +52,15 @@ export function useDelegationOrchestrator() {
           }
         }
 
+        // Cancel idle timer if agent started streaming again
+        if (!was && now) {
+          const timer = idleTimers.get(sid);
+          if (timer) {
+            clearTimeout(timer);
+            idleTimers.delete(sid);
+          }
+        }
+
         // Only act on streaming → not-streaming transitions
         if (was && !now) {
           handleTurnComplete(sid);
@@ -56,6 +70,9 @@ export function useDelegationOrchestrator() {
 
     return () => {
       unsub();
+      // Clean up timers on unmount
+      for (const timer of idleTimers.values()) clearTimeout(timer);
+      idleTimers.clear();
     };
   }, []);
 }
@@ -98,41 +115,68 @@ function handleTurnComplete(sessionId: string) {
     || summarizeToolCalls(lastAssistant)
     || "";
 
-  const isDone = reportDoneSummary || detectCompletion(resultText);
-
-  if (isDone) {
+  // report_done is the ONLY hard completion signal — no text-based phrase guessing.
+  // Text matching caused too many false positives (e.g. "I've completed step 1" → killed).
+  if (reportDoneSummary) {
     const resultSummary = resultText.slice(0, MAX_SUMMARY_LENGTH * 2);
-    delStore.updateTaskStatus(group.id, task.id, "completed", resultSummary);
-    delStore.setTaskAction(group.id, task.id, "Done");
-    idleTurnCounts.delete(sessionId);
+    markComplete(group.id, task.id, sessionId, resultSummary);
   } else {
-    // Track consecutive idle turns (no tool calls, no completion phrase)
-    const hasToolCalls = lastAssistant?.toolCalls && lastAssistant.toolCalls.length > 0;
-    if (!hasToolCalls) {
-      const count = (idleTurnCounts.get(sessionId) || 0) + 1;
-      idleTurnCounts.set(sessionId, count);
-      if (count >= MAX_IDLE_TURNS) {
-        const resultSummary = resultText.slice(0, MAX_SUMMARY_LENGTH * 2) || "(agent stopped without explicit summary)";
-        delStore.updateTaskStatus(group.id, task.id, "completed", resultSummary);
-        delStore.setTaskAction(group.id, task.id, "Done");
-        idleTurnCounts.delete(sessionId);
-      }
-    } else {
-      idleTurnCounts.set(sessionId, 0);
-    }
+    // Agent's process exited without calling report_done. In --print mode with
+    // bypass_all, this usually means the agent finished its work. Start a timer:
+    // if the agent doesn't start streaming again within IDLE_TIMEOUT_MS, mark done.
+    scheduleIdleCompletion(sessionId, group.id, task.id, resultText);
   }
 
   // Check if all tasks are complete → merge
   checkAndMerge(group.id);
 }
 
-/** Scan messages for a report_done tool call and extract its summary arg. */
+function markComplete(groupId: string, taskId: string, sessionId: string, summary: string) {
+  const delStore = useDelegationStore.getState();
+  delStore.updateTaskStatus(groupId, taskId, "completed", summary);
+  delStore.setTaskAction(groupId, taskId, "Done");
+  const timer = idleTimers.get(sessionId);
+  if (timer) {
+    clearTimeout(timer);
+    idleTimers.delete(sessionId);
+  }
+}
+
+function scheduleIdleCompletion(sessionId: string, groupId: string, taskId: string, fallbackText: string) {
+  // Clear any existing timer for this session
+  const existing = idleTimers.get(sessionId);
+  if (existing) clearTimeout(existing);
+
+  const timer = setTimeout(() => {
+    idleTimers.delete(sessionId);
+    const delStore = useDelegationStore.getState();
+    const group = delStore.groups[groupId];
+    if (!group || group.status !== "active") return;
+
+    const task = group.tasks.find((t) => t.id === taskId);
+    if (!task || task.status !== "running") return;
+
+    // Check if agent restarted streaming (e.g. got a follow-up prompt)
+    const session = useClaudeStore.getState().sessions[sessionId];
+    if (session?.isStreaming) return; // Still working — don't interrupt
+
+    // Agent has been idle for IDLE_TIMEOUT_MS — mark as complete
+    const summary = fallbackText.slice(0, MAX_SUMMARY_LENGTH * 2) || "(agent completed without explicit summary)";
+    markComplete(groupId, taskId, sessionId, summary);
+    checkAndMerge(groupId);
+  }, IDLE_TIMEOUT_MS);
+
+  idleTimers.set(sessionId, timer);
+}
+
+/** Scan messages for a report_done tool call and extract its summary arg.
+ *  MCP tools are prefixed: mcp__terminal-64__report_done */
 function extractReportDone(msgs: any[]): string | null {
   for (let i = msgs.length - 1; i >= Math.max(0, msgs.length - 5); i--) {
     const msg = msgs[i];
     if (msg.role === "assistant" && msg.toolCalls) {
       for (const tc of msg.toolCalls) {
-        if (tc.name === "report_done" && tc.input?.summary) {
+        if ((tc.name === "report_done" || tc.name.endsWith("__report_done")) && tc.input?.summary) {
           return String(tc.input.summary);
         }
       }
@@ -226,7 +270,13 @@ export function endDelegation(groupId: string, forceCancel = false) {
 
   // Cancel all running children and clean up idle tracking
   for (const task of group.tasks) {
-    if (task.sessionId) idleTurnCounts.delete(task.sessionId);
+    if (task.sessionId) {
+      const timer = idleTimers.get(task.sessionId);
+      if (timer) {
+        clearTimeout(timer);
+        idleTimers.delete(task.sessionId);
+      }
+    }
     if (task.status === "running" || task.status === "pending") {
       delStore.updateTaskStatus(groupId, task.id, "cancelled");
       if (task.sessionId) {
@@ -249,21 +299,3 @@ export function endDelegation(groupId: string, forceCancel = false) {
     if (parentSession?.cwd) clearT64DelegationEnv(parentSession.cwd);
   }
 }
-
-function detectCompletion(content: string): boolean {
-  const lower = content.toLowerCase();
-  const completionPhrases = [
-    "task complete", "task is complete", "i've completed", "i have completed",
-    "all done", "finished implementing", "implementation is complete",
-    "work is done", "changes are complete", "successfully completed",
-    "i'm done", "that's everything", "everything is set up",
-    "completed all", "all changes have been", "all tasks", "finished all",
-    "that completes", "this completes", "everything has been",
-  ];
-  return completionPhrases.some((phrase) => lower.includes(phrase));
-}
-
-// If a child session stops streaming without requesting more input and hasn't
-// been marked complete by phrase detection, treat it as complete after this
-// many consecutive "turn complete without user input" events.
-const MAX_IDLE_TURNS = 2;

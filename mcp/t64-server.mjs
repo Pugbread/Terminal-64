@@ -62,20 +62,27 @@ function getTools() {
 
 function httpRequest(method, path, body) {
   return new Promise((resolve, reject) => {
+    const encoded = body ? JSON.stringify(body) : null;
+    const headers = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${SECRET}`,
+    };
+    if (encoded) headers["Content-Length"] = Buffer.byteLength(encoded);
     const options = {
       hostname: "127.0.0.1",
       port: PORT,
       path,
       method,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${SECRET}`,
-      },
+      headers,
     };
     const req = http.request(options, (res) => {
       let data = "";
       res.on("data", (chunk) => (data += chunk));
       res.on("end", () => {
+        if (res.statusCode >= 400) {
+          reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+          return;
+        }
         try {
           resolve(JSON.parse(data));
         } catch {
@@ -87,7 +94,7 @@ function httpRequest(method, path, body) {
     req.setTimeout(10000, () => {
       req.destroy(new Error("Request timeout"));
     });
-    if (body) req.write(JSON.stringify(body));
+    if (encoded) req.write(encoded);
     req.end();
   });
 }
@@ -193,4 +200,11 @@ rl.on("line", (line) => {
 });
 
 const mode = DELEGATION_ACTIVE ? `delegation (group ${GROUP_ID.slice(0, 8)}, port ${PORT})` : "standalone";
+
+// Self-test: verify we can reach the delegation server (GET only — no chat noise)
+if (DELEGATION_ACTIVE) {
+  httpRequest("GET", `/delegation/messages?group=${encodeURIComponent(GROUP_ID)}&last=1`)
+    .then(() => process.stderr.write(`[t64] Delegation server reachable\n`))
+    .catch((err) => process.stderr.write(`[t64] Delegation server UNREACHABLE: ${err.message}\n`));
+}
 process.stderr.write(`[t64] MCP server started — ${mode}\n`);
