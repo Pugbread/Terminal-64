@@ -133,8 +133,15 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   useEffect(() => {
     document.documentElement.style.setProperty("--claude-font", fontStack(useSettingsStore.getState().claudeFont || "system"));
   }, []);
-  // Reset visible messages when switching sessions
-  useEffect(() => { setVisibleCount(INITIAL_VISIBLE); }, [sessionId]);
+  // Reset visible messages when switching sessions, and scroll to bottom
+  useEffect(() => {
+    setVisibleCount(INITIAL_VISIBLE);
+    wasAtBottom.current = true;
+    requestAnimationFrame(() => {
+      const el = messagesEndRef.current?.parentElement;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }, [sessionId]);
 
   // Track whether user is at the bottom so we only auto-scroll when appropriate
   const wasAtBottom = useRef(true);
@@ -161,12 +168,11 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     el.addEventListener("scroll", handler, { passive: true });
     return () => el.removeEventListener("scroll", handler);
   }, [sessionId]); // Only reattach when session changes
-  // Scroll on new messages (only if at bottom — check position directly)
+  // Scroll on new messages (only if user was at bottom before the new content rendered)
   useEffect(() => {
     const el = messagesEndRef.current?.parentElement;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-    if (atBottom) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    if (wasAtBottom.current) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [session?.messages?.length]);
   // Auto-scroll to permission prompt when it appears
   useEffect(() => {

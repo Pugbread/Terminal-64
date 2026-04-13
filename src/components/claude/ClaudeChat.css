@@ -106,8 +106,10 @@
   box-sizing: border-box;
 }
 
-.cft-search-input:focus {
+.cft-search-input:focus,
+.cft-search-input:focus-visible {
   border-color: color-mix(in srgb, var(--fg-muted, #6c7086) 50%, transparent);
+  outline: none;
 }
 
 .cft-search-input::placeholder {
@@ -371,7 +373,7 @@
 .cc-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 14px;
+  padding: 16px 14px 48px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1424,8 +1426,10 @@
   transition: border-color 0.1s;
 }
 
-.cc-question-input:focus {
+.cc-question-input:focus,
+.cc-question-input:focus-visible {
   border-color: rgba(137, 180, 250, 0.4);
+  outline: none;
 }
 
 .cc-question-input::placeholder {
@@ -1542,11 +1546,12 @@
 /* ---- Context usage bar ---- */
 
 
-.cc-textarea {
+.cc-textarea,
+.cc-textarea:focus-visible {
   flex: 1;
   background: transparent;
   border: none;
-  outline: none;
+  outline: none !important;
   color: var(--fg, #cdd6f4);
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 13px;

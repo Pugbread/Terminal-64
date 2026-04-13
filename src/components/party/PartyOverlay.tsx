@@ -69,9 +69,12 @@ function Equalizer() {
       const container = barsRef.current;
       const bars = container.children;
       const len = Math.min(bars.length, data.bands.length);
-      const hue = parseFloat(
-        document.documentElement.style.getPropertyValue("--party-hue") || "0"
-      );
+      const rootStyle = document.documentElement.style;
+      const hue = parseFloat(rootStyle.getPropertyValue("--party-hue") || "0");
+      const cyclingVal = rootStyle.getPropertyValue("--party-cycling");
+      const cycling = cyclingVal === "1";
+      const themeSat = parseFloat(rootStyle.getPropertyValue("--party-theme-sat") || "85");
+      const themeLit = parseFloat(rootStyle.getPropertyValue("--party-theme-lit") || "55");
       const bass = data.bass;
 
       frame++;
@@ -113,20 +116,41 @@ function Equalizer() {
         tickSpring(tiltSprings[i], 0.2, 0.88);
 
         // Color
-        const barHue = (hue + (i / len) * 120) % 360;
-        const lightness = 42 + (h / 100) * 25;
         const flashMix = beatFlash * Math.max(0.3, smoothed[i]);
-        const sat = (85 - flashMix * 40) | 0;
-        const lit = lightness + flashMix * 20;
         const glowIntensity = Math.max(0, (h - 35) / 65) + flashMix * 0.4;
-
-        // Batch all style writes into a single cssText assignment per element
-        // (~2 DOM writes per bar instead of ~9)
         const transform = rotation ? `transform:rotate(${tiltSprings[i].pos.toFixed(1)}deg);` : "";
+
+        let barBg: string;
+        let glowColor: string;
+        let capColor: string;
+
+        if (cycling) {
+          // Color cycling mode — rainbow spread across bars
+          const barHue = (hue + (i / len) * 120) % 360;
+          const lightness = 42 + (h / 100) * 25;
+          const sat = (85 - flashMix * 40) | 0;
+          const lit = lightness + flashMix * 20;
+          barBg = `linear-gradient(to top,hsl(${barHue | 0},${sat}%,${(lit * 0.55) | 0}%),hsl(${barHue | 0},${sat}%,${lit | 0}%))`;
+          glowColor = `hsla(${barHue | 0},90%,60%,${Math.min(glowIntensity * 0.65, 0.85).toFixed(2)})`;
+          capColor = `hsl(${barHue | 0},90%,80%)`;
+        } else {
+          // Theme mode — gradient from accent bright (top) to darker hue-shifted (bottom)
+          const spread = 40; // tight hue spread across all bars
+          const barHue = ((hue - spread / 2 + (i / len) * spread) % 360 + 360) % 360;
+          const botHue = (barHue + 30) % 360; // shift hue toward warmer/darker at bottom
+          const topSat = Math.min(themeSat + 10, 95);
+          const topLit = Math.min(themeLit + 8 + (h / 100) * 18 + flashMix * 15, 85);
+          const botSat = Math.max(themeSat - 10, 30);
+          const botLit = Math.max(themeLit * 0.35 + flashMix * 8, 10);
+          barBg = `linear-gradient(to top,hsl(${botHue | 0},${botSat | 0}%,${botLit | 0}%),hsl(${barHue | 0},${topSat | 0}%,${topLit | 0}%))`;
+          glowColor = `hsla(${barHue | 0},${topSat | 0}%,${(topLit * 0.85) | 0}%,${Math.min(glowIntensity * 0.55, 0.7).toFixed(2)})`;
+          capColor = `hsl(${barHue | 0},${topSat | 0}%,${Math.min(topLit + 15, 90) | 0}%)`;
+        }
+
         const glow = glowIntensity > 0.05
-          ? `box-shadow:0 0 ${(4 + glowIntensity * 14) | 0}px hsla(${barHue | 0},90%,60%,${Math.min(glowIntensity * 0.65, 0.85).toFixed(2)});`
+          ? `box-shadow:0 0 ${(4 + glowIntensity * 14) | 0}px ${glowColor};`
           : "";
-        el.style.cssText = `height:${h.toFixed(1)}%;${transform}background:linear-gradient(to top,hsl(${barHue | 0},${sat}%,${(lit * 0.55) | 0}%),hsl(${barHue | 0},${sat}%,${lit | 0}%));${glow}`;
+        el.style.cssText = `height:${h.toFixed(1)}%;${transform}background:${barBg};${glow}`;
 
         // Peak cap
         if (h > peakPos[i]) {
@@ -148,7 +172,7 @@ function Equalizer() {
         if (cap) {
           const capOffset = peakPos[i] - h;
           const capVis = peakPos[i] > 3;
-          cap.style.cssText = `bottom:${capOffset.toFixed(1)}%;background:hsl(${barHue | 0},90%,80%);opacity:${capVis ? "0.9" : "0"};${capVis && peakPos[i] > 20 ? `box-shadow:0 0 4px hsla(${barHue | 0},90%,80%,0.6);` : ""}`;
+          cap.style.cssText = `bottom:${capOffset.toFixed(1)}%;background:${capColor};opacity:${capVis ? "0.9" : "0"};${capVis && peakPos[i] > 20 ? `box-shadow:0 0 4px ${capColor};` : ""}`;
         }
       }
 

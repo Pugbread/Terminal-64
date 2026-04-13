@@ -97,7 +97,8 @@
   margin-bottom: 14px;
 }
 
-.del-textarea:focus {
+.del-textarea:focus,
+.del-textarea:focus-visible {
   outline: none;
   border-color: var(--accent, #cba6f7);
 }
@@ -140,7 +141,8 @@
   padding: 6px 8px;
 }
 
-.del-task-input:focus {
+.del-task-input:focus,
+.del-task-input:focus-visible {
   outline: none;
   border-color: var(--accent, #cba6f7);
 }
