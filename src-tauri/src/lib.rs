@@ -377,6 +377,24 @@ Rules:
 }
 
 #[tauri::command]
+fn save_pasted_image(base64_data: String, extension: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&base64_data)
+        .map_err(|e| format!("Invalid base64: {}", e))?;
+    let tmp = std::env::temp_dir().join(format!("t64-paste-{}.{}", uuid::Uuid::new_v4(), extension));
+    std::fs::write(&tmp, &bytes).map_err(|e| format!("Failed to write temp file: {}", e))?;
+    Ok(tmp.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn read_file_base64(path: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+#[tauri::command]
 async fn search_files(cwd: String, query: String) -> Result<Vec<String>, String> {
     // Run filesystem walk on a blocking thread to avoid freezing the UI
     tauri::async_runtime::spawn_blocking(move || {
@@ -2280,6 +2298,8 @@ pub fn run() {
             set_browser_zoom,
             set_all_browsers_visible,
             generate_theme,
+            save_pasted_image,
+            read_file_base64,
             create_skill_folder,
             list_skills,
             delete_skill,
