@@ -435,6 +435,29 @@
   color: var(--fg, #cdd6f4);
 }
 
+/* ---- Turn divider ---- */
+
+.cc-turn-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 16px;
+  user-select: none;
+}
+.cc-turn-divider::before,
+.cc-turn-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(255,255,255,0.07);
+}
+.cc-turn-divider-text {
+  font-size: 10.5px;
+  color: var(--fg-muted, #6c7086);
+  white-space: nowrap;
+  letter-spacing: 0.3px;
+}
+
 /* ---- Message bubbles ---- */
 
 .cc-message {

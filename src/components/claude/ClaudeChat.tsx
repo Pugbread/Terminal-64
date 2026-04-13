@@ -277,20 +277,6 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   // Resolve CWD: use prop, fall back to stored session CWD
   const effectiveCwd = (cwd && cwd !== ".") ? cwd : (session?.cwd || ".");
 
-  // Safety: if streaming has been stuck for >5 min, force-reset it
-  useEffect(() => {
-    if (!session?.isStreaming || !session?.streamingStartedAt) return;
-    const timer = setInterval(() => {
-      const s = useClaudeStore.getState().sessions[sessionId];
-      if (s?.isStreaming && s.streamingStartedAt && Date.now() - s.streamingStartedAt > 5 * 60 * 1000) {
-        console.warn(`[queue-safety] Streaming stuck for ${sessionId}, force-resetting`);
-        useClaudeStore.getState().setStreaming(sessionId, false);
-        useClaudeStore.getState().clearStreamingText(sessionId);
-      }
-    }, 30_000);
-    return () => clearInterval(timer);
-  }, [session?.isStreaming, sessionId]);
-
   // Auto-drain queue: when streaming stops, send next queued prompt
   const prevStreaming = useRef(false);
   useEffect(() => {
@@ -1139,8 +1125,25 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                 );
               }
               let i = 0;
+              let lastUserTs: number | null = null;
               while (i < msgs.length) {
                 const msg = msgs[i];
+                // Insert "Finished after X" divider between turns
+                if (msg.role === "user" && lastUserTs !== null && i > 0 && msgs[i - 1].role === "assistant") {
+                  const dur = msg.timestamp - lastUserTs;
+                  if (dur > 2000) {
+                    const secs = Math.floor(dur / 1000);
+                    const label = secs >= 60
+                      ? `${Math.floor(secs / 60)}m ${secs % 60 ? `${secs % 60}s` : ""}`
+                      : `${secs}s`;
+                    elements.push(
+                      <div key={`fin-${i}`} className="cc-turn-divider">
+                        <span className="cc-turn-divider-text">Finished after {label}</span>
+                      </div>
+                    );
+                  }
+                }
+                if (msg.role === "user") lastUserTs = msg.timestamp;
                 // Check for consecutive Read-only assistant messages
                 if (msg.role === "assistant" && !msg.content && msg.toolCalls?.length && msg.toolCalls.every((tc) => GROUPABLE_TOOLS.has(tc.name))) {
                   const groupTcs = [...msg.toolCalls];

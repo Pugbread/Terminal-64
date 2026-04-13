@@ -13,6 +13,14 @@ const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 // prompts (e.g. from DelegationBadge forwarding) to restart streaming.
 const IDLE_TIMEOUT_MS = 15_000;
 
+function clearIdleTimer(sessionId: string) {
+  const timer = idleTimers.get(sessionId);
+  if (timer) {
+    clearTimeout(timer);
+    idleTimers.delete(sessionId);
+  }
+}
+
 function closeSharedChatPanel(groupId: string) {
   const canvas = useCanvasStore.getState();
   const panelId = `shared-chat-${groupId}`;
@@ -29,24 +37,24 @@ export function useDelegationOrchestrator() {
         const prevSession = prev.sessions[sid];
         const was = prevSession?.isStreaming ?? false;
         const now = session.isStreaming;
+        const prevMsgCount = prevSession?.messages.length ?? 0;
+
+        // Skip sessions where nothing relevant changed
+        if (was === now && session.messages.length === prevMsgCount) continue;
 
         // Track last tool call action for delegation children
         const delStore = useDelegationStore.getState();
         const group = delStore.getGroupForSession(sid);
         if (group) {
           const task = group.tasks.find((t) => t.sessionId === sid);
-          if (task) {
-            // Detect new tool calls
-            const prevMsgCount = prevSession?.messages.length ?? 0;
-            if (session.messages.length > prevMsgCount) {
-              const newMsgs = session.messages.slice(prevMsgCount);
-              for (const msg of newMsgs) {
-                if (msg.role === "assistant" && msg.toolCalls?.length) {
-                  const lastTc = msg.toolCalls[msg.toolCalls.length - 1];
-                  const detail = lastTc.input?.file_path || lastTc.input?.command || lastTc.input?.pattern || "";
-                  const action = `${lastTc.name}${detail ? ` ${String(detail).split(/[/\\]/).pop()?.slice(0, 40)}` : ""}`;
-                  delStore.setTaskAction(group.id, task.id, action);
-                }
+          if (task && session.messages.length > prevMsgCount) {
+            const newMsgs = session.messages.slice(prevMsgCount);
+            for (const msg of newMsgs) {
+              if (msg.role === "assistant" && msg.toolCalls?.length) {
+                const lastTc = msg.toolCalls[msg.toolCalls.length - 1];
+                const detail = lastTc.input?.file_path || lastTc.input?.command || lastTc.input?.pattern || "";
+                const action = `${lastTc.name}${detail ? ` ${String(detail).split(/[/\\]/).pop()?.slice(0, 40)}` : ""}`;
+                delStore.setTaskAction(group.id, task.id, action);
               }
             }
           }
@@ -54,11 +62,7 @@ export function useDelegationOrchestrator() {
 
         // Cancel idle timer if agent started streaming again
         if (!was && now) {
-          const timer = idleTimers.get(sid);
-          if (timer) {
-            clearTimeout(timer);
-            idleTimers.delete(sid);
-          }
+          clearIdleTimer(sid);
         }
 
         // Only act on streaming → not-streaming transitions
@@ -135,11 +139,7 @@ function markComplete(groupId: string, taskId: string, sessionId: string, summar
   const delStore = useDelegationStore.getState();
   delStore.updateTaskStatus(groupId, taskId, "completed", summary);
   delStore.setTaskAction(groupId, taskId, "Done");
-  const timer = idleTimers.get(sessionId);
-  if (timer) {
-    clearTimeout(timer);
-    idleTimers.delete(sessionId);
-  }
+  clearIdleTimer(sessionId);
 }
 
 function scheduleIdleCompletion(sessionId: string, groupId: string, taskId: string, fallbackText: string) {
@@ -271,11 +271,7 @@ export function endDelegation(groupId: string, forceCancel = false) {
   // Cancel all running children and clean up idle tracking
   for (const task of group.tasks) {
     if (task.sessionId) {
-      const timer = idleTimers.get(task.sessionId);
-      if (timer) {
-        clearTimeout(timer);
-        idleTimers.delete(task.sessionId);
-      }
+      clearIdleTimer(task.sessionId);
     }
     if (task.status === "running" || task.status === "pending") {
       delStore.updateTaskStatus(groupId, task.id, "cancelled");

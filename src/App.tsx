@@ -150,7 +150,12 @@ function App() {
           if (t.panelType === "claude") {
             closeClaudeSession(t.terminalId).catch(() => {});
             unlinkSessionFromDiscord(t.terminalId).catch(() => {});
-            useClaudeStore.getState().removeSession(t.terminalId);
+            // Only remove unnamed/disposable sessions — named ones (e.g. widget chats)
+            // stay in memory so they can be reopened with messages intact
+            const sess = useClaudeStore.getState().sessions[t.terminalId];
+            if (!sess?.name) {
+              useClaudeStore.getState().removeSession(t.terminalId);
+            }
             // Cancel delegation task if this was a child session
             const delStore = useDelegationStore.getState();
             const group = delStore.getGroupForSession(t.terminalId);

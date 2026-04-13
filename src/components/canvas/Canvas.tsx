@@ -1,9 +1,26 @@
-import { useCallback, useRef, useEffect } from "react";
-import { useCanvasStore } from "../../stores/canvasStore";
+import { useCallback, useRef, useEffect, useMemo } from "react";
+import { useCanvasStore, type CanvasTerminal } from "../../stores/canvasStore";
+import { useClaudeStore } from "../../stores/claudeStore";
 import { useShallow } from "zustand/react/shallow";
 import FloatingTerminal from "./FloatingTerminal";
 import { PartyEqualizer } from "../party/PartyOverlay";
 import "./Canvas.css";
+
+/** Compute the point on a rect's border closest to a target point. */
+function edgePoint(
+  rect: { x: number; y: number; width: number; height: number },
+  tx: number, ty: number,
+): { x: number; y: number } {
+  const cx = rect.x + rect.width / 2;
+  const cy = rect.y + rect.height / 2;
+  const dx = tx - cx;
+  const dy = ty - cy;
+  if (dx === 0 && dy === 0) return { x: cx, y: cy };
+  const sx = (rect.width / 2) / Math.abs(dx);
+  const sy = (rect.height / 2) / Math.abs(dy);
+  const s = Math.min(sx, sy);
+  return { x: cx + dx * s, y: cy + dy * s };
+}
 
 export default function Canvas() {
   const { terminals, panX, panY, zoom, snapGuides } = useCanvasStore(useShallow((s) => ({
@@ -13,11 +30,41 @@ export default function Canvas() {
     zoom: s.zoom,
     snapGuides: s.snapGuides,
   })));
+  const claudeSessions = useClaudeStore((s) => s.sessions);
   // Actions are stable refs — no need for shallow comparison
   const pan = useCanvasStore((s) => s.pan);
   const addTerminal = useCanvasStore((s) => s.addTerminal);
 
   const canvasRef = useRef<HTMLDivElement>(null);
+
+  // Dynamically compute widget↔chat links by matching cwd to widget folder
+  const linkLines = useMemo(() => {
+    const widgets = terminals.filter((t) => t.panelType === "widget" && t.widgetId && !t.poppedOut);
+    if (widgets.length === 0) return [];
+
+    const claudes = terminals.filter((t) => t.panelType === "claude" && !t.poppedOut);
+    const lines: { x: number; y: number; length: number; angle: number; key: string }[] = [];
+
+    for (const w of widgets) {
+      // Match any claude panel whose cwd contains this widget's folder
+      const widgetPath = `/.terminal64/widgets/${w.widgetId}`;
+      for (const c of claudes) {
+        const cwd = claudeSessions[c.terminalId]?.cwd || c.cwd;
+        if (!cwd || !cwd.replace(/\\/g, "/").includes(widgetPath)) continue;
+
+        const fc = { x: w.x + w.width / 2, y: w.y + w.height / 2 };
+        const tc = { x: c.x + c.width / 2, y: c.y + c.height / 2 };
+        const p1 = edgePoint(w, tc.x, tc.y);
+        const p2 = edgePoint(c, fc.x, fc.y);
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const length = Math.sqrt(dx * dx + dy * dy);
+        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+        lines.push({ x: p1.x, y: p1.y, length, angle, key: `${w.id}-${c.id}` });
+      }
+    }
+    return lines;
+  }, [terminals, claudeSessions]);
 
   // Center view on terminals on first mount
   useEffect(() => {
@@ -137,6 +184,20 @@ export default function Canvas() {
           transformOrigin: "0 0",
         }}
       >
+        {/* Animated dotted lines between linked panels (CSS divs, not SVG — WebKit clips SVG) */}
+        {linkLines.map((l) => (
+          <div
+            key={l.key}
+            className="canvas-link-line"
+            style={{
+              left: l.x,
+              top: l.y,
+              width: l.length,
+              transform: `rotate(${l.angle}deg)`,
+            }}
+          />
+        ))}
+
         {terminals.map((term) => (
           <FloatingTerminal key={term.id} term={term} />
         ))}

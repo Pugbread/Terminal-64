@@ -30,6 +30,53 @@ export interface CanvasTerminal {
   browserUrl?: string;
 }
 
+/** Get the center of the current viewport in canvas-space coordinates. */
+function getViewportCenter(state: { panX: number; panY: number; zoom: number }): { x: number; y: number } {
+  const el = document.querySelector(".canvas");
+  const rect = el?.getBoundingClientRect() ?? { width: window.innerWidth, height: window.innerHeight };
+  return {
+    x: (rect.width / 2 - state.panX) / state.zoom,
+    y: (rect.height / 2 - state.panY) / state.zoom,
+  };
+}
+
+const SPAWN_GAP = 20;
+
+/** Push a rect away from all existing windows using AABB separation. */
+function findNonOverlappingPosition(
+  x: number, y: number, w: number, h: number,
+  existing: CanvasTerminal[],
+): { x: number; y: number } {
+  const rects = existing.filter((t) => !t.poppedOut);
+  let nx = x, ny = y;
+
+  for (let iter = 0; iter < 25; iter++) {
+    let overlapper: CanvasTerminal | null = null;
+    for (const r of rects) {
+      if (nx < r.x + r.width + SPAWN_GAP && nx + w + SPAWN_GAP > r.x &&
+          ny < r.y + r.height + SPAWN_GAP && ny + h + SPAWN_GAP > r.y) {
+        overlapper = r;
+        break;
+      }
+    }
+    if (!overlapper) break;
+
+    const r = overlapper;
+    // Compute push distance in each cardinal direction
+    const options = [
+      { dist: Math.abs((r.x + r.width + SPAWN_GAP) - nx), dx: (r.x + r.width + SPAWN_GAP) - nx, dy: 0 },
+      { dist: Math.abs((r.x - SPAWN_GAP - w) - nx), dx: (r.x - SPAWN_GAP - w) - nx, dy: 0 },
+      { dist: Math.abs((r.y + r.height + SPAWN_GAP) - ny), dx: 0, dy: (r.y + r.height + SPAWN_GAP) - ny },
+      { dist: Math.abs((r.y - SPAWN_GAP - h) - ny), dx: 0, dy: (r.y - SPAWN_GAP - h) - ny },
+    ];
+    options.sort((a, b) => a.dist - b.dist);
+    nx += options[0].dx;
+    ny += options[0].dy;
+  }
+
+  return { x: nx, y: ny };
+}
+
 interface CanvasState {
   terminals: CanvasTerminal[];
   panX: number;
@@ -179,13 +226,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     addTerminal: (x?: number, y?: number, cwd?: string, width?: number, height?: number, title?: string) => {
       const state = get();
-      const count = state.terminals.length;
+      const w = width || DEFAULT_TERMINAL_WIDTH;
+      const h = height || DEFAULT_TERMINAL_HEIGHT;
+      let px: number, py: number;
+      if (x != null && y != null) {
+        px = x; py = y;
+      } else {
+        const vc = getViewportCenter(state);
+        px = vc.x - w / 2;
+        py = vc.y - h / 2;
+      }
+      const pos = findNonOverlappingPosition(px, py, w, h, state.terminals);
       const newTerm = makeTerminal(state.nextZ, {
-        x: x ?? 80 + (count % 5) * 30,
-        y: y ?? 80 + (count % 5) * 30,
+        x: pos.x, y: pos.y, width: w, height: h,
         ...(cwd ? { cwd } : {}),
-        ...(width ? { width } : {}),
-        ...(height ? { height } : {}),
         ...(title ? { title } : {}),
       });
       set({
@@ -203,11 +257,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     addClaudeTerminalAt: (cwd, skipPermissions, sessionName, existingSessionId, x, y, width, height) => {
       const state = get();
+      const w = width || DEFAULT_TERMINAL_WIDTH;
+      const h = height || DEFAULT_TERMINAL_HEIGHT;
+      let px: number, py: number;
+      if (x != null && y != null) {
+        px = x; py = y;
+      } else {
+        const vc = getViewportCenter(state);
+        px = vc.x - w / 2;
+        py = vc.y - h / 2;
+      }
+      const pos = findNonOverlappingPosition(px, py, w, h, state.terminals);
       const newTerm = makeTerminal(state.nextZ, {
-        x: x ?? 80 + (state.terminals.length % 5) * 30,
-        y: y ?? 80 + (state.terminals.length % 5) * 30,
-        ...(width ? { width } : {}),
-        ...(height ? { height } : {}),
+        x: pos.x, y: pos.y, width: w, height: h,
         title: sessionName || "Claude",
         borderColor: "#cba6f7",
         cwd,
@@ -226,11 +288,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     addWidgetTerminal: (widgetId, widgetName) => {
       const state = get();
+      const w = 500, h = 400;
+      const vc = getViewportCenter(state);
+      const pos = findNonOverlappingPosition(vc.x - w / 2, vc.y - h / 2, w, h, state.terminals);
       const newTerm = makeTerminal(state.nextZ, {
-        x: 80 + (state.terminals.length % 5) * 30,
-        y: 80 + (state.terminals.length % 5) * 30,
-        width: 500,
-        height: 400,
+        x: pos.x, y: pos.y, width: w, height: h,
         title: widgetName || widgetId,
         borderColor: "#f9e2af",
         panelType: "widget",
@@ -247,11 +309,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     addSharedChatPanel: (groupId, x, y, width, height) => {
       const state = get();
+      const pos = findNonOverlappingPosition(x, y, width, height, state.terminals);
       const newTerm = makeTerminal(state.nextZ, {
-        x,
-        y,
-        width,
-        height,
+        x: pos.x, y: pos.y, width, height,
         title: "Team Chat",
         borderColor: "#94e2d5",
         cwd: "",
@@ -268,12 +328,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     addBrowserPanel: (url, title) => {
       const state = get();
+      const w = 900, h = 600;
+      const vc = getViewportCenter(state);
+      const pos = findNonOverlappingPosition(vc.x - w / 2, vc.y - h / 2, w, h, state.terminals);
       const browserId = `browser-${uuidv4().slice(0, 8)}`;
       const newTerm = makeTerminal(state.nextZ, {
-        x: 80 + (state.terminals.length % 5) * 30,
-        y: 80 + (state.terminals.length % 5) * 30,
-        width: 900,
-        height: 600,
+        x: pos.x, y: pos.y, width: w, height: h,
         title: title || "Browser",
         borderColor: "#89b4fa",
         panelType: "browser",

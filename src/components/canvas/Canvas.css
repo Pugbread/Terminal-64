@@ -24,7 +24,7 @@
   z-index: 2;
 }
 
-.canvas-content > * {
+.canvas-content > *:not(.canvas-link-line) {
   pointer-events: auto;
 }
 
@@ -61,6 +61,34 @@
   height: 1px;
   background: rgba(137, 180, 250, 0.5);
   box-shadow: 0 0 4px rgba(137, 180, 250, 0.3);
+}
+
+/* ---- Animated link lines between widget + chat panels ---- */
+
+.canvas-link-line {
+  position: absolute;
+  height: 3px;
+  border-radius: 2px;
+  pointer-events: none;
+  transform-origin: 0 0;
+  z-index: 0;
+  opacity: 0.5;
+  background-image: repeating-linear-gradient(
+    90deg,
+    #fff 0px,
+    #fff 10px,
+    transparent 10px,
+    transparent 22px
+  );
+  background-size: 22px 3px;
+  background-repeat: repeat-x;
+  animation: canvas-link-flow 0.8s linear infinite;
+}
+
+@keyframes canvas-link-flow {
+  to {
+    background-position: 22px 0;
+  }
 }
 
 .canvas-empty {

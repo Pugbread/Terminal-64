@@ -2,7 +2,7 @@ import { useCallback, useRef, useState, useEffect, useMemo } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useCanvasStore, CanvasTerminal } from "../../stores/canvasStore";
 import { useClaudeStore } from "../../stores/claudeStore";
-import { closeTerminal, writeTerminal, closeClaudeSession, renameDiscordSession, closeBrowser } from "../../lib/tauriApi";
+import { closeTerminal, writeTerminal, closeClaudeSession, renameDiscordSession, closeBrowser, createWidgetFolder } from "../../lib/tauriApi";
 import { BORDER_COLORS, ACTIVITY_TIMEOUT_MS } from "../../lib/constants";
 import { computeDragSnap, computeResizeSnap } from "../../lib/snapUtils";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -343,6 +343,52 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
               <path d="M4 1H1V9H9V6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
               <path d="M6 1H9V4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
               <path d="M9 1L5 5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+            </svg>
+          </button>
+        )}
+        {isWidget && term.widgetId && (
+          <button
+            className="ft-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              const wid = term.widgetId!;
+              const widgetPath = `/.terminal64/widgets/${wid}`;
+              const sessions = useClaudeStore.getState().sessions;
+              const all = useCanvasStore.getState().terminals;
+              const chat = all.find((t) =>
+                t.panelType === "claude" && !t.poppedOut &&
+                (sessions[t.terminalId]?.cwd || t.cwd).replace(/\\/g, "/").includes(widgetPath)
+              );
+              if (chat) {
+                bringToFront(chat.id);
+              } else {
+                // No canvas panel open — check if session still exists in store
+                const existingSession = Object.entries(sessions).find(
+                  ([, s]) => s.cwd?.replace(/\\/g, "/").includes(widgetPath)
+                );
+                if (existingSession) {
+                  // Reopen existing session (preserves messages)
+                  const [sid, sess] = existingSession;
+                  useCanvasStore.getState().addClaudeTerminalAt(
+                    sess.cwd, false, sess.name || `Widget: ${term.title}`, sid
+                  );
+                } else {
+                  // No session at all — create fresh
+                  createWidgetFolder(wid).then((folderPath) => {
+                    useCanvasStore.getState().addClaudeTerminal(folderPath, false, `Widget: ${term.title}`);
+                    const panels = useCanvasStore.getState().terminals;
+                    const newChat = panels[panels.length - 1];
+                    if (newChat?.panelType === "claude") {
+                      useClaudeStore.getState().createSession(newChat.terminalId, `Widget: ${term.title}`);
+                    }
+                  }).catch(() => {});
+                }
+              }
+            }}
+            title="Show widget chat"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <path d="M1 1.5H9V7.5H5L3 9.5V7.5H1Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
             </svg>
           </button>
         )}
