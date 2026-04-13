@@ -133,6 +133,19 @@ function App() {
       execute: () => setSettingsOpen((v) => !v),
     });
 
+    registerCommand({
+      id: "claude.newSession",
+      label: "New Claude Session (same folder)",
+      category: "Claude",
+      execute: () => {
+        const canvas = useCanvasStore.getState();
+        const active = canvas.terminals.find(t => t.terminalId === canvas.activeTerminalId);
+        if (active?.panelType === "claude" && active.cwd) {
+          canvas.addClaudeTerminal(active.cwd, false);
+        }
+      },
+    });
+
     for (const theme of themeStore.themes) {
       registerCommand({
         id: `theme.${theme.name.toLowerCase().replace(/\s+/g, "-")}`,

@@ -110,4 +110,8 @@ export const DEFAULT_KEYBINDINGS: Keybinding[] = [
     combo: { key: "g", ctrl: true, shift: true },
     command: "terminal.createGrid",
   },
+  {
+    combo: { key: "n" },
+    command: "claude.newSession",
+  },
 ];
