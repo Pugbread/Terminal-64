@@ -1,8 +1,55 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { ChatMessage as ChatMessageType, ToolCall } from "../../lib/types";
+import { readFileBase64 } from "../../lib/tauriApi";
 
 const DELEGATION_BLOCK_RE = /\[DELEGATION_START\][\s\S]*?\[DELEGATION_END\]/;
 const MERGE_PREFIX = "All delegated tasks have finished. Here are the results:";
+
+// Image paste support
+const IMAGE_EXTS = /\.(png|jpg|jpeg|gif|webp|bmp|svg)$/i;
+const ATTACHED_FILE_RE = /\[Attached file: (.+?)\]/g;
+const EXT_TO_MIME: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+  gif: "image/gif", webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml",
+};
+
+function InlineImage({ filePath }: { filePath: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const ext = filePath.split(".").pop()?.toLowerCase() || "png";
+    const mime = EXT_TO_MIME[ext] || "image/png";
+    readFileBase64(filePath).then((b64) => {
+      if (!cancelled) setSrc(`data:${mime};base64,${b64}`);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [filePath]);
+  if (!src) return <span className="cc-inline-file">{filePath.split(/[/\\]/).pop()}</span>;
+  return <img src={src} alt="attached" className="cc-inline-image" />;
+}
+
+function renderUserContent(content: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+  const re = new RegExp(ATTACHED_FILE_RE.source, "g");
+  while ((match = re.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(content.slice(lastIndex, match.index));
+    }
+    const filePath = match[1];
+    if (IMAGE_EXTS.test(filePath)) {
+      parts.push(<InlineImage key={match.index} filePath={filePath} />);
+    } else {
+      parts.push(<span key={match.index} className="cc-inline-file">{filePath.split(/[/\\]/).pop()}</span>);
+    }
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < content.length) {
+    parts.push(content.slice(lastIndex));
+  }
+  return parts.length > 0 ? <>{parts}</> : content;
+}
 
 // Render inline markdown: bold, italic, bold+italic, inline code, links, strikethrough
 function renderInline(text: string, keyPrefix: string = ""): React.ReactNode[] {
@@ -534,7 +581,7 @@ function ChatMessageInner({ message, onRewind, onFork, onEditClick }: {
           <MergeResultCard content={content} />
         ) : content ? (
           <div className="cc-bubble cc-bubble--user">
-            {content}
+            {renderUserContent(content)}
           </div>
         ) : null}
       </div>

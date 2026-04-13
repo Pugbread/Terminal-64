@@ -22,9 +22,10 @@ interface ChatInputProps {
   queueCount?: number;
   draftPrompt?: string;
   onDraftChange?: (text: string) => void;
+  onPasteImage?: (file: File) => void;
 }
 
-export default function ChatInput({ onSend, onCancel, onAttach, onRewrite, isRewriting, isStreaming, streamingStartedAt, disabled, slashCommands, initialText, onInitialTextConsumed, permLabel, permColor, onCyclePerm, sessionName, cwd, queueCount, draftPrompt, onDraftChange }: ChatInputProps) {
+export default function ChatInput({ onSend, onCancel, onAttach, onRewrite, isRewriting, isStreaming, streamingStartedAt, disabled, slashCommands, initialText, onInitialTextConsumed, permLabel, permColor, onCyclePerm, sessionName, cwd, queueCount, draftPrompt, onDraftChange, onPasteImage }: ChatInputProps) {
   const [text, setText] = useState(draftPrompt || "");
   const [elapsed, setElapsed] = useState("");
 
@@ -154,6 +155,23 @@ export default function ChatInput({ onSend, onCancel, onAttach, onRewrite, isRew
       checkForAtMention(val, cursorPos);
     },
     [checkForAtMention]
+  );
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      if (!onPasteImage) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith("image/")) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) onPasteImage(file);
+          return;
+        }
+      }
+    },
+    [onPasteImage]
   );
 
   const selectCommand = useCallback(
@@ -327,6 +345,7 @@ export default function ChatInput({ onSend, onCancel, onAttach, onRewrite, isRew
           value={text}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={isStreaming ? "Queue a message..." : "Type a message, / for commands, @ for files"}
           rows={1}
           disabled={disabled}

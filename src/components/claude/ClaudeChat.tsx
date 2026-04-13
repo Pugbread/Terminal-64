@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useClaudeStore } from "../../stores/claudeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useThemeStore } from "../../stores/themeStore";
-import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, writeFile, loadSessionHistory, mapHistoryMessages, truncateSessionJsonl, truncateSessionJsonlByMessages, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, revertFilesGit, deleteFiles, shellExec, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile } from "../../lib/tauriApi";
+import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, writeFile, loadSessionHistory, mapHistoryMessages, truncateSessionJsonl, truncateSessionJsonlByMessages, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, revertFilesGit, deleteFiles, shellExec, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile, savePastedImage } from "../../lib/tauriApi";
 import { SlashCommand, PermissionMode, McpServer } from "../../lib/types";
 import { rewritePromptStream } from "../../lib/ai";
 import ChatMessage, { toolHeader, renderContent, ToolGroupCard, GROUPABLE_TOOLS } from "./ChatMessage";
@@ -98,6 +98,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const [showModelDrop, setShowModelDrop] = useState(false);
   const [showEffortDrop, setShowEffortDrop] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
+  const [filePreviews, setFilePreviews] = useState<Record<string, string>>({});
   const [isDragOver, setIsDragOver] = useState(false);
   const [planContent, setPlanContent] = useState<string | null>(null);
   const [planFinished, setPlanFinished] = useState(false);
@@ -474,6 +475,9 @@ Rules:
         const fileList = attachedFiles.map((f) => `[Attached file: ${f}]`).join("\n");
         prompt = fileList + "\n\n" + text;
         setAttachedFiles([]);
+        // Clean up preview URLs
+        Object.values(filePreviews).forEach((url) => URL.revokeObjectURL(url));
+        setFilePreviews({});
       }
 
       const isCurrentlyStreaming = useClaudeStore.getState().sessions[sessionId]?.isStreaming;
@@ -737,6 +741,24 @@ Rules:
       const selected = await open({ multiple: true, title: "Attach files" });
       if (selected) setAttachedFiles((prev) => [...prev, ...(Array.isArray(selected) ? selected : [selected])]);
     } catch {}
+  }, []);
+
+  const handlePasteImage = useCallback(async (file: File) => {
+    try {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      const base64 = btoa(binary);
+      const ext = file.name.split(".").pop() || file.type.split("/")[1] || "png";
+      const savedPath = await savePastedImage(base64, ext);
+      setAttachedFiles((prev) => [...prev, savedPath]);
+      // Create preview URL
+      const previewUrl = URL.createObjectURL(file);
+      setFilePreviews((prev) => ({ ...prev, [savedPath]: previewUrl }));
+    } catch (e) {
+      console.error("Failed to paste image:", e);
+    }
   }, []);
 
   const hasPlan = planContent !== null;
@@ -1352,12 +1374,28 @@ Coordinate actively. If another agent is working on a file you need, mention it 
               <>
                 {attachedFiles.length > 0 && (
                   <div className="cc-attached-files">
-                    {attachedFiles.map((f, i) => (
-                      <div key={`${i}-${f}`} className="cc-file-chip">
-                        <span className="cc-file-name">{f.split(/[/\\]/).pop()}</span>
-                        <button className="cc-file-remove" onClick={() => setAttachedFiles((p) => p.filter((_, j) => j !== i))}>×</button>
-                      </div>
-                    ))}
+                    {attachedFiles.map((f, i) => {
+                      const isImage = /\.(png|jpg|jpeg|gif|webp|bmp|svg)$/i.test(f);
+                      const preview = filePreviews[f];
+                      return (
+                        <div key={`${i}-${f}`} className={`cc-file-chip ${isImage && preview ? "cc-file-chip--image" : ""}`}>
+                          {isImage && preview ? (
+                            <>
+                              <img src={preview} alt="" className="cc-file-preview" />
+                              <button className="cc-file-remove" onClick={() => {
+                                setAttachedFiles((p) => p.filter((_, j) => j !== i));
+                                if (preview) { URL.revokeObjectURL(preview); setFilePreviews((p) => { const n = { ...p }; delete n[f]; return n; }); }
+                              }}>×</button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="cc-file-name">{f.split(/[/\\]/).pop()}</span>
+                              <button className="cc-file-remove" onClick={() => setAttachedFiles((p) => p.filter((_, j) => j !== i))}>×</button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
                 {/* Loop indicator */}
@@ -1396,6 +1434,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                   queueCount={session.promptQueue.length}
                   draftPrompt={session.draftPrompt}
                   onDraftChange={(t) => setDraftPrompt(sessionId, t)}
+                  onPasteImage={handlePasteImage}
                 />
               </>
             )}

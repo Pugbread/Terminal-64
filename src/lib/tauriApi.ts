@@ -529,3 +529,13 @@ export function onPartyModeSpectrum(
     callback(event.payload)
   );
 }
+
+// Image paste commands
+
+export async function savePastedImage(base64Data: string, extension: string): Promise<string> {
+  return invoke("save_pasted_image", { base64Data, extension });
+}
+
+export async function readFileBase64(path: string): Promise<string> {
+  return invoke("read_file_base64", { path });
+}
