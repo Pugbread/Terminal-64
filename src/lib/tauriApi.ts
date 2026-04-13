@@ -244,24 +244,11 @@ export async function createMcpConfigFile(
   });
 }
 
-/** Ensure the T64 MCP server entry exists in .mcp.json for the given cwd. */
+/** Ensure the T64 MCP server entry exists in .mcp.json for the given cwd.
+ *  Uses the backend's resolve_node_path() so the full node binary path is written
+ *  (bare "node" fails when Claude CLI inherits Tauri's limited PATH). */
 export async function ensureT64Mcp(cwd: string): Promise<void> {
-  const appDir = await getAppDir();
-  const scriptPath = `${appDir}/mcp/t64-server.mjs`;
-  const mcpPath = `${cwd}/.mcp.json`;
-
-  const config: Record<string, any> = {};
-  try {
-    Object.assign(config, JSON.parse(await readFile(mcpPath)));
-  } catch {}
-  if (!config.mcpServers) config.mcpServers = {};
-
-  // Only write if missing or command changed
-  const existing = config.mcpServers["terminal-64"];
-  if (existing?.args?.[0] === scriptPath) return;
-
-  config.mcpServers["terminal-64"] = { command: "node", args: [scriptPath] };
-  await writeFile(mcpPath, JSON.stringify(config, null, 2));
+  return invoke("ensure_t64_mcp", { cwd });
 }
 
 /**
@@ -384,6 +371,41 @@ export async function widgetSetState(widgetId: string, key: string, value: any):
 
 export async function widgetClearState(widgetId: string): Promise<void> {
   return invoke("widget_clear_state", { widgetId });
+}
+
+// Skill library commands
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  tags: string[];
+  has_skill_md: boolean;
+  modified: number;
+  created?: number;
+}
+
+export async function createSkillFolder(skillId: string): Promise<string> {
+  return invoke("create_skill_folder", { skillId });
+}
+
+export async function listSkills(): Promise<SkillInfo[]> {
+  return invoke("list_skills");
+}
+
+export async function deleteSkill(skillId: string): Promise<void> {
+  return invoke("delete_skill", { skillId });
+}
+
+export async function updateSkillMeta(
+  skillId: string,
+  description?: string,
+  tags?: string[],
+): Promise<void> {
+  return invoke("update_skill_meta", {
+    skillId,
+    description: description ?? null,
+    tags: tags ?? null,
+  });
 }
 
 // Proxy fetch (CORS bypass for widgets)

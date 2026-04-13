@@ -188,7 +188,6 @@ export default function Canvas() {
       ref={canvasRef}
       className="canvas"
       onMouseDown={handleMouseDown}
-      onDoubleClick={(e) => { if (e.target === canvasRef.current) addTerminal(); }}
       style={{
         backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
         backgroundPosition: `${panX % (24 * zoom)}px ${panY % (24 * zoom)}px`,
@@ -239,7 +238,7 @@ export default function Canvas() {
 
       {terminals.length === 0 && (
         <div className="canvas-empty">
-          Double-click to create a terminal
+          Click + to create a terminal
         </div>
       )}
 

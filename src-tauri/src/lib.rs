@@ -1369,6 +1369,44 @@ fn create_mcp_config_file(
 }
 
 #[tauri::command]
+fn ensure_t64_mcp(app_handle: tauri::AppHandle, cwd: String) -> Result<(), String> {
+    let app_dir = get_app_dir(app_handle)?;
+    let script_path = format!("{}/mcp/t64-server.mjs", app_dir);
+    let node_path = resolve_node_path();
+    let mcp_path = format!("{}/.mcp.json", cwd);
+
+    let mut config: serde_json::Value = std::fs::read_to_string(&mcp_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let servers = config
+        .as_object_mut()
+        .ok_or("Invalid .mcp.json")?
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+
+    // Only write if missing or command/args changed
+    if let Some(existing) = servers.get("terminal-64") {
+        if existing.get("command").and_then(|v| v.as_str()) == Some(node_path)
+            && existing.get("args").and_then(|v| v.get(0)).and_then(|v| v.as_str()) == Some(&script_path)
+        {
+            return Ok(());
+        }
+    }
+
+    servers.as_object_mut().ok_or("Invalid mcpServers")?.insert(
+        "terminal-64".to_string(),
+        serde_json::json!({ "command": node_path, "args": [script_path] }),
+    );
+
+    std::fs::write(&mcp_path, serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    safe_eprintln!("[mcp] Updated .mcp.json with node_path={}", node_path);
+    Ok(())
+}
+
+#[tauri::command]
 fn get_app_dir(app_handle: tauri::AppHandle) -> Result<String, String> {
     // Check Tauri resource directory first (production builds bundle mcp/ here)
     if let Ok(res_dir) = app_handle.path().resource_dir() {
@@ -1563,6 +1601,113 @@ fn widget_clear_state(widget_id: String) -> Result<(), String> {
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| format!("rm: {}", e))?;
     }
+    Ok(())
+}
+
+// ---- Skills library ----
+
+fn skills_base_dir() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or("No home dir")?;
+    Ok(home.join(".terminal64").join("skills"))
+}
+
+#[tauri::command]
+fn create_skill_folder(skill_id: String) -> Result<String, String> {
+    let dir = skills_base_dir()?.join(&skill_id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {}", e))?;
+    // Write default skill.json metadata
+    let meta_path = dir.join("skill.json");
+    if !meta_path.exists() {
+        let meta = serde_json::json!({
+            "name": skill_id,
+            "description": "",
+            "tags": [],
+            "created": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            "modified": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+        });
+        std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap())
+            .map_err(|e| format!("write: {}", e))?;
+    }
+    Ok(dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn list_skills() -> Result<Vec<serde_json::Value>, String> {
+    let base = skills_base_dir()?;
+    if !base.exists() { return Ok(vec![]); }
+    let mut out = Vec::new();
+    let entries = std::fs::read_dir(&base).map_err(|e| e.to_string())?;
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) { continue; }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let meta_path = entry.path().join("skill.json");
+        let skill_md_exists = entry.path().join("SKILL.md").exists();
+        let modified = entry.metadata()
+            .and_then(|m| m.modified())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).map_err(|_| std::io::Error::other("time")))
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        if let Ok(content) = std::fs::read_to_string(&meta_path) {
+            if let Ok(mut meta) = serde_json::from_str::<serde_json::Value>(&content) {
+                meta["has_skill_md"] = serde_json::json!(skill_md_exists);
+                meta["modified"] = serde_json::json!(modified);
+                out.push(meta);
+                continue;
+            }
+        }
+        // Fallback if no skill.json
+        out.push(serde_json::json!({
+            "name": name,
+            "description": "",
+            "tags": [],
+            "has_skill_md": skill_md_exists,
+            "modified": modified,
+        }));
+    }
+    out.sort_by(|a, b| b["modified"].as_u64().cmp(&a["modified"].as_u64()));
+    Ok(out)
+}
+
+#[tauri::command]
+fn delete_skill(skill_id: String) -> Result<(), String> {
+    let dir = skills_base_dir()?.join(&skill_id);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("rm: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn update_skill_meta(skill_id: String, description: Option<String>, tags: Option<Vec<String>>) -> Result<(), String> {
+    let dir = skills_base_dir()?.join(&skill_id);
+    let meta_path = dir.join("skill.json");
+    let mut meta: serde_json::Value = if meta_path.exists() {
+        let content = std::fs::read_to_string(&meta_path).map_err(|e| format!("read: {}", e))?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({"name": skill_id})
+    };
+    if let Some(desc) = description {
+        meta["description"] = serde_json::json!(desc);
+    }
+    if let Some(t) = tags {
+        meta["tags"] = serde_json::json!(t);
+    }
+    meta["modified"] = serde_json::json!(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    );
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap())
+        .map_err(|e| format!("write: {}", e))?;
     Ok(())
 }
 
@@ -2120,6 +2265,7 @@ pub fn run() {
             get_delegation_messages,
             cleanup_delegation_group,
             get_app_dir,
+            ensure_t64_mcp,
             create_mcp_config_file,
             create_widget_folder,
             read_widget_html,
@@ -2154,6 +2300,10 @@ pub fn run() {
             generate_theme,
             save_pasted_image,
             read_file_base64,
+            create_skill_folder,
+            list_skills,
+            delete_skill,
+            update_skill_meta,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -122,20 +122,29 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
       useClaudeStore.getState().setCwd(sessionId, cwd);
     }
   }, [sessionId, createSession, cwd]);
-  useEffect(() => {
-    const t64Commands: SlashCommand[] = [
-      { name: "loop", description: "Run a prompt on a loop (e.g. /loop 5m improve the code)", usage: "/loop [interval] <prompt> — default 10m. /loop stop to cancel.", source: "Terminal 64" },
-      { name: "delegate", description: "Split work into parallel sub-sessions", usage: "/delegate <prompt> — Claude plans the task split, spawns agents with MCP team chat.", source: "Terminal 64" },
-    ];
-    listSlashCommands().then((cmds) => setSlashCommands([...t64Commands, ...cmds])).catch(() => setSlashCommands(t64Commands));
+  const t64Commands = useRef<SlashCommand[]>([
+    { name: "loop", description: "Run a prompt on a loop (e.g. /loop 5m improve the code)", usage: "/loop [interval] <prompt> — default 10m. /loop stop to cancel.", source: "Terminal 64" },
+    { name: "delegate", description: "Split work into parallel sub-sessions", usage: "/delegate <prompt> — Claude plans the task split, spawns agents with MCP team chat.", source: "Terminal 64" },
+    { name: "reload-plugins", description: "Reload slash commands, skills, and MCP servers", usage: "/reload-plugins — re-fetches all available commands and MCP configs.", source: "Terminal 64" },
+  ]);
+  const reloadCommands = useCallback(() => {
+    listSlashCommands().then((cmds) => setSlashCommands([...t64Commands.current, ...cmds])).catch(() => setSlashCommands(t64Commands.current));
     listMcpServers(cwd).then(setConfigMcpServers).catch(() => {});
-  }, []);
+  }, [cwd]);
+  useEffect(() => { reloadCommands(); }, [reloadCommands]);
   // Apply persisted font on mount (once per app, harmless if called multiple times)
   useEffect(() => {
     document.documentElement.style.setProperty("--claude-font", fontStack(useSettingsStore.getState().claudeFont || "system"));
   }, []);
-  // Reset visible messages when switching sessions
-  useEffect(() => { setVisibleCount(INITIAL_VISIBLE); }, [sessionId]);
+  // Reset visible messages when switching sessions, and scroll to bottom
+  useEffect(() => {
+    setVisibleCount(INITIAL_VISIBLE);
+    wasAtBottom.current = true;
+    requestAnimationFrame(() => {
+      const el = messagesEndRef.current?.parentElement;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }, [sessionId]);
 
   // Track whether user is at the bottom so we only auto-scroll when appropriate
   const wasAtBottom = useRef(true);
@@ -162,12 +171,11 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     el.addEventListener("scroll", handler, { passive: true });
     return () => el.removeEventListener("scroll", handler);
   }, [sessionId]); // Only reattach when session changes
-  // Scroll on new messages (only if at bottom — check position directly)
+  // Scroll on new messages (only if user was at bottom before the new content rendered)
   useEffect(() => {
     const el = messagesEndRef.current?.parentElement;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-    if (atBottom) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    if (wasAtBottom.current) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [session?.messages?.length]);
   // Auto-scroll to permission prompt when it appears
   useEffect(() => {
@@ -430,6 +438,16 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
         return;
       }
 
+      // Handle /reload-plugins — refresh frontend command list + pass through to Claude CLI
+      if (/^\/reload-plugins\b/i.test(text)) {
+        reloadCommands();
+        addUserMessage(sessionId, text);
+        await actualSend(text, permissionOverride);
+        // Re-fetch after CLI has had time to reload
+        setTimeout(reloadCommands, 3000);
+        return;
+      }
+
       // Handle /delegate command — inject skill context so Claude plans the split
       const delegateMatch = text.match(/^\/delegate\s+([\s\S]+)/i);
       if (delegateMatch) {
@@ -492,7 +510,7 @@ Rules:
       emit("gui-message", { session_id: sessionId, content: prompt }).catch(() => {});
       await actualSend(prompt, permissionOverride);
     },
-    [sessionId, attachedFiles, addUserMessage, actualSend]
+    [sessionId, attachedFiles, addUserMessage, actualSend, reloadCommands]
   );
 
   const handleCancel = useCallback(() => { cancelClaude(sessionId).catch(() => {}); }, [sessionId]);

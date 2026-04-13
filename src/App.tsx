@@ -7,6 +7,7 @@ import SettingsPanel from "./components/settings/SettingsPanel";
 import PopOutTerminal from "./components/canvas/PopOutTerminal";
 import ClaudeDialog from "./components/canvas/ClaudeDialog";
 import WidgetDialog from "./components/widget/WidgetDialog";
+import SkillDialog from "./components/skill/SkillDialog";
 import { useTheme } from "./hooks/useTheme";
 import { useKeybindings } from "./hooks/useKeybindings";
 import { useClaudeEvents } from "./hooks/useClaudeEvents";
@@ -35,6 +36,7 @@ function App() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [claudeDialogOpen, setClaudeDialogOpen] = useState(false);
   const [widgetDialogOpen, setWidgetDialogOpen] = useState(false);
+  const [skillDialogOpen, setSkillDialogOpen] = useState(false);
 
   useTheme();
   useKeybindings();
@@ -43,7 +45,7 @@ function App() {
   usePartyMode();
 
   // Hide all native browser webviews when any overlay is open (they render above DOM)
-  const anyOverlayOpen = settingsOpen || paletteOpen || claudeDialogOpen || widgetDialogOpen;
+  const anyOverlayOpen = settingsOpen || paletteOpen || claudeDialogOpen || widgetDialogOpen || skillDialogOpen;
   useEffect(() => {
     setAllBrowsersVisible(!anyOverlayOpen).catch(() => {});
   }, [anyOverlayOpen]);
@@ -131,6 +133,19 @@ function App() {
       execute: () => setSettingsOpen((v) => !v),
     });
 
+    registerCommand({
+      id: "claude.newSession",
+      label: "New Claude Session (same folder)",
+      category: "Claude",
+      execute: () => {
+        const canvas = useCanvasStore.getState();
+        const active = canvas.terminals.find(t => t.terminalId === canvas.activeTerminalId);
+        if (active?.panelType === "claude" && active.cwd) {
+          canvas.addClaudeTerminal(active.cwd, false);
+        }
+      },
+    });
+
     for (const theme of themeStore.themes) {
       registerCommand({
         id: `theme.${theme.name.toLowerCase().replace(/\s+/g, "-")}`,
@@ -214,7 +229,7 @@ function App() {
           <svg width="12" height="12" viewBox="0 0 12 12">
             <path d="M6 1V11M1 6H11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
-          <span>New</span>
+          <span>Terminal</span>
         </button>
 
         <button
@@ -225,7 +240,7 @@ function App() {
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <path d="M2 9L5 3L8 7L10 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
-          <span>&gt;_ Code</span>
+          <span>Claude</span>
         </button>
 
         <button
@@ -240,6 +255,18 @@ function App() {
             <rect x="7" y="7" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1"/>
           </svg>
           <span>Widget</span>
+        </button>
+
+        <button
+          className="header-action header-action--skill"
+          onClick={() => setSkillDialogOpen(true)}
+          title="Skills"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M6 1L10 3.5V8.5L6 11L2 8.5V3.5L6 1Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round"/>
+            <path d="M6 5.5V8M6 4V4.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/>
+          </svg>
+          <span>Skills</span>
         </button>
 
         <div className="header-drag" data-tauri-drag-region />
@@ -347,6 +374,10 @@ function App() {
       <WidgetDialog
         isOpen={widgetDialogOpen}
         onClose={() => setWidgetDialogOpen(false)}
+      />
+      <SkillDialog
+        isOpen={skillDialogOpen}
+        onClose={() => setSkillDialogOpen(false)}
       />
 
       {/* In-app toast notifications */}

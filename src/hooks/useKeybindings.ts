@@ -10,6 +10,13 @@ export function useKeybindings(extraBindings?: Keybinding[]) {
     function handler(event: KeyboardEvent) {
       const match = findMatchingBinding(event, bindings);
       if (match) {
+        const hasModifier = match.combo.ctrl || match.combo.shift || match.combo.alt || match.combo.meta;
+        if (!hasModifier) {
+          const el = document.activeElement;
+          if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el as HTMLElement)?.isContentEditable) {
+            return;
+          }
+        }
         event.preventDefault();
         event.stopPropagation();
         executeCommand(match.command, match.args);
