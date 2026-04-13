@@ -42,6 +42,13 @@ export function onTerminalExit(callback: (payload: TerminalExit) => void): Promi
 // Claude session commands
 
 export async function createClaudeSession(req: CreateClaudeRequest): Promise<void> {
+  if (req.mcp_config) {
+    console.log("[createClaudeSession] mcp_config:", req.mcp_config);
+    // Also log to file for production debugging
+    writeFile("/tmp/t64-create-session-debug.log",
+      `${new Date().toISOString()} session=${req.session_id} mcp_config=${req.mcp_config}\nfull_req=${JSON.stringify(req).slice(0, 500)}`
+    ).catch(() => {});
+  }
   return invoke("create_claude_session", { req });
 }
 
@@ -129,8 +136,21 @@ export async function truncateSessionJsonl(sessionId: string, cwd: string, keepT
   return invoke("truncate_session_jsonl", { sessionId, cwd, keepTurns });
 }
 
-export async function truncateSessionJsonlAfterUuid(sessionId: string, cwd: string, lastUuid: string): Promise<void> {
-  return invoke("truncate_session_jsonl_after_uuid", { sessionId, cwd, lastUuid });
+export interface TruncateResult {
+  path: string;
+  keep_messages: number;
+  actual_visible_kept: number;
+  original_lines: number;
+  new_lines: number;
+  original_bytes: number;
+  new_bytes: number;
+  verify_lines: number;
+  last_visible_role: string;
+  last_visible_preview: string;
+}
+
+export async function truncateSessionJsonlByMessages(sessionId: string, cwd: string, keepMessages: number): Promise<TruncateResult> {
+  return invoke("truncate_session_jsonl_by_messages", { sessionId, cwd, keepMessages });
 }
 
 export async function forkSessionJsonl(parentSessionId: string, newSessionId: string, cwd: string, keepTurns: number): Promise<void> {
@@ -216,6 +236,21 @@ export async function getAppDir(): Promise<string> {
   return invoke("get_app_dir");
 }
 
+/** Create a temp MCP config file for delegation and return its path. */
+export async function createMcpConfigFile(
+  delegationPort: number,
+  delegationSecret: string,
+  groupId: string,
+  agentLabel: string,
+): Promise<string> {
+  return invoke("create_mcp_config_file", {
+    delegationPort,
+    delegationSecret,
+    groupId,
+    agentLabel,
+  });
+}
+
 /** Ensure the T64 MCP server entry exists in .mcp.json for the given cwd. */
 export async function ensureT64Mcp(cwd: string): Promise<void> {
   const appDir = await getAppDir();
@@ -252,10 +287,15 @@ export async function setT64DelegationEnv(
   const scriptPath = `${appDir}/mcp/t64-server.mjs`;
   const mcpPath = `${cwd}/.mcp.json`;
 
+  console.log("[delegation] setT64DelegationEnv:", { cwd, mcpPath, scriptPath, delegationPort, groupId });
+
   const config: Record<string, any> = {};
   try {
     Object.assign(config, JSON.parse(await readFile(mcpPath)));
-  } catch {}
+    console.log("[delegation] Existing .mcp.json loaded");
+  } catch {
+    console.log("[delegation] No existing .mcp.json — creating fresh");
+  }
   if (!config.mcpServers) config.mcpServers = {};
 
   config.mcpServers["terminal-64"] = {
@@ -268,7 +308,22 @@ export async function setT64DelegationEnv(
       T64_AGENT_LABEL: agentLabel,
     },
   };
-  await writeFile(mcpPath, JSON.stringify(config, null, 2));
+  const json = JSON.stringify(config, null, 2);
+  await writeFile(mcpPath, json);
+
+  // Verify the write succeeded
+  try {
+    const verify = await readFile(mcpPath);
+    const parsed = JSON.parse(verify);
+    const env = parsed?.mcpServers?.["terminal-64"]?.env;
+    if (env?.T64_DELEGATION_PORT && env?.T64_GROUP_ID) {
+      console.log("[delegation] .mcp.json verified — delegation env active");
+    } else {
+      console.error("[delegation] .mcp.json written but delegation env missing!", verify.slice(0, 200));
+    }
+  } catch (err) {
+    console.error("[delegation] .mcp.json verification FAILED:", err);
+  }
 }
 
 /**
@@ -436,6 +491,20 @@ export async function browserGoForward(id: string): Promise<void> {
 
 export async function browserReload(id: string): Promise<void> {
   return invoke("browser_reload", { id });
+}
+
+// Theme generation
+
+export async function generateTheme(prompt: string): Promise<string> {
+  return invoke("generate_theme", { prompt });
+}
+
+export function onThemeGenChunk(callback: (payload: { id: string; text: string }) => void): Promise<UnlistenFn> {
+  return listen<{ id: string; text: string }>("theme-gen-chunk", (event) => callback(event.payload));
+}
+
+export function onThemeGenDone(callback: (payload: { id: string; text: string }) => void): Promise<UnlistenFn> {
+  return listen<{ id: string; text: string }>("theme-gen-done", (event) => callback(event.payload));
 }
 
 // Party Mode commands

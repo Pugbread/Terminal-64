@@ -39,7 +39,7 @@ export function useDelegationOrchestrator() {
                 if (msg.role === "assistant" && msg.toolCalls?.length) {
                   const lastTc = msg.toolCalls[msg.toolCalls.length - 1];
                   const detail = lastTc.input?.file_path || lastTc.input?.command || lastTc.input?.pattern || "";
-                  const action = `${lastTc.name}${detail ? ` ${String(detail).split("/").pop()?.slice(0, 40)}` : ""}`;
+                  const action = `${lastTc.name}${detail ? ` ${String(detail).split(/[/\\]/).pop()?.slice(0, 40)}` : ""}`;
                   delStore.setTaskAction(group.id, task.id, action);
                 }
               }
@@ -146,7 +146,7 @@ function summarizeToolCalls(msg: any): string {
   if (!msg?.toolCalls?.length) return "";
   const actions = msg.toolCalls.map((tc: any) => {
     const detail = tc.input?.file_path || tc.input?.command || tc.input?.pattern || "";
-    return `${tc.name}${detail ? ` ${String(detail).split("/").pop()?.slice(0, 50)}` : ""}`;
+    return `${tc.name}${detail ? ` ${String(detail).split(/[/\\]/).pop()?.slice(0, 50)}` : ""}`;
   });
   return `Completed actions: ${actions.join(", ")}`;
 }

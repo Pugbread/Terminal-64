@@ -33,6 +33,7 @@ pub struct CreateClaudeRequest {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub channel_server: Option<String>,
+    pub mcp_config: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

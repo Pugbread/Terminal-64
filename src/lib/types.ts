@@ -156,6 +156,7 @@ export interface CreateClaudeRequest {
   model?: string;
   effort?: string;
   channel_server?: string;
+  mcp_config?: string;
 }
 
 export interface SendClaudePromptRequest {

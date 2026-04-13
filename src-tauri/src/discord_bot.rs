@@ -553,6 +553,7 @@ async fn run_gateway(
                                         permission_mode: "accept_edits".to_string(),
                                         model: None, effort: None,
                                         channel_server: None,
+                                        mcp_config: None,
                                     }, None, None)
                                 };
                                 if let Err(e) = result {

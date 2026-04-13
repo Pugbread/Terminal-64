@@ -271,6 +271,112 @@ fn rewrite_prompt(app_handle: tauri::AppHandle, prompt: String) -> Result<String
 }
 
 #[tauri::command]
+fn generate_theme(app_handle: tauri::AppHandle, prompt: String) -> Result<String, String> {
+    const SYSTEM_PROMPT: &str = r##"You are a theme generator for a terminal emulator app. Given a user's description, generate a complete color theme as valid JSON.
+
+The JSON must have this EXACT structure with all fields:
+{
+  "name": "<theme name based on the prompt>",
+  "ui": {
+    "bg": "#hex", "bgSecondary": "#hex", "bgTertiary": "#hex",
+    "fg": "#hex", "fgSecondary": "#hex", "fgMuted": "#hex",
+    "border": "#hex", "accent": "#hex", "accentHover": "#hex",
+    "tabActiveBg": "#hex", "tabInactiveBg": "#hex",
+    "tabActiveFg": "#hex", "tabInactiveFg": "#hex",
+    "tabHoverBg": "#hex", "scrollbar": "#hex", "scrollbarHover": "#hex"
+  },
+  "terminal": {
+    "background": "#hex", "foreground": "#hex", "cursor": "#hex",
+    "cursorAccent": "#hex", "selectionBackground": "#hex", "selectionForeground": "#hex",
+    "black": "#hex", "red": "#hex", "green": "#hex", "yellow": "#hex",
+    "blue": "#hex", "magenta": "#hex", "cyan": "#hex", "white": "#hex",
+    "brightBlack": "#hex", "brightRed": "#hex", "brightGreen": "#hex",
+    "brightYellow": "#hex", "brightBlue": "#hex", "brightMagenta": "#hex",
+    "brightCyan": "#hex", "brightWhite": "#hex"
+  }
+}
+
+Rules:
+- Output ONLY valid JSON, nothing else. No markdown, no explanation.
+- All values must be 6-digit hex colors with # prefix.
+- Make the theme visually cohesive and appealing.
+- bg should be the darkest, bgTertiary even darker, bgSecondary between them.
+- Ensure sufficient contrast between text and backgrounds.
+- accent should be a vibrant, distinctive color that fits the theme mood.
+- Terminal ANSI colors should be usable (readable on the background).
+- The name should be creative and short (2-3 words max)."##;
+
+    static THEME_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let gen_id = format!("theme-{}", THEME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+
+    let full_prompt = format!("{}\n\nGenerate a theme for: {}", SYSTEM_PROMPT, prompt);
+    let claude_bin = claude_manager::resolve_claude_path();
+    let mut cmd = std::process::Command::new(&claude_bin);
+    cmd.arg("-p").arg(&full_prompt)
+        .arg("--output-format").arg("stream-json")
+        .arg("--verbose")
+        .arg("--include-partial-messages")
+        .arg("--model").arg("haiku")
+        .arg("--effort").arg("high")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn claude: {}", e))?;
+    let stdout = child.stdout.take().ok_or("No stdout")?;
+
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(stderr);
+            for line in reader.lines().flatten() {
+                safe_eprintln!("[theme-gen:stderr] {}", line);
+            }
+        });
+    }
+
+    let gid = gen_id.clone();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(stdout);
+        let mut full_text = String::new();
+        for line in reader.lines().flatten() {
+            if line.trim().is_empty() { continue; }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&line) {
+                let event_type = parsed["type"].as_str().unwrap_or("");
+                if event_type == "content_block_delta" {
+                    if let Some(text) = parsed["delta"]["text"].as_str() {
+                        full_text.push_str(text);
+                        let _ = app_handle.emit("theme-gen-chunk", serde_json::json!({ "id": gid, "text": text }));
+                    }
+                } else if event_type == "assistant" {
+                    if let Some(content) = parsed["message"]["content"].as_array() {
+                        for block in content {
+                            if block["type"].as_str() == Some("text") {
+                                if let Some(text) = block["text"].as_str() {
+                                    full_text.push_str(text);
+                                    let _ = app_handle.emit("theme-gen-chunk", serde_json::json!({ "id": gid, "text": text }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = app_handle.emit("theme-gen-done", serde_json::json!({ "id": gid, "text": full_text }));
+        safe_eprintln!("[theme-gen] Done ({})", gid);
+    });
+
+    Ok(gen_id)
+}
+
+#[tauri::command]
 async fn search_files(cwd: String, query: String) -> Result<Vec<String>, String> {
     // Run filesystem walk on a blocking thread to avoid freezing the UI
     tauri::async_runtime::spawn_blocking(move || {
@@ -529,59 +635,131 @@ fn truncate_session_jsonl(session_id: String, cwd: String, keep_turns: usize) ->
     Ok(())
 }
 
-/// Truncate JSONL after the record with the given UUID.
-/// Keeps all lines up to and including the line matching the UUID, plus any immediately
-/// following tool-result-only user records (which are part of the same turn).
+/// Truncate JSONL to keep exactly `keep_messages` visible messages (as load_session_history would produce).
+/// This matches the frontend's message count precisely — no turn-counting mismatches.
 #[tauri::command]
-fn truncate_session_jsonl_after_uuid(session_id: String, cwd: String, last_uuid: String) -> Result<(), String> {
+fn truncate_session_jsonl_by_messages(session_id: String, cwd: String, keep_messages: usize) -> Result<serde_json::Value, String> {
     let path = session_jsonl_path(&cwd, &session_id)?;
-    let content = std::fs::read_to_string(&path).map_err(|e| format!("read: {}", e))?;
+    safe_eprintln!("[rewind] truncate_session_jsonl_by_messages: path={} keep_messages={}", path.display(), keep_messages);
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    let original_lines = content.lines().count();
+    let original_bytes = content.len();
+
     let mut kept: Vec<&str> = Vec::new();
-    let mut found = false;
-    let mut trailing_tool_results = false;
+    let mut visible_count: usize = 0;
+    let mut done = false;
+    // Track the last visible message for diagnostics
+    let mut last_visible_role = String::new();
+    let mut last_visible_preview = String::new();
+
     for line in content.lines() {
         if line.trim().is_empty() { continue; }
-        if found {
-            // After the target UUID, keep tool-result-only user records (they pair with the last assistant's tool_use)
-            if trailing_tool_results {
-                let val: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => break };
-                if val["type"].as_str().unwrap_or("") == "user" {
-                    // Check if this is tool-result-only (no real text content)
-                    let has_text = val["message"]["content"].as_str().map(|s| !s.is_empty()).unwrap_or_else(||
-                        val["message"]["content"].as_array().map(|arr| arr.iter().any(|b| {
-                            b["type"].as_str() == Some("text") && b["text"].as_str().map(|t| !t.trim().is_empty()).unwrap_or(false)
-                        })).unwrap_or(false)
-                    );
-                    if !has_text {
-                        kept.push(line);
-                        continue;
-                    }
+        if done {
+            // After reaching the target, still keep tool-result-only user records
+            // (they pair with the last assistant's tool_use and don't produce visible messages)
+            let val: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => break };
+            if val["type"].as_str().unwrap_or("") == "user" {
+                let has_text = is_real_user_message(&val);
+                if !has_text {
+                    kept.push(line);
+                    continue;
                 }
             }
             break;
         }
-        kept.push(line);
-        let val: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => continue };
-        if val["uuid"].as_str() == Some(&last_uuid) {
-            found = true;
-            // If this is an assistant message with tool_use, keep following tool-result records
-            if val["type"].as_str() == Some("assistant") {
-                if let Some(content_arr) = val["message"]["content"].as_array() {
-                    if content_arr.iter().any(|b| b["type"].as_str() == Some("tool_use")) {
-                        trailing_tool_results = true;
+        let val: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => { kept.push(line); continue; } };
+        let rec_type = val["type"].as_str().unwrap_or("");
+        // Count visible messages the same way load_session_history does
+        if rec_type == "user" && is_real_user_message(&val) {
+            visible_count += 1;
+            if visible_count > keep_messages {
+                break; // Don't keep this line
+            }
+            last_visible_role = "user".to_string();
+            let c = &val["message"]["content"];
+            last_visible_preview = if let Some(s) = c.as_str() {
+                s.chars().take(80).collect()
+            } else if let Some(arr) = c.as_array() {
+                arr.iter().filter_map(|b| {
+                    if b["type"].as_str() == Some("text") { b["text"].as_str().map(|t| t.chars().take(80).collect::<String>()) }
+                    else { None }
+                }).next().unwrap_or_default()
+            } else { String::new() };
+        } else if rec_type == "assistant" {
+            let msg = &val["message"];
+            if let Some(content_arr) = msg["content"].as_array() {
+                let has_text = content_arr.iter().any(|b| {
+                    b["type"].as_str() == Some("text") && b["text"].as_str().map(|t| !t.trim().is_empty()).unwrap_or(false)
+                });
+                let has_tools = content_arr.iter().any(|b| b["type"].as_str() == Some("tool_use"));
+                if has_text || has_tools {
+                    visible_count += 1;
+                    if visible_count > keep_messages {
+                        break;
                     }
+                    last_visible_role = "assistant".to_string();
+                    last_visible_preview = content_arr.iter().filter_map(|b| {
+                        if b["type"].as_str() == Some("text") { b["text"].as_str().map(|t| t.chars().take(80).collect::<String>()) }
+                        else { None }
+                    }).next().unwrap_or_else(|| "[tool calls]".to_string());
+                }
+            }
+        }
+        kept.push(line);
+        if visible_count == keep_messages && rec_type == "assistant" {
+            // Check if this assistant has tool_use — if so, keep trailing tool-result records
+            if let Some(content_arr) = val["message"]["content"].as_array() {
+                if content_arr.iter().any(|b| b["type"].as_str() == Some("tool_use")) {
+                    done = true;
+                    continue; // Enter trailing mode
                 }
             }
         }
     }
-    if !found {
-        safe_eprintln!("[rewind] UUID {} not found in JSONL, falling back to keeping all", last_uuid);
-        return Ok(());
+
+    if visible_count == 0 && keep_messages > 0 {
+        return Err(format!("No visible messages found in JSONL at {}. Total lines: {}", path.display(), original_lines));
     }
+
     let truncated = kept.join("\n") + "\n";
-    std::fs::write(&path, truncated).map_err(|e| format!("write: {}", e))?;
-    safe_eprintln!("[rewind] Truncated JSONL after UUID {} (was {} lines, now {} lines)", &last_uuid[..8.min(last_uuid.len())], content.lines().count(), kept.len());
-    Ok(())
+    let new_bytes = truncated.len();
+    std::fs::write(&path, &truncated).map_err(|e| format!("write {}: {}", path.display(), e))?;
+
+    // Verification: re-read and count
+    let verify = std::fs::read_to_string(&path).map_err(|e| format!("verify-read {}: {}", path.display(), e))?;
+    let verify_lines = verify.lines().filter(|l| !l.trim().is_empty()).count();
+
+    safe_eprintln!("[rewind] Truncated JSONL: keep_messages={} actual_kept={} original_lines={} new_lines={} original_bytes={} new_bytes={}",
+        keep_messages, visible_count, original_lines, kept.len(), original_bytes, new_bytes);
+    safe_eprintln!("[rewind] Last kept message: [{}] {}", last_visible_role, &last_visible_preview[..last_visible_preview.len().min(80)]);
+    safe_eprintln!("[rewind] Verify: file now has {} non-empty lines (expected {})", verify_lines, kept.len());
+
+    Ok(serde_json::json!({
+        "path": path.display().to_string(),
+        "keep_messages": keep_messages,
+        "actual_visible_kept": visible_count,
+        "original_lines": original_lines,
+        "new_lines": kept.len(),
+        "original_bytes": original_bytes,
+        "new_bytes": new_bytes,
+        "verify_lines": verify_lines,
+        "last_visible_role": last_visible_role,
+        "last_visible_preview": last_visible_preview,
+    }))
+}
+
+/// Check if a user JSONL record would produce a visible message in load_session_history.
+fn is_real_user_message(val: &serde_json::Value) -> bool {
+    let content = &val["message"]["content"];
+    if let Some(s) = content.as_str() {
+        return !s.is_empty();
+    }
+    if let Some(arr) = content.as_array() {
+        return arr.iter().any(|b| {
+            b["type"].as_str() == Some("text") && b["text"].as_str().map(|t| !t.trim().is_empty()).unwrap_or(false)
+        });
+    }
+    false
 }
 
 #[tauri::command]
@@ -1070,11 +1248,49 @@ fn get_delegation_secret(
 }
 
 #[tauri::command]
-fn get_app_dir() -> Result<String, String> {
-    // In dev mode, return the project root (where mcp/ lives)
-    // In production, this would be the resource directory
+fn create_mcp_config_file(
+    app_handle: tauri::AppHandle,
+    delegation_port: u16,
+    delegation_secret: String,
+    group_id: String,
+    agent_label: String,
+) -> Result<String, String> {
+    let app_dir = get_app_dir(app_handle)?;
+    let script_path = format!("{}/mcp/t64-server.mjs", app_dir);
+    let config = serde_json::json!({
+        "mcpServers": {
+            "terminal-64": {
+                "command": "node",
+                "args": [script_path],
+                "env": {
+                    "T64_DELEGATION_PORT": delegation_port.to_string(),
+                    "T64_DELEGATION_SECRET": delegation_secret,
+                    "T64_GROUP_ID": group_id,
+                    "T64_AGENT_LABEL": agent_label,
+                }
+            }
+        }
+    });
+    let dir = std::env::temp_dir().join("t64-mcp");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let filename = format!("{}.json", uuid::Uuid::new_v4());
+    let path = dir.join(&filename);
+    std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).map_err(|e| e.to_string())?;
+    safe_eprintln!("[mcp] Created config file: {}", path.display());
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn get_app_dir(app_handle: tauri::AppHandle) -> Result<String, String> {
+    // Check Tauri resource directory first (production builds bundle mcp/ here)
+    if let Ok(res_dir) = app_handle.path().resource_dir() {
+        if res_dir.join("mcp").is_dir() {
+            safe_eprintln!("[app] Found mcp/ in resource dir: {}", res_dir.display());
+            return Ok(res_dir.to_string_lossy().to_string());
+        }
+    }
+    // Walk up from exe to find project root (dev mode)
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    // Walk up from the exe to find the project root with mcp/ directory
     let mut dir = exe.parent();
     while let Some(d) = dir {
         if d.join("mcp").is_dir() {
@@ -1411,7 +1627,27 @@ fn send_notification(title: String, body: Option<String>) -> Result<(), String> 
             .spawn()
             .map_err(|e| e.to_string())?;
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        // Escape single quotes for PowerShell string literals by doubling them
+        fn escape_powershell(s: &str) -> String {
+            s.replace('\'', "''")
+                .chars()
+                .filter(|c| !c.is_control())
+                .collect()
+        }
+        let escaped_title = escape_powershell(&title);
+        let escaped_body = escape_powershell(&body.clone().unwrap_or_default());
+        let ps_cmd = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('{}','{}')",
+            escaped_body, escaped_title
+        );
+        std::process::Command::new("powershell")
+            .args(["-Command", &ps_cmd])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         safe_eprintln!("[notification] {}: {}", title, body.unwrap_or_default());
     }
@@ -1780,7 +2016,7 @@ pub fn run() {
             list_disk_sessions,
             load_session_history,
             truncate_session_jsonl,
-            truncate_session_jsonl_after_uuid,
+            truncate_session_jsonl_by_messages,
             fork_session_jsonl,
             read_file,
             write_file,
@@ -1791,6 +2027,7 @@ pub fn run() {
             get_delegation_messages,
             cleanup_delegation_group,
             get_app_dir,
+            create_mcp_config_file,
             create_widget_folder,
             read_widget_html,
             list_widget_folders,
@@ -1821,6 +2058,7 @@ pub fn run() {
             browser_eval,
             set_browser_zoom,
             set_all_browsers_visible,
+            generate_theme,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,14 +1,42 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useThemeStore } from "../../stores/themeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { startDiscordBot, stopDiscordBot, discordBotStatus, partyModeStatus } from "../../lib/tauriApi";
+import { startDiscordBot, stopDiscordBot, discordBotStatus, generateTheme, onThemeGenChunk, onThemeGenDone } from "../../lib/tauriApi";
 import "./SettingsPanel.css";
 
 import { FONT_OPTIONS, fontStack } from "../../lib/fonts";
+import { ThemeDefinition } from "../../lib/types";
 
 interface SettingsPanelProps {
   isOpen: boolean;
   onClose: () => void;
+}
+
+function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      className={`sp-toggle ${checked ? "sp-toggle--on" : ""}`}
+      onClick={() => onChange(!checked)}
+      role="switch"
+      aria-checked={checked}
+    >
+      <span className="sp-toggle-knob" />
+    </button>
+  );
+}
+
+function Section({ label, icon, children, defaultOpen = true }: { label: string; icon: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="sp-section">
+      <button className="sp-section-header" onClick={() => setOpen((v) => !v)}>
+        <span className="sp-section-icon">{icon}</span>
+        <span className="sp-section-label">{label}</span>
+        <span className={`sp-section-chevron ${open ? "sp-section-chevron--open" : ""}`}>&#x25B8;</span>
+      </button>
+      {open && <div className="sp-section-body">{children}</div>}
+    </div>
+  );
 }
 
 export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
@@ -36,10 +64,17 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   const partyEqualizerRotation = useSettingsStore((s) => s.partyEqualizerRotation);
   const partyIntensity = useSettingsStore((s) => s.partyIntensity);
 
+  const addTheme = useThemeStore((s) => s.addTheme);
+
   const discordToken = useSettingsStore((s) => s.discordBotToken);
   const discordServerId = useSettingsStore((s) => s.discordServerId);
   const [botConnected, setBotConnected] = useState(false);
   const [botLoading, setBotLoading] = useState(false);
+
+  // Quick Theme
+  const [themePrompt, setThemePrompt] = useState("");
+  const [themeGenerating, setThemeGenerating] = useState(false);
+  const themeGenIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -57,6 +92,46 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
     setNewCommand("");
   };
 
+  const handleGenerateTheme = async () => {
+    if (!themePrompt.trim() || themeGenerating) return;
+    setThemeGenerating(true);
+
+    const unlistenChunk = await onThemeGenChunk(() => {});
+    const unlistenDone = await onThemeGenDone((payload) => {
+      if (themeGenIdRef.current && payload.id === themeGenIdRef.current) {
+        try {
+          // Extract JSON from response (may have markdown fences)
+          let json = payload.text.trim();
+          const fenceMatch = json.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (fenceMatch) json = fenceMatch[1].trim();
+          const theme = JSON.parse(json) as ThemeDefinition;
+          if (theme.name && theme.ui && theme.terminal) {
+            addTheme(theme);
+            setTheme(theme.name);
+            setSetting({ theme: theme.name });
+            setThemePrompt("");
+          }
+        } catch (err) {
+          console.error("[quick-theme] Failed to parse theme JSON:", err);
+        }
+        setThemeGenerating(false);
+        themeGenIdRef.current = null;
+        unlistenChunk();
+        unlistenDone();
+      }
+    });
+
+    try {
+      const genId = await generateTheme(themePrompt.trim());
+      themeGenIdRef.current = genId;
+    } catch (err) {
+      console.error("[quick-theme] Failed to start generation:", err);
+      setThemeGenerating(false);
+      unlistenChunk();
+      unlistenDone();
+    }
+  };
+
   return (
     <div className="settings-overlay" onClick={onClose}>
       <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
@@ -70,197 +145,198 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
         </div>
 
         <div className="settings-body">
-          <div className="settings-group">
-            <label className="settings-label">Theme</label>
-            <select
-              className="settings-select"
-              value={currentThemeName}
-              onChange={(e) => {
-                setTheme(e.target.value);
-                setSetting({ theme: e.target.value });
-              }}
-            >
-              {themes.map((t) => (
-                <option key={t.name} value={t.name}>{t.name}</option>
-              ))}
-            </select>
-          </div>
+          {/* Appearance */}
+          <Section label="Appearance" icon="◑">
+            <div className="sp-row">
+              <label className="sp-label">Theme</label>
+              <select
+                className="sp-select"
+                value={currentThemeName}
+                onChange={(e) => { setTheme(e.target.value); setSetting({ theme: e.target.value }); }}
+              >
+                {themes.map((t) => (
+                  <option key={t.name} value={t.name}>{t.name}</option>
+                ))}
+              </select>
+            </div>
 
-          <div className="settings-group">
-            <label className="settings-label">Claude Chat Font</label>
-            <select
-              className="settings-select"
-              value={useSettingsStore.getState().claudeFont || "system"}
-              onChange={(e) => {
-                setSetting({ claudeFont: e.target.value });
-                document.documentElement.style.setProperty("--claude-font", fontStack(e.target.value));
-              }}
-            >
-              {FONT_OPTIONS.map((f) => (
-                <option key={f.id} value={f.id}>{f.label}</option>
-              ))}
-            </select>
-          </div>
+            <div className="sp-row">
+              <label className="sp-label">Chat Font</label>
+              <select
+                className="sp-select"
+                value={useSettingsStore.getState().claudeFont || "system"}
+                onChange={(e) => {
+                  setSetting({ claudeFont: e.target.value });
+                  document.documentElement.style.setProperty("--claude-font", fontStack(e.target.value));
+                }}
+              >
+                {FONT_OPTIONS.map((f) => (
+                  <option key={f.id} value={f.id}>{f.label}</option>
+                ))}
+              </select>
+            </div>
 
-          <div className="settings-group">
-            <label className="settings-label">
-              Background Opacity
-              <span className="settings-value">{opacityPercent}%</span>
-            </label>
-            <input
-              type="range"
-              className="settings-range"
-              min={20}
-              max={100}
-              value={opacityPercent}
-              onChange={(e) => {
-                const a = Number(e.target.value) / 100;
-                setBgAlpha(a);
-                setSetting({ bgAlpha: a });
-              }}
-            />
-          </div>
-
-          <div className="settings-group">
-            <label className="settings-label settings-label--row">
-              <span>Snap to Grid</span>
+            <div className="sp-row sp-row--col">
+              <div className="sp-row">
+                <label className="sp-label">Opacity</label>
+                <span className="sp-value">{opacityPercent}%</span>
+              </div>
               <input
-                type="checkbox"
-                className="settings-checkbox"
-                checked={snapToGrid}
-                onChange={(e) => setSetting({ snapToGrid: e.target.checked })}
+                type="range"
+                className="sp-range"
+                min={20}
+                max={100}
+                value={opacityPercent}
+                onChange={(e) => {
+                  const a = Number(e.target.value) / 100;
+                  setBgAlpha(a);
+                  setSetting({ bgAlpha: a });
+                }}
               />
-            </label>
-            <span className="settings-hint">Snap windows to edges and sizes of nearby windows when dragging or resizing</span>
-          </div>
+            </div>
 
-          <div className="settings-divider" />
+            <div className="sp-row sp-row--col">
+              <label className="sp-label">Quick Theme</label>
+              <span className="sp-hint">Describe a vibe — Haiku generates a theme</span>
+              <div className="sp-qp-add">
+                <input
+                  className="sp-input"
+                  placeholder="e.g. ocean blue retro"
+                  value={themePrompt}
+                  onChange={(e) => setThemePrompt(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleGenerateTheme()}
+                  disabled={themeGenerating}
+                />
+                <button
+                  className="sp-btn"
+                  onClick={handleGenerateTheme}
+                  disabled={!themePrompt.trim() || themeGenerating}
+                >
+                  {themeGenerating ? "..." : "Go"}
+                </button>
+              </div>
+            </div>
+          </Section>
+
+          {/* Canvas */}
+          <Section label="Canvas" icon="⊞">
+            <div className="sp-row">
+              <label className="sp-label">
+                Snap to Grid
+                <span className="sp-hint-inline">Edge &amp; size snapping</span>
+              </label>
+              <Toggle checked={snapToGrid} onChange={(v) => setSetting({ snapToGrid: v })} />
+            </div>
+          </Section>
 
           {/* Quick Pastes */}
-          <div className="settings-group">
-            <label className="settings-label">Quick Pastes</label>
-            <span className="settings-hint">Ctrl+Shift+P to open quick paste palette</span>
+          <Section label="Quick Pastes" icon="⎘" defaultOpen={false}>
+            <span className="sp-hint">Saved commands for the command palette (Ctrl+Shift+P)</span>
 
             {quickPastes.length > 0 && (
-              <div className="qp-list">
+              <div className="sp-qp-list">
                 {quickPastes.map((qp) => (
-                  <div key={qp.id} className="qp-item">
-                    <div className="qp-item-info">
-                        <span className="qp-item-cmd" style={{ fontSize: "11.5px", color: "var(--fg-secondary)" }}>{qp.command}</span>
-                    </div>
-                    <button
-                      className="qp-item-delete"
-                      onClick={() => removeQuickPaste(qp.id)}
-                    >
-                      ×
-                    </button>
+                  <div key={qp.id} className="sp-qp-item">
+                    <span className="sp-qp-text">{qp.command}</span>
+                    <button className="sp-qp-del" onClick={() => removeQuickPaste(qp.id)} title="Remove">×</button>
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="qp-add">
+            <div className="sp-qp-add">
               <input
-                className="settings-input"
-                placeholder="e.g. claude --dangerously-skip-permissions"
+                className="sp-input"
+                placeholder="Command to save..."
                 value={newCommand}
                 onChange={(e) => setNewCommand(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAddQuickPaste()}
               />
-              <button
-                className="qp-add-btn"
-                onClick={handleAddQuickPaste}
-                disabled={!newCommand.trim()}
-              >
-                + Add
-              </button>
+              <button className="sp-btn" onClick={handleAddQuickPaste} disabled={!newCommand.trim()}>Add</button>
             </div>
-          </div>
-
-          <div className="settings-divider" />
+          </Section>
 
           {/* Party Mode */}
-          <div className="settings-group">
-            <label className="settings-label">
-              Party Mode
-              <span className={`settings-dot ${partyEnabled ? "settings-dot--on" : ""}`} />
-            </label>
-            <span className="settings-hint">Capture system audio and visualize it across the UI.</span>
-            <button
-              className={`settings-discord-btn ${partyEnabled ? "settings-discord-btn--stop" : ""}`}
-              onClick={() => setSetting({ partyModeEnabled: !partyEnabled })}
-            >
-              {partyEnabled ? "Disable" : "Enable"}
-            </button>
+          <Section label="Party Mode" icon="♫" defaultOpen={false}>
+            <div className="sp-row">
+              <label className="sp-label">
+                Enabled
+                <span className={`sp-dot ${partyEnabled ? "sp-dot--on" : ""}`} />
+              </label>
+              <Toggle checked={partyEnabled} onChange={(v) => setSetting({ partyModeEnabled: v })} />
+            </div>
 
             {partyEnabled && (
-              <div className="party-sub-settings">
-                <div className="settings-group" style={{ marginTop: 4 }}>
-                  <label className="settings-label">
-                    Intensity
-                    <span className="settings-value">{Math.round(partyIntensity * 100)}%</span>
-                  </label>
+              <div className="sp-sub">
+                <div className="sp-row sp-row--col">
+                  <div className="sp-row">
+                    <label className="sp-label">Intensity</label>
+                    <span className="sp-value">{Math.round(partyIntensity * 100)}%</span>
+                  </div>
                   <input
                     type="range"
-                    className="settings-range"
+                    className="sp-range"
                     min={10}
                     max={100}
                     value={Math.round(partyIntensity * 100)}
                     onChange={(e) => setSetting({ partyIntensity: Number(e.target.value) / 100 })}
                   />
                 </div>
-                <label className="settings-checkbox">
-                  <input type="checkbox" checked={partyEdgeGlow} onChange={(e) => setSetting({ partyEdgeGlow: e.target.checked })} />
-                  Edge Glow
-                </label>
-                <label className="settings-checkbox">
-                  <input type="checkbox" checked={partyEqualizer} onChange={(e) => setSetting({ partyEqualizer: e.target.checked })} />
-                  Equalizer Bars
-                </label>
-                <label className="settings-checkbox">
-                  <input type="checkbox" checked={partyBackgroundPulse} onChange={(e) => setSetting({ partyBackgroundPulse: e.target.checked })} />
-                  Background Pulse
-                </label>
-                <label className="settings-checkbox">
-                  <input type="checkbox" checked={partyColorCycling} onChange={(e) => setSetting({ partyColorCycling: e.target.checked })} />
-                  Color Cycling
-                </label>
-                <label className="settings-checkbox">
-                  <input type="checkbox" checked={partyEqualizerDance} onChange={(e) => setSetting({ partyEqualizerDance: e.target.checked })} />
-                  Equalizer Dance
-                </label>
-                <label className="settings-checkbox">
-                  <input type="checkbox" checked={partyEqualizerRotation} onChange={(e) => setSetting({ partyEqualizerRotation: e.target.checked })} />
-                  Equalizer Rotation
-                </label>
+                <div className="sp-row">
+                  <label className="sp-label">Edge Glow</label>
+                  <Toggle checked={partyEdgeGlow} onChange={(v) => setSetting({ partyEdgeGlow: v })} />
+                </div>
+                <div className="sp-row">
+                  <label className="sp-label">Equalizer Bars</label>
+                  <Toggle checked={partyEqualizer} onChange={(v) => setSetting({ partyEqualizer: v })} />
+                </div>
+                <div className="sp-row">
+                  <label className="sp-label">Background Pulse</label>
+                  <Toggle checked={partyBackgroundPulse} onChange={(v) => setSetting({ partyBackgroundPulse: v })} />
+                </div>
+                <div className="sp-row">
+                  <label className="sp-label">Color Cycling</label>
+                  <Toggle checked={partyColorCycling} onChange={(v) => setSetting({ partyColorCycling: v })} />
+                </div>
+                <div className="sp-row">
+                  <label className="sp-label">Equalizer Dance</label>
+                  <Toggle checked={partyEqualizerDance} onChange={(v) => setSetting({ partyEqualizerDance: v })} />
+                </div>
+                <div className="sp-row">
+                  <label className="sp-label">Equalizer Rotation</label>
+                  <Toggle checked={partyEqualizerRotation} onChange={(v) => setSetting({ partyEqualizerRotation: v })} />
+                </div>
               </div>
             )}
-          </div>
+          </Section>
 
-          <div className="settings-divider" />
+          {/* Discord */}
+          <Section label="Discord Bot" icon="⊕" defaultOpen={false}>
+            <div className="sp-row">
+              <label className="sp-label">
+                Status
+                <span className={`sp-dot ${botConnected ? "sp-dot--on" : ""}`} />
+              </label>
+              <span className="sp-value">{botConnected ? "Connected" : "Disconnected"}</span>
+            </div>
 
-          {/* Discord Bot */}
-          <div className="settings-group">
-            <label className="settings-label">
-              Discord Bot
-              <span className={`settings-dot ${botConnected ? "settings-dot--on" : ""}`} />
-            </label>
             <input
               type="password"
-              className="settings-input"
+              className="sp-input"
               placeholder="Bot token"
               value={discordToken}
               onChange={(e) => setSetting({ discordBotToken: e.target.value })}
             />
             <input
-              className="settings-input"
+              className="sp-input"
               placeholder="Server ID"
               value={discordServerId}
               onChange={(e) => setSetting({ discordServerId: e.target.value })}
             />
-            <span className="settings-hint">Named sessions get a Discord channel for remote interaction.</span>
+            <span className="sp-hint">Named sessions sync to Discord channels for remote access.</span>
+
             <button
-              className={`settings-discord-btn ${botConnected ? "settings-discord-btn--stop" : ""}`}
+              className={`sp-btn sp-btn--wide ${botConnected ? "sp-btn--danger" : ""}`}
               disabled={botLoading || (!botConnected && (!discordToken || !discordServerId))}
               onClick={async () => {
                 setBotLoading(true);
@@ -281,7 +357,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
             >
               {botLoading ? "..." : botConnected ? "Disconnect" : "Connect"}
             </button>
-          </div>
+          </Section>
         </div>
       </div>
     </div>

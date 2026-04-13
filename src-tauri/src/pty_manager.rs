@@ -67,6 +67,7 @@ impl PtyManager {
         safe_eprintln!("[pty] Spawning shell: {}", shell);
 
         let mut cmd = CommandBuilder::new(&shell);
+        cmd.env("TERM", "xterm-256color");
         if let Some(cwd) = &req.cwd {
             cmd.cwd(cwd);
         }

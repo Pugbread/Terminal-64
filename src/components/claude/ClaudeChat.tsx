@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useClaudeStore } from "../../stores/claudeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useThemeStore } from "../../stores/themeStore";
-import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, writeFile, loadSessionHistory, mapHistoryMessages, truncateSessionJsonl, truncateSessionJsonlAfterUuid, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, revertFilesGit, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret } from "../../lib/tauriApi";
+import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, writeFile, loadSessionHistory, mapHistoryMessages, truncateSessionJsonl, truncateSessionJsonlByMessages, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, revertFilesGit, deleteFiles, shellExec, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile } from "../../lib/tauriApi";
 import { SlashCommand, PermissionMode, McpServer } from "../../lib/types";
 import { rewritePromptStream } from "../../lib/ai";
 import ChatMessage, { toolHeader, renderContent, ToolGroupCard, GROUPABLE_TOOLS } from "./ChatMessage";
@@ -367,12 +367,19 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
         if (!started) {
           await ensureT64Mcp(effectiveCwd).catch(() => {});
         }
+        // Ensure CWD is always stored on the session for rewind/fork
+        if (effectiveCwd && effectiveCwd !== "." && (!sess?.cwd || sess.cwd !== effectiveCwd)) {
+          useClaudeStore.getState().setCwd(sessionId, effectiveCwd);
+        }
         // Use --resume if session was ever started (survives rewind/cancel),
         // otherwise create new. Falls back to the other on failure.
+        console.log("[send] Sending prompt:", { started, sessionId, cwd: effectiveCwd, promptPreview: prompt.slice(0, 80) });
         if (started) {
           try {
             await sendClaudePrompt({ ...req, cwd: effectiveCwd });
-          } catch {
+            console.log("[send] sendClaudePrompt (--resume) succeeded");
+          } catch (resumeErr) {
+            console.log("[send] sendClaudePrompt failed, falling back to createClaudeSession:", resumeErr);
             // Session file might not exist yet (edge case) — try create
             await createClaudeSession(req);
           }
@@ -509,15 +516,35 @@ Rules:
     }
   }, [sessionId]);
   const handleRewind = useCallback(async (messageId: string, content: string) => {
+    console.log("[rewind] === REWIND START ===", { sessionId, messageId, content: content.slice(0, 80) });
+
     // Kill the CLI process first and wait for it to die before touching the JSONL
-    try { await cancelClaude(sessionId); } catch {}
+    try {
+      await cancelClaude(sessionId);
+      console.log("[rewind] cancelClaude completed");
+    } catch (e) {
+      console.log("[rewind] cancelClaude error (may be expected if process already exited):", e);
+    }
+
+    // Also explicitly close the session to ensure the instance is fully removed
+    try {
+      await closeClaudeSession(sessionId);
+      console.log("[rewind] closeClaudeSession completed");
+    } catch (e) {
+      console.log("[rewind] closeClaudeSession error (expected):", e);
+    }
+
     const store = useClaudeStore.getState();
     store.setStreaming(sessionId, false);
     store.setError(sessionId, null);
     store.clearStreamingText(sessionId);
+
+    const preTruncateCount = store.sessions[sessionId]?.messages.length ?? 0;
     store.truncateFromMessage(sessionId, messageId);
 
     const sess = useClaudeStore.getState().sessions[sessionId];
+    console.log("[rewind] Store truncated:", { preTruncateCount, postTruncateCount: sess?.messages.length });
+
     if (sess) {
       let rewindContent = content;
       const lastMsg = sess.messages[sess.messages.length - 1];
@@ -527,23 +554,40 @@ Rules:
       if (lastMsg?.role === "user") {
         rewindContent = lastMsg.content;
         store.truncateFromMessage(sessionId, lastMsg.id);
+        console.log("[rewind] Removed trailing user message, prefilling:", rewindContent.slice(0, 80));
       }
 
       const updatedSess = useClaudeStore.getState().sessions[sessionId];
+      const keepMessages = updatedSess ? updatedSess.messages.length : 0;
       const keepTurns = updatedSess ? updatedSess.messages.filter(m => m.role === "user").length : 0;
-      const lastKeptMsg = updatedSess?.messages[updatedSess.messages.length - 1];
 
-      // Truncate JSONL to match frontend exactly — use UUID of the last kept message
-      // so we don't lose context from turn-count mismatches with tool-result-only records
+      // Resolve CWD for JSONL path — prefer session's stored CWD, fall back to effectiveCwd
+      const rewindCwd = updatedSess?.cwd || effectiveCwd;
+
+      console.log("[rewind] JSONL truncation params:", {
+        sessionId, rewindCwd, keepMessages, keepTurns,
+        sessionCwd: updatedSess?.cwd, effectiveCwd,
+        lastKeptMsg: updatedSess?.messages[updatedSess.messages.length - 1]?.content?.slice(0, 80),
+      });
+
+      // Truncate JSONL by exact message count (matches load_session_history's visible message counting)
       try {
-        if (lastKeptMsg?.id) {
-          await truncateSessionJsonlAfterUuid(sessionId, effectiveCwd, lastKeptMsg.id);
-        } else {
-          // No messages left — truncate to 0 turns
-          await truncateSessionJsonl(sessionId, effectiveCwd, 0);
+        const result = await truncateSessionJsonlByMessages(sessionId, rewindCwd, keepMessages);
+        console.log("[rewind] JSONL truncation SUCCESS:", result);
+
+        // Verify: if the truncation didn't actually remove anything, warn loudly
+        if (result.original_bytes === result.new_bytes) {
+          console.warn("[rewind] WARNING: JSONL file size unchanged! Truncation may not have removed anything.", result);
         }
       } catch (err) {
-        console.warn("[rewind] Failed to truncate JSONL:", err);
+        console.error("[rewind] JSONL truncation FAILED:", err, { sessionId, rewindCwd, keepMessages });
+        // Fallback: try turn-based truncation
+        try {
+          await truncateSessionJsonl(sessionId, rewindCwd, keepTurns);
+          console.log("[rewind] Fallback turn-based truncation succeeded");
+        } catch (err2) {
+          console.error("[rewind] Fallback truncation also FAILED:", err2);
+        }
       }
 
       // Force-cancel any active delegation group FIRST — rewind must not trigger a merge
@@ -567,17 +611,42 @@ Rules:
       }
 
       // Restore parent's own modified files from checkpoint
+      const restoredSet = new Set<string>();
       try {
         const restored = await restoreCheckpoint(sessionId, keepTurns + 1);
+        restored.forEach((f) => restoredSet.add(f));
         if (restored.length > 0) console.log("[rewind] Restored files from checkpoint:", restored);
       } catch (err) {
         console.warn("[rewind] No checkpoint to restore:", err);
       }
 
+      // Delete files that were CREATED by Claude (not in git) and weren't restored from checkpoint
+      const allModified = sess.modifiedFiles || [];
+      if (allModified.length > 0) {
+        try {
+          // git ls-files returns relative paths; compare by resolving to absolute
+          const { stdout } = await shellExec(
+            `git ls-files -- ${allModified.map((f) => `'${f.replace(/'/g, "'\\''")}'`).join(" ")}`,
+            rewindCwd,
+          );
+          const trackedRelative = new Set(stdout.trim().split("\n").filter(Boolean));
+          // Build set of tracked absolute paths for comparison
+          const cwdPrefix = rewindCwd.endsWith("/") ? rewindCwd : rewindCwd + "/";
+          const trackedAbsolute = new Set([...trackedRelative].map((rel) => cwdPrefix + rel));
+          const createdFiles = allModified.filter((f) => !trackedAbsolute.has(f) && !restoredSet.has(f));
+          if (createdFiles.length > 0) {
+            const deleted = await deleteFiles(createdFiles);
+            console.log("[rewind] Deleted newly-created files:", deleted);
+          }
+        } catch (err) {
+          console.warn("[rewind] Failed to check/delete created files:", err);
+        }
+      }
+
       // Revert ALL files modified by delegation children using git
       if (childModifiedFiles.length > 0) {
         const uniqueFiles = [...new Set(childModifiedFiles)];
-        revertFilesGit(effectiveCwd, uniqueFiles)
+        revertFilesGit(rewindCwd, uniqueFiles)
           .then((reverted) => { if (reverted.length > 0) console.log("[rewind] Git-reverted delegation files:", reverted); })
           .catch((err) => console.warn("[rewind] Failed to git-revert delegation files:", err));
       }
@@ -587,6 +656,11 @@ Rules:
       store.resetModifiedFiles(sessionId);
 
       setRewindText(rewindContent);
+      console.log("[rewind] === REWIND COMPLETE ===", {
+        sessionId,
+        finalMessageCount: useClaudeStore.getState().sessions[sessionId]?.messages.length,
+        rewindContent: rewindContent?.slice(0, 80),
+      });
     }
   }, [sessionId, effectiveCwd]);
 
@@ -697,24 +771,43 @@ Rules:
       );
 
       // Get delegation port + secret + update T64 MCP with delegation env vars
+      const debugLog: string[] = [`[${new Date().toISOString()}] spawnDelegation started`];
       let delegationPort = 0;
       let delegationSecret = "";
       try {
         delegationPort = await getDelegationPort();
         delegationSecret = await getDelegationSecret();
+        debugLog.push(`port=${delegationPort} hasSecret=${!!delegationSecret}`);
       } catch (err) {
-        console.warn("[delegation] Could not get port/secret:", err);
+        debugLog.push(`ERROR getting port/secret: ${err}`);
       }
 
-      const appDir = effectiveCwd;
+      // Resolve a real CWD — never use "." which resolves to process CWD (/ in production)
+      const sessCwd = useClaudeStore.getState().sessions[sessionId]?.cwd;
+      const appDir = (effectiveCwd && effectiveCwd !== "." && effectiveCwd !== "/")
+        ? effectiveCwd
+        : (sessCwd && sessCwd !== "." && sessCwd !== "/")
+          ? sessCwd
+          : "";
+      debugLog.push(`effectiveCwd=${effectiveCwd} sessCwd=${sessCwd} appDir=${appDir}`);
 
+      // Create a temp MCP config file for delegation child sessions
+      let mcpConfigPath = "";
       if (delegationPort > 0 && delegationSecret) {
         try {
-          await setT64DelegationEnv(appDir, delegationPort, delegationSecret, group.id);
+          mcpConfigPath = await createMcpConfigFile(delegationPort, delegationSecret, group.id, "Agent");
+          debugLog.push(`mcpConfigPath=${mcpConfigPath}`);
         } catch (err) {
-          console.warn("[delegation] Failed to set delegation env:", err);
+          debugLog.push(`ERROR creating MCP config: ${err}`);
         }
+      } else {
+        debugLog.push(`SKIP MCP config: port=${delegationPort} hasSecret=${!!delegationSecret}`);
       }
+
+      // Write debug log to file for production debugging
+      debugLog.push(`mcpConfigPath type=${typeof mcpConfigPath} len=${mcpConfigPath.length}`);
+      debugLog.push(`mcpConfigPath value=${mcpConfigPath.slice(0, 200)}`);
+      writeFile("/tmp/t64-delegation-debug.log", debugLog.join("\n")).catch(() => {});
 
       // Spawn headless child sessions — no canvas panels, ephemeral
       group.tasks.forEach((task, i) => {
@@ -751,6 +844,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             cwd: appDir,
             prompt: initialPrompt,
             permission_mode: "bypass_all",
+            mcp_config: mcpConfigPath || undefined,
           }).catch((err) => {
             console.warn(`[delegation] Failed to start child ${childSessionId}:`, err);
             delStore.updateTaskStatus(group.id, task.id, "failed", String(err));

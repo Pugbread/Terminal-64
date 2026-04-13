@@ -1,3 +1,5 @@
+/* ---- Overlay & Panel Shell ---- */
+
 .settings-overlay {
   position: fixed;
   inset: 0;
@@ -6,27 +8,26 @@
   display: flex;
   justify-content: flex-end;
   z-index: 100;
-  animation: settings-fade-in 0.15s ease-out;
+  animation: sp-fade-in 0.15s ease-out;
 }
 
-@keyframes settings-fade-in {
+@keyframes sp-fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
 .settings-panel {
-  width: clamp(280px, 85vw, 320px);
+  width: clamp(290px, 85vw, 340px);
   height: 100%;
   background: var(--bg-secondary, #181825);
   border-left: 1px solid var(--border, #313244);
   box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
   display: flex;
   flex-direction: column;
-  animation: settings-slide-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  overflow-y: auto;
+  animation: sp-slide-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-@keyframes settings-slide-in {
+@keyframes sp-slide-in {
   from { transform: translateX(100%); }
   to { transform: translateX(0); }
 }
@@ -35,15 +36,17 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--border, #313244);
+  flex-shrink: 0;
 }
 
 .settings-title {
   font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--fg, #cdd6f4);
+  letter-spacing: 0.3px;
 }
 
 .settings-close {
@@ -66,322 +69,377 @@
 }
 
 .settings-body {
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px 0;
 }
 
-.settings-group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+/* ---- Collapsible Sections ---- */
+
+.sp-section {
+  border-bottom: 1px solid var(--border, #313244);
 }
 
-.settings-label {
-  font-family: var(--claude-font, 'Segoe UI', system-ui, sans-serif);
+.sp-section:last-child {
+  border-bottom: none;
+}
+
+.sp-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 18px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.sp-section-header:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.sp-section-icon {
+  font-size: 13px;
+  color: var(--accent, #89b4fa);
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.sp-section-label {
+  font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 12px;
   font-weight: 600;
   color: var(--fg-secondary, #bac2de);
   letter-spacing: 0.2px;
+  flex: 1;
+  text-align: left;
+}
+
+.sp-section-chevron {
+  font-size: 10px;
+  color: var(--fg-muted, #6c7086);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.sp-section-chevron--open {
+  transform: rotate(90deg);
+}
+
+.sp-section-body {
+  padding: 4px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: sp-expand 0.15s ease-out;
+}
+
+@keyframes sp-expand {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Row Layout ---- */
+
+.sp-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
 }
 
-.settings-value {
+.sp-row--col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.sp-label {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--fg-secondary, #bac2de);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.sp-hint-inline {
+  font-size: 10px;
   color: var(--fg-muted, #6c7086);
-  text-transform: none;
-  letter-spacing: 0;
+  font-weight: 400;
 }
 
-.settings-checkbox {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--accent, #89b4fa);
-  cursor: pointer;
-}
-
-.settings-select {
-  padding: 8px 12px;
-  background: var(--bg-tertiary, #11111b);
-  border: 1px solid var(--border, #313244);
-  border-radius: 6px;
-  color: var(--fg, #cdd6f4);
+.sp-value {
   font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 12px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.15s;
+  font-size: 11px;
+  color: var(--fg-muted, #6c7086);
+  flex-shrink: 0;
 }
 
-.settings-select:focus {
-  border-color: var(--accent, #89b4fa);
-}
-
-.settings-input {
-  padding: 8px 12px;
-  background: var(--bg-tertiary, #11111b);
-  border: 1px solid var(--border, #313244);
-  border-radius: 6px;
-  color: var(--fg, #cdd6f4);
-  font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 12px;
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.settings-input:focus {
-  border-color: var(--accent, #89b4fa);
-}
-
-.settings-hint {
+.sp-hint {
   font-size: 10px;
   color: var(--fg-muted, #6c7086);
   line-height: 1.4;
 }
 
-.settings-divider {
-  height: 1px;
-  background: var(--border, #313244);
-  margin: 4px 0;
+/* ---- Toggle Switch ---- */
+
+.sp-toggle {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 9px;
+  border: 1px solid var(--border, #313244);
+  background: var(--bg-tertiary, #11111b);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  transition: background 0.15s, border-color 0.15s;
 }
 
-/* Quick Pastes */
-
-.qp-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.sp-toggle--on {
+  background: rgba(137, 180, 250, 0.2);
+  border-color: rgba(137, 180, 250, 0.4);
 }
 
-.qp-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.sp-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fg-muted, #6c7086);
+  transition: transform 0.15s ease, background 0.15s;
+}
+
+.sp-toggle--on .sp-toggle-knob {
+  transform: translateX(16px);
+  background: var(--accent, #89b4fa);
+}
+
+/* ---- Status Dot ---- */
+
+.sp-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-muted, #6c7086);
+  opacity: 0.5;
+}
+
+.sp-dot--on {
+  background: #a6e3a1;
+  opacity: 1;
+}
+
+/* ---- Form Controls ---- */
+
+.sp-select {
   padding: 6px 10px;
   background: var(--bg-tertiary, #11111b);
   border: 1px solid var(--border, #313244);
-  border-radius: 6px;
-}
-
-.qp-item-info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.qp-item-label {
-  font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 11.5px;
-  color: var(--fg-secondary, #bac2de);
-}
-
-.qp-item-cmd {
-  font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 10px;
-  color: var(--fg-muted, #6c7086);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.qp-item-delete {
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted, #6c7086);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  flex-shrink: 0;
-  transition: background 0.1s, color 0.1s;
-}
-
-.qp-item-delete:hover {
-  background: rgba(243, 139, 168, 0.15);
-  color: #f38ba8;
-}
-
-.qp-add {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.qp-add-btn {
-  padding: 6px 12px;
-  background: var(--accent, #89b4fa);
-  color: var(--bg-tertiary, #11111b);
-  border: none;
-  border-radius: 6px;
+  border-radius: 5px;
+  color: var(--fg, #cdd6f4);
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 11px;
-  font-weight: 600;
+  outline: none;
   cursor: pointer;
-  transition: opacity 0.1s;
+  max-width: 150px;
+  transition: border-color 0.15s;
 }
 
-.qp-add-btn:hover {
-  opacity: 0.85;
+.sp-select:focus {
+  border-color: var(--accent, #89b4fa);
 }
 
-.qp-add-btn:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-
-.settings-select option {
+.sp-select option {
   background: var(--bg-tertiary, #11111b);
   color: var(--fg, #cdd6f4);
 }
 
-.settings-range {
+.sp-input {
+  padding: 7px 10px;
+  background: var(--bg-tertiary, #11111b);
+  border: 1px solid var(--border, #313244);
+  border-radius: 5px;
+  color: var(--fg, #cdd6f4);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.sp-input:focus {
+  border-color: var(--accent, #89b4fa);
+}
+
+.sp-input::placeholder {
+  color: var(--fg-muted, #6c7086);
+  opacity: 0.6;
+}
+
+.sp-range {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 4px;
+  height: 3px;
   background: var(--border, #313244);
   border-radius: 2px;
   outline: none;
 }
 
-.settings-range::-webkit-slider-thumb {
+.sp-range::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   background: var(--accent, #89b4fa);
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.1s;
 }
 
-.settings-range::-webkit-slider-thumb:hover {
+.sp-range::-webkit-slider-thumb:hover {
   transform: scale(1.2);
 }
 
-.settings-shortcuts {
-  padding: 16px 20px;
-  border-top: 1px solid var(--border, #313244);
-}
+/* ---- Buttons ---- */
 
-.settings-shortcuts-title {
-  font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 11.5px;
-  color: var(--fg-secondary, #bac2de);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  margin-bottom: 12px;
-}
-
-.shortcut-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.shortcut-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 0;
-}
-
-.shortcut-row kbd {
-  font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 10.5px;
-  background: var(--bg-tertiary, #11111b);
-  border: 1px solid var(--border, #313244);
-  border-radius: 4px;
-  padding: 2px 8px;
-  color: var(--fg-muted, #6c7086);
-}
-
-.shortcut-row span {
-  font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 11.5px;
-  color: var(--fg-muted, #6c7086);
-}
-
-/* Discord bot */
-.settings-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f38ba8;
-  margin-left: 6px;
-  vertical-align: middle;
-}
-
-.settings-dot--on {
-  background: #a6e3a1;
-}
-
-.settings-discord-btn {
-  margin-top: 4px;
-  padding: 6px 16px;
-  border: 1px solid rgba(137, 180, 250, 0.3);
-  background: rgba(137, 180, 250, 0.08);
-  color: #89b4fa;
+.sp-btn {
+  padding: 6px 14px;
+  border: 1px solid rgba(137, 180, 250, 0.25);
+  background: rgba(137, 180, 250, 0.06);
+  color: var(--accent, #89b4fa);
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 11px;
   font-weight: 600;
   border-radius: 5px;
   cursor: pointer;
-  transition: all 0.1s;
+  transition: background 0.1s, border-color 0.1s;
+  flex-shrink: 0;
 }
 
-.settings-discord-btn:hover {
-  background: rgba(137, 180, 250, 0.15);
+.sp-btn:hover {
+  background: rgba(137, 180, 250, 0.12);
+  border-color: rgba(137, 180, 250, 0.4);
 }
 
-.settings-discord-btn--stop {
-  border-color: rgba(243, 139, 168, 0.3);
-  background: rgba(243, 139, 168, 0.08);
-  color: #f38ba8;
-}
-
-.settings-discord-btn--stop:hover {
-  background: rgba(243, 139, 168, 0.15);
-}
-
-.settings-discord-btn:disabled {
-  opacity: 0.3;
+.sp-btn:disabled {
+  opacity: 0.25;
   cursor: default;
 }
 
-/* Party Mode sub-settings */
+.sp-btn--wide {
+  width: 100%;
+}
 
-.party-sub-settings {
+.sp-btn--danger {
+  border-color: rgba(243, 139, 168, 0.25);
+  background: rgba(243, 139, 168, 0.06);
+  color: #f38ba8;
+}
+
+.sp-btn--danger:hover {
+  background: rgba(243, 139, 168, 0.12);
+  border-color: rgba(243, 139, 168, 0.4);
+}
+
+/* ---- Sub-settings (nested group) ---- */
+
+.sp-sub {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 8px;
   padding: 10px 12px;
   background: var(--bg-tertiary, #11111b);
   border: 1px solid var(--border, #313244);
   border-radius: 6px;
 }
 
-.settings-checkbox {
+/* ---- Quick Pastes ---- */
+
+.sp-qp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sp-qp-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 11.5px;
-  color: var(--fg-secondary, #bac2de);
-  cursor: pointer;
-  padding: 3px 0;
+  padding: 5px 8px;
+  background: var(--bg-tertiary, #11111b);
+  border: 1px solid var(--border, #313244);
+  border-radius: 5px;
 }
 
-.settings-checkbox input[type="checkbox"] {
-  accent-color: var(--accent, #89b4fa);
+.sp-qp-text {
+  flex: 1;
+  min-width: 0;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 10.5px;
+  color: var(--fg-secondary, #bac2de);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sp-qp-del {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted, #6c7086);
+  border-radius: 3px;
   cursor: pointer;
+  font-size: 13px;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.sp-qp-del:hover {
+  background: rgba(243, 139, 168, 0.12);
+  color: #f38ba8;
+}
+
+.sp-qp-add {
+  display: flex;
+  gap: 6px;
+}
+
+.sp-qp-add .sp-input {
+  flex: 1;
+}
+
+/* ---- Scrollbar ---- */
+
+.settings-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.settings-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-body::-webkit-scrollbar-thumb {
+  background: var(--scrollbar, #585b70);
+  border-radius: 3px;
+}
+
+.settings-body::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover, #6c7086);
 }

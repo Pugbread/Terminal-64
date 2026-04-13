@@ -214,6 +214,9 @@ export default function XTerminal({
       if (mod(event) && event.key === "v") {
         navigator.clipboard.readText().then((text) => {
           if (text) writeTerminal(terminalId, text).catch(() => {});
+        }).catch(() => {
+          // Fallback: let the browser handle paste natively
+          document.execCommand("paste");
         });
         return false;
       }

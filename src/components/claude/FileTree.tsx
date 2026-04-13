@@ -133,7 +133,7 @@ export default function FileTree({ cwd, onFileClick, onClose }: FileTreeProps) {
     }, 200);
   }, [cwd]);
 
-  const dirName = cwd.replace(/\\/g, "/").split("/").pop() || cwd;
+  const dirName = cwd.split(/[/\\]/).pop() || cwd;
 
   return (
     <div className="cft-sidebar" onClick={(e) => e.stopPropagation()}>
@@ -157,7 +157,7 @@ export default function FileTree({ cwd, onFileClick, onClose }: FileTreeProps) {
             {!searching && searchResults.length === 0 && <div className="cft-empty">No results</div>}
             {searchResults.map((rel) => {
               const fullPath = `${cwd}/${rel}`;
-              const name = rel.split("/").pop() || rel;
+              const name = rel.split(/[/\\]/).pop() || rel;
               const code = isCodeFile(name);
               return (
                 <div

@@ -22,13 +22,31 @@ const builtInThemes: ThemeDefinition[] = [
 ];
 
 const THEME_STORAGE_KEY = "terminal64-theme";
+const CUSTOM_THEMES_KEY = "terminal64-custom-themes";
+
+function loadCustomThemes(): ThemeDefinition[] {
+  try {
+    const raw = localStorage.getItem(CUSTOM_THEMES_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return [];
+}
+
+function persistCustomThemes(themes: ThemeDefinition[]) {
+  try {
+    localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(themes));
+  } catch {}
+}
+
+const customThemes = loadCustomThemes();
 
 function loadSavedTheme(): { themeName: string; theme: ThemeDefinition; bgAlpha: number } {
   try {
     const raw = localStorage.getItem(THEME_STORAGE_KEY);
     if (raw) {
       const saved = JSON.parse(raw);
-      const theme = builtInThemes.find((t) => t.name === saved.themeName);
+      const all = [...builtInThemes, ...customThemes];
+      const theme = all.find((t) => t.name === saved.themeName);
       if (theme) {
         return { themeName: saved.themeName, theme, bgAlpha: saved.bgAlpha ?? 1 };
       }
@@ -50,12 +68,14 @@ interface ThemeState {
   bgAlpha: number; // 0-1, background transparency
   setTheme: (name: string) => void;
   setBgAlpha: (alpha: number) => void;
+  addTheme: (theme: ThemeDefinition) => void;
+  removeTheme: (name: string) => void;
 }
 
 const initial = loadSavedTheme();
 
 export const useThemeStore = create<ThemeState>((set, get) => ({
-  themes: builtInThemes,
+  themes: [...builtInThemes, ...customThemes],
   currentThemeName: initial.themeName,
   currentTheme: initial.theme,
   bgAlpha: initial.bgAlpha,
@@ -70,5 +90,26 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     const clamped = Math.max(0, Math.min(1, alpha));
     set({ bgAlpha: clamped });
     persistTheme(get().currentThemeName, clamped);
+  },
+  addTheme: (theme: ThemeDefinition) => {
+    const existing = get().themes;
+    // Replace if same name exists, otherwise append
+    const idx = existing.findIndex((t) => t.name === theme.name);
+    const updated = idx >= 0
+      ? existing.map((t, i) => i === idx ? theme : t)
+      : [...existing, theme];
+    set({ themes: updated });
+    // Persist only custom themes (non-builtin)
+    const customs = updated.filter((t) => !builtInThemes.some((b) => b.name === t.name));
+    persistCustomThemes(customs);
+  },
+  removeTheme: (name: string) => {
+    if (builtInThemes.some((t) => t.name === name)) return;
+    const updated = get().themes.filter((t) => t.name !== name);
+    set({ themes: updated });
+    persistCustomThemes(updated.filter((t) => !builtInThemes.some((b) => b.name === t.name)));
+    if (get().currentThemeName === name) {
+      get().setTheme("Catppuccin Mocha");
+    }
   },
 }));

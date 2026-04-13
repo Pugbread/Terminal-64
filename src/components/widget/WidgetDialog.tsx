@@ -411,7 +411,12 @@ export default function WidgetDialog({ isOpen, onClose }: WidgetDialogProps) {
 
           <button
             className="wdg-open-folder"
-            onClick={() => shellExec('open "$HOME/.terminal64/widgets"').catch(() => {})}
+            onClick={() => {
+              const cmd = navigator.platform.includes("Win")
+                ? 'explorer.exe "%USERPROFILE%\\.terminal64\\widgets"'
+                : 'open "$HOME/.terminal64/widgets"';
+              shellExec(cmd).catch(() => {});
+            }}
           >
             Open Widgets Folder
           </button>
