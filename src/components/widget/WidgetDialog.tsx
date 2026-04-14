@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { listWidgetFolders, createWidgetFolder, deleteWidgetFolder, createClaudeSession, shellExec, WidgetInfo } from "../../lib/tauriApi";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listWidgetFolders, createWidgetFolder, deleteWidgetFolder, installWidgetZip, createClaudeSession, shellExec, WidgetInfo } from "../../lib/tauriApi";
 import { useCanvasStore } from "../../stores/canvasStore";
-import { useClaudeStore } from "../../stores/claudeStore"; // used for createSession/addUserMessage
+import { useClaudeStore } from "../../stores/claudeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
+import { pushToast } from "../../lib/notifications";
 import type { PermissionMode } from "../../lib/types";
 import "./Widget.css";
 
@@ -244,6 +246,8 @@ export default function WidgetDialog({ isOpen, onClose }: WidgetDialogProps) {
   const [widgets, setWidgets] = useState<WidgetInfo[]>([]);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [installing, setInstalling] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const refreshList = () => listWidgetFolders().then(setWidgets).catch(() => {});
@@ -251,8 +255,45 @@ export default function WidgetDialog({ isOpen, onClose }: WidgetDialogProps) {
   useEffect(() => {
     if (!isOpen) return;
     setName("");
+    setIsDragOver(false);
+    setInstalling(false);
     refreshList();
     setTimeout(() => inputRef.current?.focus(), 100);
+  }, [isOpen]);
+
+  // Listen for native file drops while dialog is open
+  useEffect(() => {
+    if (!isOpen) return;
+    let unlisten: (() => void) | null = null;
+    getCurrentWebviewWindow()
+      .onDragDropEvent(async (event: any) => {
+        const { type, paths } = event.payload;
+        if (type === "over") {
+          const hasZip = (paths as string[])?.some((p: string) => p.toLowerCase().endsWith(".zip"));
+          if (hasZip) setIsDragOver(true);
+        } else if (type === "leave" || type === "cancel") {
+          setIsDragOver(false);
+        } else if (type === "drop") {
+          setIsDragOver(false);
+          const zipFiles = ((paths as string[]) || []).filter((p: string) => p.toLowerCase().endsWith(".zip"));
+          if (zipFiles.length === 0) return;
+          setInstalling(true);
+          for (const zipPath of zipFiles) {
+            try {
+              const widgetId = await installWidgetZip(zipPath);
+              useCanvasStore.getState().addWidgetTerminal(widgetId);
+              pushToast("Widget installed", widgetId);
+            } catch (err) {
+              pushToast("Widget install failed", String(err));
+            }
+          }
+          refreshList();
+          setInstalling(false);
+        }
+      })
+      .then((fn) => { unlisten = fn; })
+      .catch((err) => console.warn("[widget-drop]", err));
+    return () => { if (unlisten) unlisten(); };
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -408,6 +449,27 @@ export default function WidgetDialog({ isOpen, onClose }: WidgetDialogProps) {
               No widgets yet. Create one to get started.
             </div>
           )}
+
+          <div className="wdg-section-label">Install Widget</div>
+          <div className={`wdg-drop-zone ${isDragOver ? "wdg-drop-zone--active" : ""} ${installing ? "wdg-drop-zone--installing" : ""}`}>
+            {installing ? (
+              <>
+                <div className="wdg-spinner" />
+                <span className="wdg-drop-zone-text">Installing...</span>
+              </>
+            ) : (
+              <>
+                <svg className="wdg-drop-zone-icon" width="24" height="24" viewBox="0 0 24 24" fill="none">
+                  <path d="M21 15V19C21 20.1 20.1 21 19 21H5C3.9 21 3 20.1 3 19V15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M7 10L12 15L17 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M12 15V3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                <span className="wdg-drop-zone-text">
+                  {isDragOver ? "Release to install" : "Drag & drop .zip to install"}
+                </span>
+              </>
+            )}
+          </div>
 
           <button
             className="wdg-open-folder"

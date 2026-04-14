@@ -258,3 +258,41 @@ button:focus-visible {
   from { opacity: 0; transform: translateX(20px); }
   to { opacity: 1; transform: translateX(0); }
 }
+
+/* Widget zip drop overlay */
+.wdg-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: wdg-drop-fade 0.15s ease-out;
+  pointer-events: none;
+}
+
+@keyframes wdg-drop-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.wdg-drop-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: #f9e2af;
+  border: 2px dashed #f9e2af;
+  border-radius: 16px;
+  padding: 40px 60px;
+  background: rgba(249, 226, 175, 0.04);
+}
+
+.wdg-drop-content span {
+  font-size: 15px;
+  font-weight: 600;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  letter-spacing: 0.02em;
+}

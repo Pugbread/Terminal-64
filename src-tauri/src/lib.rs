@@ -1517,6 +1517,80 @@ fn delete_widget_folder(widget_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn install_widget_zip(zip_path: String) -> Result<String, String> {
+    let src = std::path::Path::new(&zip_path);
+    if !src.exists() {
+        return Err(format!("File not found: {}", zip_path));
+    }
+    let file = std::fs::File::open(src).map_err(|e| format!("open: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("invalid zip: {}", e))?;
+
+    // Determine widget id: if every entry shares a common top-level folder, use that;
+    // otherwise fall back to the zip filename (without extension).
+    let mut top_dirs = std::collections::HashSet::<String>::new();
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).map_err(|e| format!("zip entry: {}", e))?;
+        let name: &str = entry.name();
+        if let Some(first) = name.split('/').next() {
+            if !first.is_empty() {
+                top_dirs.insert(first.to_string());
+            }
+        }
+    }
+    let (widget_id, strip_prefix) = if top_dirs.len() == 1 {
+        let name = top_dirs.into_iter().next().unwrap();
+        let id = name.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "-");
+        (id, true)
+    } else {
+        let stem = src.file_stem().unwrap_or_default().to_string_lossy();
+        let id = stem.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "-");
+        (id, false)
+    };
+
+    let dest = widgets_base_dir()?.join(&widget_id);
+    if dest.exists() {
+        std::fs::remove_dir_all(&dest).map_err(|e| format!("cleanup: {}", e))?;
+    }
+    std::fs::create_dir_all(&dest).map_err(|e| format!("mkdir: {}", e))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| format!("zip entry: {}", e))?;
+        let raw_name = entry.name().to_string();
+
+        let rel = if strip_prefix {
+            // Strip the single top-level directory
+            match raw_name.find('/') {
+                Some(idx) => &raw_name[idx + 1..],
+                None => &raw_name,
+            }
+        } else {
+            &raw_name
+        };
+
+        if rel.is_empty() { continue; }
+
+        let out_path = dest.join(rel);
+
+        // Prevent path traversal
+        if !out_path.starts_with(&dest) { continue; }
+
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path).map_err(|e| format!("mkdir: {}", e))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {}", e))?;
+            }
+            let mut out_file = std::fs::File::create(&out_path)
+                .map_err(|e| format!("create {}: {}", out_path.display(), e))?;
+            std::io::copy(&mut entry, &mut out_file)
+                .map_err(|e| format!("write {}: {}", out_path.display(), e))?;
+        }
+    }
+
+    Ok(widget_id)
+}
+
+#[tauri::command]
 fn widget_file_modified(widget_id: String) -> Result<u64, String> {
     let dir = widgets_base_dir()?.join(&widget_id);
     if !dir.exists() { return Ok(0); }
@@ -2393,6 +2467,7 @@ pub fn run() {
             list_widget_folders,
             widget_file_modified,
             delete_widget_folder,
+            install_widget_zip,
             get_widget_server_port,
             widget_get_state,
             widget_set_state,

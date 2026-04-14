@@ -317,7 +317,9 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
         setIsDragOver(false);
       } else if (event.payload.type === "drop") {
         setIsDragOver(false);
-        const paths: string[] = event.payload.paths || [];
+        const paths: string[] = (event.payload.paths || []).filter(
+          (p: string) => !p.toLowerCase().endsWith(".zip")
+        );
         if (paths.length) setAttachedFiles((prev) => [...prev, ...paths]);
       }
     }).then((fn) => { unlisten = fn; }).catch((err) => console.warn('[drag-drop]', err));

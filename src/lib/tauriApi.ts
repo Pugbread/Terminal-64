@@ -355,6 +355,10 @@ export async function deleteWidgetFolder(widgetId: string): Promise<void> {
   return invoke("delete_widget_folder", { widgetId });
 }
 
+export async function installWidgetZip(zipPath: string): Promise<string> {
+  return invoke("install_widget_zip", { zipPath });
+}
+
 export async function getWidgetServerPort(): Promise<number> {
   return invoke("get_widget_server_port");
 }

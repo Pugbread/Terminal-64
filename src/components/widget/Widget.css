@@ -320,6 +320,51 @@
   font-size: 12px;
 }
 
+/* Install drop zone */
+.wdg-drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px;
+  border: 2px dashed var(--border, #313244);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.015);
+  transition: border-color 0.15s, background 0.15s;
+  cursor: default;
+}
+
+.wdg-drop-zone--active {
+  border-color: #f9e2af;
+  background: rgba(249, 226, 175, 0.06);
+}
+
+.wdg-drop-zone--active .wdg-drop-zone-icon {
+  color: #f9e2af;
+}
+
+.wdg-drop-zone--active .wdg-drop-zone-text {
+  color: #f9e2af;
+}
+
+.wdg-drop-zone--installing {
+  border-color: #89b4fa;
+  background: rgba(137, 180, 250, 0.04);
+}
+
+.wdg-drop-zone-icon {
+  color: var(--fg-muted, #6c7086);
+  transition: color 0.15s;
+}
+
+.wdg-drop-zone-text {
+  font-size: 12px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  color: var(--fg-muted, #6c7086);
+  transition: color 0.15s;
+}
+
 .wdg-open-folder {
   width: 100%;
   padding: 8px;

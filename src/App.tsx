@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import Canvas from "./components/canvas/Canvas";
@@ -18,8 +18,9 @@ import { useCanvasStore } from "./stores/canvasStore";
 import { useThemeStore } from "./stores/themeStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { registerCommand } from "./lib/commands";
-import { closeTerminal, closeClaudeSession, linkSessionToDiscord, unlinkSessionFromDiscord, startDiscordBot, discordCleanupOrphaned, loadSessionHistory, mapHistoryMessages, setAllBrowsersVisible, ensureSkillsPlugin } from "./lib/tauriApi";
-import { Toast, subscribeToasts, dismissToast } from "./lib/notifications";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { closeTerminal, closeClaudeSession, linkSessionToDiscord, unlinkSessionFromDiscord, startDiscordBot, discordCleanupOrphaned, loadSessionHistory, mapHistoryMessages, setAllBrowsersVisible, ensureSkillsPlugin, installWidgetZip } from "./lib/tauriApi";
+import { Toast, subscribeToasts, dismissToast, pushToast } from "./lib/notifications";
 import { useDelegationStore } from "./stores/delegationStore";
 import { useClaudeStore, flushSave as flushClaudeSave, STORAGE_KEY } from "./stores/claudeStore";
 import { checkForUpdate, UpdateInfo } from "./lib/updater";
@@ -43,6 +44,41 @@ function App() {
   useClaudeEvents();
   useDelegationOrchestrator();
   usePartyMode();
+
+  const [widgetDropOver, setWidgetDropOver] = useState(false);
+  const widgetDialogRef = useRef(widgetDialogOpen);
+  widgetDialogRef.current = widgetDialogOpen;
+
+  // Global drag-drop: intercept .zip files and install as widgets (skips when widget dialog handles it)
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    getCurrentWebviewWindow()
+      .onDragDropEvent(async (event: any) => {
+        if (widgetDialogRef.current) return;
+        const { type, paths } = event.payload;
+        if (type === "over") {
+          const hasZip = (paths as string[])?.some((p: string) => p.toLowerCase().endsWith(".zip"));
+          if (hasZip) setWidgetDropOver(true);
+        } else if (type === "leave" || type === "cancel") {
+          setWidgetDropOver(false);
+        } else if (type === "drop") {
+          setWidgetDropOver(false);
+          const zipFiles = ((paths as string[]) || []).filter((p: string) => p.toLowerCase().endsWith(".zip"));
+          for (const zipPath of zipFiles) {
+            try {
+              const widgetId = await installWidgetZip(zipPath);
+              useCanvasStore.getState().addWidgetTerminal(widgetId);
+              pushToast("Widget installed", widgetId);
+            } catch (err) {
+              pushToast("Widget install failed", String(err));
+            }
+          }
+        }
+      })
+      .then((fn) => { unlisten = fn; })
+      .catch((err) => console.warn("[widget-drop]", err));
+    return () => { if (unlisten) unlisten(); };
+  }, []);
 
   // Hide all native browser webviews when any overlay is open (they render above DOM)
   const anyOverlayOpen = settingsOpen || paletteOpen || claudeDialogOpen || widgetDialogOpen || skillDialogOpen;
@@ -318,6 +354,21 @@ function App() {
           </button>
         </div>
       </div>
+
+      {/* Widget zip drop overlay */}
+      {widgetDropOver && (
+        <div className="wdg-drop-overlay">
+          <div className="wdg-drop-content">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+              <rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5"/>
+              <rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5"/>
+              <rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5"/>
+              <rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5"/>
+            </svg>
+            <span>Drop to install widget</span>
+          </div>
+        </div>
+      )}
 
       {/* Canvas */}
       <Canvas />
