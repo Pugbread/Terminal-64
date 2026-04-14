@@ -427,6 +427,25 @@ export async function readSkillContent(skillId: string): Promise<string> {
   return invoke("read_skill_content", { skillId });
 }
 
+export interface ResolvedSkill {
+  name: string;
+  body: string;
+  allowed_tools: string[];
+  skill_dir: string;
+}
+
+export async function resolveSkillPrompt(
+  skillName: string,
+  args: string,
+  cwd?: string
+): Promise<ResolvedSkill> {
+  return invoke("resolve_skill_prompt", {
+    skillName,
+    arguments: args,
+    cwd: cwd ?? null,
+  });
+}
+
 export async function getSkillCreatorPath(): Promise<string> {
   return invoke("get_skill_creator_path");
 }

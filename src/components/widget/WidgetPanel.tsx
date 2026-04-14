@@ -180,6 +180,11 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
     };
     iframe?.addEventListener("load", onLoad);
 
+    // If iframe already loaded before this effect ran, send init immediately
+    if (iframe && iframe.contentDocument?.readyState === "complete") {
+      onLoad();
+    }
+
     // Subscribe to Claude store — emit granular events
     const unsub = useClaudeStore.subscribe((state, prev) => {
       for (const [sid, session] of Object.entries(state.sessions)) {
@@ -257,7 +262,7 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
 
       switch (msg.type) {
         case "t64:request-state":
-          post({ type: "t64:state", payload: buildStateSnapshot() });
+          post({ type: "t64:state", payload: { ...buildStateSnapshot(), id: msg.payload?.id } });
           return;
 
         case "t64:open-url": {

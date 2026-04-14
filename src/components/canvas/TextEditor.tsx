@@ -22,6 +22,25 @@ export default function TextEditor({ onSend, onClose }: TextEditorProps) {
     textareaRef.current?.focus();
   }, []);
 
+  // Protect textarea from garbage character injection on arrow keys
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const arrowKeys = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
+    const captureArrows = (e: KeyboardEvent) => {
+      if (arrowKeys.has(e.key)) e.stopPropagation();
+    };
+    const blockGarbage = (e: InputEvent) => {
+      if (e.data && /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(e.data)) e.preventDefault();
+    };
+    el.addEventListener("keydown", captureArrows, true);
+    el.addEventListener("beforeinput", blockGarbage as EventListener, true);
+    return () => {
+      el.removeEventListener("keydown", captureArrows, true);
+      el.removeEventListener("beforeinput", blockGarbage as EventListener, true);
+    };
+  }, []);
+
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;

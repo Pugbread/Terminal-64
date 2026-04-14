@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useClaudeStore } from "../../stores/claudeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useThemeStore } from "../../stores/themeStore";
-import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, writeFile, loadSessionHistory, mapHistoryMessages, truncateSessionJsonl, truncateSessionJsonlByMessages, findRewindUuid, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, revertFilesGit, deleteFiles, shellExec, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile, savePastedImage } from "../../lib/tauriApi";
+import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, readFileBase64, writeFile, loadSessionHistory, mapHistoryMessages, truncateSessionJsonl, truncateSessionJsonlByMessages, findRewindUuid, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, revertFilesGit, deleteFiles, shellExec, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile, savePastedImage, resolveSkillPrompt } from "../../lib/tauriApi";
 import { SlashCommand, PermissionMode, McpServer } from "../../lib/types";
 import { rewritePromptStream } from "../../lib/ai";
 import ChatMessage, { toolHeader, renderContent, ToolGroupCard, GROUPABLE_TOOLS } from "./ChatMessage";
@@ -358,7 +358,18 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
         const paths: string[] = (event.payload.paths || []).filter(
           (p: string) => !p.toLowerCase().endsWith(".zip")
         );
-        if (paths.length) setAttachedFiles((prev) => [...prev, ...paths]);
+        if (paths.length) {
+          setAttachedFiles((prev) => [...prev, ...paths]);
+          for (const p of paths) {
+            if (/\.(png|jpe?g|gif|webp|bmp|svg|ico|tiff?)$/i.test(p)) {
+              readFileBase64(p).then((b64) => {
+                const ext = p.split(".").pop()?.toLowerCase() || "png";
+                const mime = ext === "svg" ? "image/svg+xml" : `image/${ext.replace("jpg", "jpeg")}`;
+                setFilePreviews((prev) => ({ ...prev, [p]: `data:${mime};base64,${b64}` }));
+              }).catch(() => {});
+            }
+          }
+        }
       }
     }).then((fn) => { unlisten = fn; }).catch((err) => console.warn('[drag-drop]', err));
     return () => { if (unlisten) unlisten(); };
@@ -471,6 +482,11 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
             console.log("[send] sendClaudePrompt (--resume) succeeded");
           } catch (resumeErr) {
             console.log("[send] sendClaudePrompt failed, falling back to createClaudeSession:", resumeErr);
+            // Restore the rewind UUID so the next attempt can use it
+            if (resumeAtUuid) {
+              useClaudeStore.getState().setResumeAtUuid(sessionId, resumeAtUuid);
+              console.log("[send] Restored resumeAtUuid for retry:", resumeAtUuid);
+            }
             // Session file might not exist yet (edge case) — try create
             await createClaudeSession(req);
           }
@@ -572,6 +588,43 @@ Rules:
         return;
       }
 
+      // Intercept skill slash commands — resolve SKILL.md and inject like Claude Code does
+      // (with <command-name> tags + rendered body instead of raw /skill-name text)
+      const skillMatch = text.match(/^\/([a-zA-Z0-9_:.-]+)\s*([\s\S]*)?$/);
+      if (skillMatch) {
+        const cmdName = skillMatch[1];
+        const cmdArgs = (skillMatch[2] || "").trim();
+        // Skills have source: "user", "project", "Terminal 64", or plugin-related.
+        // Built-in commands have source: "built-in" or are in the T64 commands list.
+        const t64Builtins = new Set(t64Commands.current.map((c) => c.name));
+        const skillSources = new Set(["user", "project", "Terminal 64"]);
+        const matchedSkill = slashCommands.find(
+          (c) => c.name === cmdName && !t64Builtins.has(c.name) &&
+            (skillSources.has(c.source) || (c.source !== "built-in" && c.source !== "builtin"))
+        );
+        if (matchedSkill) {
+          try {
+            const resolved = await resolveSkillPrompt(cmdName, cmdArgs, effectiveCwd || undefined);
+            // Format with XML tags matching Claude Code's injection format
+            const injectedPrompt = [
+              `<command-message>${resolved.name}</command-message>`,
+              `<command-name>/${resolved.name}</command-name>`,
+              cmdArgs ? `<command-args>${cmdArgs}</command-args>` : null,
+              "",
+              resolved.body,
+            ].filter((l) => l !== null).join("\n");
+            // Show the original /command in chat history, send the resolved content
+            addUserMessage(sessionId, text);
+            emit("gui-message", { session_id: sessionId, content: text }).catch(() => {});
+            await actualSend(injectedPrompt, permissionOverride);
+            return;
+          } catch (err) {
+            // Skill resolution failed — fall through to send as raw text
+            console.warn("[skill] Failed to resolve skill:", cmdName, err);
+          }
+        }
+      }
+
       // Clear plan state whenever the user sends a regular prompt
       if (planFinished || planContent) {
         setPlanFinished(false);
@@ -606,7 +659,7 @@ Rules:
       emit("gui-message", { session_id: sessionId, content: prompt }).catch(() => {});
       await actualSend(prompt, permissionOverride);
     },
-    [sessionId, attachedFiles, addUserMessage, actualSend, reloadCommands]
+    [sessionId, attachedFiles, addUserMessage, actualSend, reloadCommands, slashCommands, effectiveCwd]
   );
 
   const handleCancel = useCallback(() => { cancelClaude(sessionId).catch(() => {}); }, [sessionId]);
@@ -852,9 +905,21 @@ Rules:
   const handleAttach = useCallback(async () => {
     try {
       const selected = await open({ multiple: true, title: "Attach files" });
-      if (selected) setAttachedFiles((prev) => [...prev, ...(Array.isArray(selected) ? selected : [selected])]);
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      setAttachedFiles((prev) => [...prev, ...paths]);
+      // Generate previews for image files
+      for (const p of paths) {
+        if (/\.(png|jpe?g|gif|webp|bmp|svg|ico|tiff?)$/i.test(p) && !filePreviews[p]) {
+          readFileBase64(p).then((b64) => {
+            const ext = p.split(".").pop()?.toLowerCase() || "png";
+            const mime = ext === "svg" ? "image/svg+xml" : `image/${ext.replace("jpg", "jpeg")}`;
+            setFilePreviews((prev) => ({ ...prev, [p]: `data:${mime};base64,${b64}` }));
+          }).catch(() => {});
+        }
+      }
     } catch {}
-  }, []);
+  }, [filePreviews]);
 
   const handlePasteImage = useCallback(async (file: File) => {
     try {
@@ -881,7 +946,7 @@ Rules:
   const spawnDelegation = useCallback(
     async (tasks: { description: string }[], sharedContext: string) => {
       const delStore = useDelegationStore.getState();
-      const group = delStore.createGroup(sessionId, tasks, "auto", sharedContext || undefined);
+      const group = delStore.createGroup(sessionId, tasks, "auto", sharedContext || undefined, permMode.id);
 
       // Spawn shared chat panel below the parent
       const canvas = useCanvasStore.getState();
@@ -1521,20 +1586,21 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                     {attachedFiles.map((f, i) => {
                       const isImage = /\.(png|jpg|jpeg|gif|webp|bmp|svg)$/i.test(f);
                       const preview = filePreviews[f];
+                      const remove = () => {
+                        setAttachedFiles((p) => p.filter((_, j) => j !== i));
+                        if (preview) { URL.revokeObjectURL(preview); setFilePreviews((p) => { const n = { ...p }; delete n[f]; return n; }); }
+                      };
                       return (
-                        <div key={`${i}-${f}`} className={`cc-file-chip ${isImage && preview ? "cc-file-chip--image" : ""}`}>
+                        <div key={`${i}-${f}`} className={`cc-file-chip ${isImage && preview ? "cc-file-chip--image" : ""}`} onClick={remove} title="Click to remove">
                           {isImage && preview ? (
                             <>
                               <img src={preview} alt="" className="cc-file-preview" />
-                              <button className="cc-file-remove" onClick={() => {
-                                setAttachedFiles((p) => p.filter((_, j) => j !== i));
-                                if (preview) { URL.revokeObjectURL(preview); setFilePreviews((p) => { const n = { ...p }; delete n[f]; return n; }); }
-                              }}>×</button>
+                              <div className="cc-file-remove-overlay">×</div>
                             </>
                           ) : (
                             <>
                               <span className="cc-file-name">{f.split(/[/\\]/).pop()}</span>
-                              <button className="cc-file-remove" onClick={() => setAttachedFiles((p) => p.filter((_, j) => j !== i))}>×</button>
+                              <span className="cc-file-remove-x">×</span>
                             </>
                           )}
                         </div>

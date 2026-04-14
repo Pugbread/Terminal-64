@@ -42,10 +42,14 @@ button:focus-visible {
   cursor: default;
 }
 
-.brand-icon {
-  width: 18px;
-  height: 18px;
+.brand-text {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--fg, #cdd6f4);
   opacity: 0.85;
+  letter-spacing: -0.5px;
+  user-select: none;
 }
 
 .header-action {

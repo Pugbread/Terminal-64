@@ -833,55 +833,68 @@ fn fork_session_jsonl(parent_session_id: String, new_session_id: String, cwd: St
     let dest = session_jsonl_path(&cwd, &new_session_id)?;
     // Copy the full JSONL to preserve the parentUuid chain
     std::fs::copy(&src, &dest).map_err(|e| format!("copy: {}", e))?;
-    // Find the UUID at the fork point so the frontend can use --resume-session-at
-    let content = std::fs::read_to_string(&dest).map_err(|e| format!("read: {}", e))?;
-    let mut visible_count: usize = 0;
-    let mut last_uuid = String::new();
-    for line in content.lines() {
-        if line.trim().is_empty() { continue; }
-        let val: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => continue };
-        let rec_type = val["type"].as_str().unwrap_or("");
-        if rec_type == "user" && is_real_user_message(&val) {
-            visible_count += 1;
-            if visible_count > keep_messages { break; }
-            if let Some(u) = val["uuid"].as_str() { last_uuid = u.to_string(); }
-        } else if rec_type == "assistant" {
-            if let Some(content_arr) = val["message"]["content"].as_array() {
-                let has_text = content_arr.iter().any(|b|
-                    b["type"].as_str() == Some("text") && b["text"].as_str().map(|t| !t.trim().is_empty()).unwrap_or(false)
-                );
-                let has_tools = content_arr.iter().any(|b| b["type"].as_str() == Some("tool_use"));
-                if has_text || has_tools {
-                    visible_count += 1;
-                    if visible_count > keep_messages { break; }
-                    if let Some(u) = val["uuid"].as_str() { last_uuid = u.to_string(); }
-                }
-            }
-        }
-    }
-    safe_eprintln!("[fork] Copied full JSONL {} -> {} (fork at msg {}, uuid={})", parent_session_id, new_session_id, keep_messages, &last_uuid);
-    Ok(last_uuid)
+    // Reuse find_rewind_uuid (chain-walking) to locate the fork point UUID
+    let uuid = find_rewind_uuid(new_session_id.clone(), cwd, keep_messages)?;
+    safe_eprintln!("[fork] Copied full JSONL {} -> {} (fork at msg {}, uuid={})", parent_session_id, new_session_id, keep_messages, &uuid);
+    Ok(uuid)
 }
 
-/// Given a session JSONL and a visible-message count, return the JSONL UUID of the
-/// last visible message at that position. Used for `--resume-session-at` instead of
-/// destructively truncating the file.
+/// Walk the parentUuid chain in a session JSONL (matching how Claude CLI's
+/// buildConversationChain works) and return the UUID of the Nth visible message.
+/// Correct even after prior rewinds leave orphaned branches in append-only JSONL.
 #[tauri::command]
 fn find_rewind_uuid(session_id: String, cwd: String, keep_messages: usize) -> Result<String, String> {
+    use std::collections::{HashMap, HashSet};
+
     let path = session_jsonl_path(&cwd, &session_id)?;
     let content = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", path.display(), e))?;
-    let mut visible_count: usize = 0;
-    let mut last_uuid = String::new();
+
+    let mut records: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut all_uuids: Vec<String> = Vec::new();
+    let mut children: HashSet<String> = HashSet::new();
 
     for line in content.lines() {
         if line.trim().is_empty() { continue; }
         let val: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => continue };
+        if let Some(uuid) = val["uuid"].as_str() {
+            let uuid = uuid.to_string();
+            if let Some(parent) = val["parentUuid"].as_str() {
+                children.insert(parent.to_string());
+            }
+            all_uuids.push(uuid.clone());
+            records.insert(uuid, val);
+        }
+    }
+
+    // Find leaf: last uuid not referenced as anyone's parentUuid
+    let leaf = all_uuids.iter().rev()
+        .find(|u| !children.contains(u.as_str()))
+        .cloned()
+        .ok_or_else(|| "No leaf message found in JSONL".to_string())?;
+
+    // Walk backward from leaf via parentUuid to build active chain
+    let mut chain: Vec<String> = Vec::new();
+    let mut current = Some(leaf);
+    while let Some(uuid) = current {
+        chain.push(uuid.clone());
+        current = records.get(&uuid)
+            .and_then(|v| v["parentUuid"].as_str())
+            .map(|s| s.to_string());
+    }
+    chain.reverse();
+
+    // Count visible messages along the chain
+    let mut visible_count: usize = 0;
+    let mut last_uuid = String::new();
+
+    for uuid in &chain {
+        let val = match records.get(uuid) { Some(v) => v, None => continue };
         let rec_type = val["type"].as_str().unwrap_or("");
 
-        if rec_type == "user" && is_real_user_message(&val) {
+        if rec_type == "user" && is_real_user_message(val) {
             visible_count += 1;
             if visible_count > keep_messages { break; }
-            if let Some(u) = val["uuid"].as_str() { last_uuid = u.to_string(); }
+            last_uuid = uuid.clone();
         } else if rec_type == "assistant" {
             if let Some(content_arr) = val["message"]["content"].as_array() {
                 let has_text = content_arr.iter().any(|b|
@@ -891,16 +904,16 @@ fn find_rewind_uuid(session_id: String, cwd: String, keep_messages: usize) -> Re
                 if has_text || has_tools {
                     visible_count += 1;
                     if visible_count > keep_messages { break; }
-                    if let Some(u) = val["uuid"].as_str() { last_uuid = u.to_string(); }
+                    last_uuid = uuid.clone();
                 }
             }
         }
     }
 
     if last_uuid.is_empty() {
-        return Err(format!("No visible message found at position {} in {}", keep_messages, path.display()));
+        return Err(format!("No visible message at position {} in chain ({} records, {} in chain)", keep_messages, records.len(), chain.len()));
     }
-    safe_eprintln!("[rewind] find_rewind_uuid: keep_messages={} found uuid={} (visible_count={})", keep_messages, &last_uuid, visible_count);
+    safe_eprintln!("[rewind] find_rewind_uuid: keep_messages={} uuid={} (chain={}, total={})", keep_messages, &last_uuid, chain.len(), records.len());
     Ok(last_uuid)
 }
 
@@ -1898,6 +1911,162 @@ fn read_skill_content(skill_id: String) -> Result<String, String> {
     }
 }
 
+#[derive(serde::Serialize)]
+struct ResolvedSkill {
+    name: String,
+    body: String,
+    allowed_tools: Vec<String>,
+    skill_dir: String,
+}
+
+/// Finds a skill by name across all skill directories, reads its SKILL.md,
+/// parses frontmatter, applies $ARGUMENTS substitution, and returns the
+/// rendered body in the same format Claude Code uses for skill injection.
+#[tauri::command]
+fn resolve_skill_prompt(skill_name: String, arguments: String, cwd: Option<String>) -> Result<ResolvedSkill, String> {
+    let home = dirs::home_dir().ok_or("No home dir")?;
+
+    // Search order: project .claude/skills/ → ~/.claude/skills/ → ~/.terminal64/skills/ → plugin cache
+    let mut search_paths: Vec<std::path::PathBuf> = Vec::new();
+
+    // Project-level skills
+    if let Some(ref c) = cwd {
+        let p = std::path::PathBuf::from(c);
+        search_paths.push(p.join(".claude").join("skills").join(&skill_name));
+    }
+    // User-level skills
+    search_paths.push(home.join(".claude").join("skills").join(&skill_name));
+    // Terminal 64 skill library
+    search_paths.push(home.join(".terminal64").join("skills").join(&skill_name));
+    // Plugin cache — scan for matching skill name
+    let cache_dir = home.join(".claude").join("plugins").join("cache");
+    if cache_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+            for entry in entries.flatten() {
+                let skills_dir = entry.path().join("skills").join(&skill_name);
+                if skills_dir.exists() {
+                    search_paths.push(skills_dir);
+                }
+            }
+        }
+    }
+
+    // Find the first matching SKILL.md
+    let mut skill_md_path = None;
+    let mut skill_dir_path = None;
+    for dir in &search_paths {
+        let md = dir.join("SKILL.md");
+        if md.exists() {
+            skill_md_path = Some(md);
+            skill_dir_path = Some(dir.clone());
+            break;
+        }
+    }
+
+    let skill_md = skill_md_path.ok_or_else(|| format!("Skill '{}' not found", skill_name))?;
+    let skill_dir = skill_dir_path.unwrap();
+    let content = std::fs::read_to_string(&skill_md)
+        .map_err(|e| format!("read {}: {}", skill_md.display(), e))?;
+
+    // Parse frontmatter
+    let content_trimmed = content.trim_start();
+    let (yaml_block, markdown_body) = if content_trimmed.starts_with("---") {
+        let rest = &content_trimmed[3..];
+        if let Some(end) = rest.find("---") {
+            (rest[..end].trim(), rest[end + 3..].trim())
+        } else {
+            ("", content_trimmed)
+        }
+    } else {
+        ("", content_trimmed)
+    };
+
+    // Extract frontmatter fields
+    let mut resolved_name = skill_name.clone();
+    let mut allowed_tools: Vec<String> = Vec::new();
+    for line in yaml_block.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("name:") {
+            let val = rest.trim().trim_matches('"').trim_matches('\'');
+            if !val.is_empty() { resolved_name = val.to_string(); }
+        }
+        if let Some(rest) = trimmed.strip_prefix("allowed-tools:") {
+            let val = rest.trim();
+            if !val.is_empty() {
+                allowed_tools = val.split_whitespace().map(|s| s.to_string()).collect();
+            }
+        }
+    }
+
+    // Build the full body with skill dir prefix (matches Claude Code behavior)
+    let dir_str = skill_dir.to_string_lossy().to_string();
+    let mut body = format!("Base directory for this skill: {}\n\n{}", dir_str, markdown_body);
+
+    // Apply $ARGUMENTS substitutions (matches Claude Code's argumentSubstitution.ts)
+    let arg_parts: Vec<&str> = if arguments.is_empty() {
+        Vec::new()
+    } else {
+        arguments.split_whitespace().collect()
+    };
+
+    let had_placeholders = body.contains("$ARGUMENTS") || body.contains("$0");
+
+    // $ARGUMENTS[N] → specific argument by index (e.g. $ARGUMENTS[0], $ARGUMENTS[1])
+    for i in 0..10 {
+        let placeholder = format!("$ARGUMENTS[{}]", i);
+        let replacement = arg_parts.get(i).unwrap_or(&"").to_string();
+        body = body.replace(&placeholder, &replacement);
+    }
+
+    // $ARGUMENTS → full argument string (must come after indexed to avoid partial matches)
+    body = body.replace("$ARGUMENTS", &arguments);
+
+    // $N shorthand (e.g. $0, $1) — simple replacement for digits 0-9
+    for i in 0..10usize {
+        let placeholder = format!("${}", i);
+        let replacement = arg_parts.get(i).unwrap_or(&"").to_string();
+        // Only replace if not followed by another word character (poor man's word boundary)
+        let new_body = String::new();
+        let mut chars = body.char_indices().peekable();
+        let mut result = String::with_capacity(body.len());
+        while let Some((pos, ch)) = chars.next() {
+            if body[pos..].starts_with(&placeholder) {
+                // Check char after the placeholder
+                let after_pos = pos + placeholder.len();
+                let next_ch = body.get(after_pos..after_pos + 1).and_then(|s| s.chars().next());
+                if next_ch.map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false) {
+                    // Followed by word char — don't replace
+                    result.push(ch);
+                } else {
+                    result.push_str(&replacement);
+                    // Skip the rest of the placeholder chars
+                    for _ in 1..placeholder.len() { chars.next(); }
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        let _ = new_body; // suppress unused warning
+        body = result;
+    }
+
+    // ${CLAUDE_SKILL_DIR} → skill directory path
+    body = body.replace("${CLAUDE_SKILL_DIR}", &dir_str);
+
+    // If no placeholders were found and there are arguments, append them
+    // (matches Claude Code's appendIfNoPlaceholder behavior)
+    if !arguments.is_empty() && !had_placeholders {
+        body.push_str(&format!("\n\nARGUMENTS: {}", arguments));
+    }
+
+    Ok(ResolvedSkill {
+        name: resolved_name,
+        body,
+        allowed_tools,
+        skill_dir: dir_str,
+    })
+}
+
 #[tauri::command]
 fn get_skill_creator_path(app_handle: tauri::AppHandle) -> Result<String, String> {
     // Production: bundled in resource dir
@@ -2423,7 +2592,7 @@ fn party_mode_status(state: tauri::State<'_, AppState>) -> Result<bool, String> 
 // ── Browser (native webview) commands ──
 
 #[tauri::command]
-fn create_browser(
+async fn create_browser(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
@@ -2655,6 +2824,7 @@ pub fn run() {
             delete_skill,
             update_skill_meta,
             read_skill_content,
+            resolve_skill_prompt,
             get_skill_creator_path,
             ensure_skills_plugin,
         ])

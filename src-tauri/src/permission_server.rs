@@ -438,8 +438,10 @@ fn handle_connection(
         let resp = serde_json::json!({
             "hookSpecificOutput": {
                 "hookEventName": "PermissionRequest",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": "Unknown session — denied for safety"
+                "decision": {
+                    "behavior": "deny",
+                    "message": "Unknown session — denied for safety"
+                }
             }
         });
         send_http(&mut stream, 200, &resp.to_string());
@@ -483,13 +485,26 @@ fn handle_connection(
     let decision = if allow { "allow" } else { "deny" };
     safe_eprintln!("[perm-server] Resolved {}: {}", request_id, decision);
 
-    let resp = serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PermissionRequest",
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason
-        }
-    });
+    let resp = if allow {
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {
+                    "behavior": "allow"
+                }
+            }
+        })
+    } else {
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {
+                    "behavior": "deny",
+                    "message": reason
+                }
+            }
+        })
+    };
     send_http(&mut stream, 200, &resp.to_string());
 
     Ok(())

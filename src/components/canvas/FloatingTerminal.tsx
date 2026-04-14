@@ -49,9 +49,11 @@ export default function FloatingTerminal({ term }: FloatingTerminalProps) {
   termRef.current = term;
 
   const handleActivity = useCallback(() => {
-    setIsWorking(true);
-    if (workTimer.current) clearTimeout(workTimer.current);
-    workTimer.current = setTimeout(() => setIsWorking(false), ACTIVITY_TIMEOUT_MS);
+    // Only set working=true once; just bump the timeout on subsequent calls.
+    // This prevents the border from flickering when output arrives continuously.
+    if (!workTimer.current) setIsWorking(true);
+    else clearTimeout(workTimer.current);
+    workTimer.current = setTimeout(() => { workTimer.current = null; setIsWorking(false); }, ACTIVITY_TIMEOUT_MS);
   }, []);
 
   useEffect(() => {

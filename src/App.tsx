@@ -255,7 +255,7 @@ function App() {
       {/* Header */}
       <div className="header">
         <div className="header-brand" data-tauri-drag-region>
-          <img src="/icons/32x32.png" alt="Terminal 64" className="brand-icon" />
+          <span className="brand-text">&gt;64_</span>
         </div>
 
         <button
