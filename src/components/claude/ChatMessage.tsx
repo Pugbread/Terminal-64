@@ -626,12 +626,14 @@ function ChatMessageInner({ message, onRewind, onFork, onEditClick }: {
     };
   }, [message.content]);
 
+  const renderedContent = useMemo(() => cleanContent ? renderContent(cleanContent) : null, [cleanContent]);
+
   return (
     <div className="cc-message cc-message--assistant">
       {menuBtn}
-      {cleanContent && (
+      {renderedContent && (
         <div className="cc-bubble cc-bubble--assistant">
-          {renderContent(cleanContent)}
+          {renderedContent}
         </div>
       )}
       {delegationBlock && <DelegationPlanBadge block={delegationBlock} />}

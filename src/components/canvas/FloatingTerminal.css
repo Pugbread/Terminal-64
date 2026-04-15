@@ -251,8 +251,7 @@ input.ft-title--editing {
   pointer-events: none;
 }
 
-.ft-widget-hover-zone:hover + .ft-header--widget,
-.ft-header--widget:hover {
+.ft-header--widget-visible {
   opacity: 1;
   max-height: 32px;
   padding: 0 8px 0 14px;

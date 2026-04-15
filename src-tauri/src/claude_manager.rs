@@ -341,6 +341,15 @@ pub fn resolve_openwolf_path() -> String {
     return CACHED.get_or_init(resolve_openwolf_path_inner).clone();
 }
 
+/// PATH that includes common locations for node, npm, pm2.
+pub fn openwolf_env_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let existing = std::env::var("PATH").unwrap_or_default();
+    format!(
+        "/opt/homebrew/bin:/usr/local/bin:{home}/.cargo/bin:{home}/.npm-global/bin:/opt/homebrew/lib/node_modules/.bin:{existing}"
+    )
+}
+
 fn resolve_openwolf_path_inner() -> String {
     let lookup = {
         let (cmd, arg) = if cfg!(windows) { ("where", "openwolf.exe") } else { ("which", "openwolf") };
@@ -411,6 +420,7 @@ pub fn ensure_openwolf(cwd: &str, auto_init: bool) -> bool {
     let mut cmd = Command::new(&wolf_bin);
     cmd.arg("init")
         .current_dir(cwd)
+        .env("PATH", openwolf_env_path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());

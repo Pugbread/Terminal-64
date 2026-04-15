@@ -74,12 +74,11 @@ function subscribe(topic) {
 
 // ---- State ----
 
-let activePanel = "tokens";
+let activePanel = "anatomy";
 let themeColors = {};
 let projectCwd = ".";
 
 // Data caches
-let tokenData = null;
 let anatomyData = null;
 let memoryData = null;
 let bugData = null;
@@ -98,30 +97,60 @@ window.addEventListener("message", (e) => {
         themeColors = p.theme.ui || {};
         applyTheme(p.theme);
       }
-      // Try to get CWD from first session
-      const sessions = p.sessions || {};
-      const first = Object.values(sessions)[0];
-      if (first && first.cwd) projectCwd = first.cwd;
-      loadAllPanels();
+      // Load saved project dir, then load panels
+      loadSavedProject();
       break;
     }
 
     case "t64:broadcast": {
       const { topic, data } = msg.payload || {};
       if (topic === "wolf:updated") {
-        // OpenWolf data changed — refresh affected panels
         loadAllPanels();
       }
       break;
     }
 
-    case "t64:session-created": {
-      const { cwd } = msg.payload || {};
-      if (cwd) projectCwd = cwd;
+    case "t64:directory-picked": {
+      const { path } = msg.payload || {};
+      if (path) {
+        projectCwd = path;
+        updateProjectDisplay();
+        setState("pi-project-cwd", projectCwd).catch(() => {});
+        loadAllPanels();
+      }
       break;
     }
   }
 });
+
+async function loadSavedProject() {
+  try {
+    const saved = await getState("pi-project-cwd");
+    if (saved) {
+      projectCwd = saved;
+    }
+  } catch {}
+  updateProjectDisplay();
+  loadAllPanels();
+}
+
+function updateProjectDisplay() {
+  const el = document.getElementById("projectPath");
+  if (!el) return;
+  if (projectCwd && projectCwd !== ".") {
+    el.textContent = projectCwd;
+    el.classList.remove("pi-project-path--none");
+  } else {
+    el.textContent = "No project selected";
+    el.classList.add("pi-project-path--none");
+  }
+}
+
+function pickDirectory() {
+  post("t64:pick-directory", { id: nextId() });
+}
+
+document.getElementById("pickDir").addEventListener("click", pickDirectory);
 
 // Request initial state
 post("t64:request-state", {});
@@ -164,6 +193,14 @@ tabBar.addEventListener("click", (e) => {
 
   activePanel = panel;
   savePrefs();
+
+  // Re-render panels that need layout dimensions (hidden panels have 0x0 rects)
+  if (panel === "anatomy" && anatomyData && anatomyData.length > 0) {
+    requestAnimationFrame(() => {
+      const container = document.getElementById("treemapContainer");
+      if (container) renderTreemap(container, anatomyData);
+    });
+  }
 });
 
 // ---- Refresh ----
@@ -173,7 +210,6 @@ document.getElementById("refreshAll").addEventListener("click", () => {
 });
 
 function loadAllPanels() {
-  loadTokens();
   loadAnatomy();
   loadMemory();
   loadBugs();
@@ -205,128 +241,6 @@ function savePrefs() {
 }
 
 loadPrefs();
-
-// ============================================================
-// PANEL 1: Token Usage
-// ============================================================
-
-async function loadTokens() {
-  const chart = document.getElementById("tokenChart");
-  const empty = document.getElementById("tokenEmpty");
-  const summary = document.getElementById("tokenSummary");
-  const wrap = chart.parentElement;
-
-  try {
-    const raw = await readFile(`${projectCwd}/.wolf/token-ledger.json`);
-    tokenData = JSON.parse(raw);
-
-    if (!tokenData || !tokenData.sessions || tokenData.sessions.length === 0) {
-      chart.parentElement.style.display = "none";
-      empty.style.display = "flex";
-      return;
-    }
-
-    wrap.style.display = "block";
-    empty.style.display = "none";
-
-    const sessions = tokenData.sessions;
-    const totalTokens = sessions.reduce((s, e) => s + (e.tokens || 0), 0);
-    const totalCost = sessions.reduce((s, e) => s + (e.cost || 0), 0);
-    summary.textContent = `${formatNum(totalTokens)} tokens / $${totalCost.toFixed(2)}`;
-
-    renderTokenChart(chart, sessions);
-  } catch {
-    wrap.style.display = "none";
-    empty.style.display = "flex";
-  }
-}
-
-function renderTokenChart(canvas, sessions) {
-  const ctx = canvas.getContext("2d");
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.parentElement.getBoundingClientRect();
-  const W = rect.width - 24;
-  const H = rect.height - 24;
-  canvas.width = W * dpr;
-  canvas.height = H * dpr;
-  canvas.style.width = W + "px";
-  canvas.style.height = H + "px";
-  ctx.scale(dpr, dpr);
-
-  ctx.clearRect(0, 0, W, H);
-
-  const maxTokens = Math.max(...sessions.map(s => s.tokens || 0), 1);
-  const barCount = Math.min(sessions.length, 30);
-  const data = sessions.slice(-barCount);
-  const gap = 4;
-  const barW = Math.max(4, (W - 40) / barCount - gap);
-  const chartH = H - 40;
-  const startX = 30;
-
-  // Y-axis labels
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--pi-fg-muted").trim() || "#6c7086";
-  ctx.font = "9px 'Cascadia Code', monospace";
-  ctx.textAlign = "right";
-  for (let i = 0; i <= 4; i++) {
-    const y = 10 + (chartH / 4) * i;
-    const val = maxTokens - (maxTokens / 4) * i;
-    ctx.fillText(formatNum(Math.round(val)), startX - 4, y + 3);
-    // Grid line
-    ctx.strokeStyle = "rgba(49,50,68,0.4)";
-    ctx.lineWidth = 0.5;
-    ctx.beginPath();
-    ctx.moveTo(startX, y);
-    ctx.lineTo(W, y);
-    ctx.stroke();
-  }
-
-  // Bars
-  const colors = [
-    "#89b4fa", "#cba6f7", "#a6e3a1", "#f9e2af", "#f38ba8",
-    "#89dceb", "#fab387", "#74c7ec", "#b4befe", "#94e2d5",
-  ];
-
-  data.forEach((entry, i) => {
-    const tokens = entry.tokens || 0;
-    const barH = (tokens / maxTokens) * chartH;
-    const x = startX + i * (barW + gap);
-    const y = 10 + chartH - barH;
-    const color = colors[i % colors.length];
-
-    // Bar
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.85;
-    ctx.beginPath();
-    roundRect(ctx, x, y, barW, barH, 3);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-
-    // Label (session name, rotated)
-    if (barW > 12) {
-      ctx.save();
-      ctx.translate(x + barW / 2, H - 2);
-      ctx.rotate(-Math.PI / 4);
-      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--pi-fg-muted").trim() || "#6c7086";
-      ctx.font = "8px 'Cascadia Code', monospace";
-      ctx.textAlign = "right";
-      const label = (entry.name || entry.session_id || `#${i + 1}`).slice(0, 12);
-      ctx.fillText(label, 0, 0);
-      ctx.restore();
-    }
-  });
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  r = Math.min(r, w / 2, h / 2);
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h);
-  ctx.lineTo(x, y + h);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
 
 function formatNum(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -367,47 +281,31 @@ async function loadAnatomy() {
 }
 
 /**
- * Parse anatomy.md — expects format like:
- * ## filename.ext
- * - Tokens: 1234
- * - Description: ...
- *
- * Or a table format:
- * | File | Tokens | Description |
+ * Parse anatomy.md — OpenWolf format:
+ * ## src-tauri/src/
+ * - `lib.rs` — Safe stderr logging (~34532 tok)
+ * - `main.rs` (~51 tok)
  */
 function parseAnatomyMd(raw) {
   const files = [];
-  // Try header-based format first
-  const sections = raw.split(/^## /m).filter(Boolean);
-  if (sections.length > 1) {
-    for (const section of sections) {
-      const lines = section.trim().split("\n");
-      const name = lines[0].trim();
-      let tokens = 0;
-      let desc = "";
-      for (const line of lines.slice(1)) {
-        const tokMatch = line.match(/tokens?\s*:\s*([\d,]+)/i);
-        if (tokMatch) tokens = parseInt(tokMatch[1].replace(/,/g, ""), 10);
-        const descMatch = line.match(/description\s*:\s*(.+)/i);
-        if (descMatch) desc = descMatch[1].trim();
-      }
-      if (name && tokens > 0) files.push({ name, tokens, desc });
-    }
-    return files;
-  }
+  let currentDir = "";
 
-  // Try table format
-  const tableLines = raw.split("\n").filter(l => l.includes("|") && !l.match(/^[\s|:-]+$/));
-  const headerLine = tableLines[0];
-  if (headerLine) {
-    for (const line of tableLines.slice(1)) {
-      const cols = line.split("|").map(c => c.trim()).filter(Boolean);
-      if (cols.length >= 2) {
-        const name = cols[0];
-        const tokens = parseInt((cols[1] || "0").replace(/[,\s]/g, ""), 10);
-        const desc = cols[2] || "";
-        if (name && tokens > 0) files.push({ name, tokens, desc });
-      }
+  for (const line of raw.split("\n")) {
+    // Directory header: ## src-tauri/src/
+    const dirMatch = line.match(/^##\s+(.+)/);
+    if (dirMatch) {
+      currentDir = dirMatch[1].trim().replace(/^\.\//, "");
+      continue;
+    }
+
+    // File entry: - `filename` — description (~NNN tok)
+    const fileMatch = line.match(/^-\s+`([^`]+)`\s*(?:—\s*(.+?))?\s*\(~(\d+)\s*tok\)/);
+    if (fileMatch) {
+      const filename = fileMatch[1];
+      const desc = (fileMatch[2] || "").trim();
+      const tokens = parseInt(fileMatch[3], 10);
+      const fullPath = currentDir ? currentDir + filename : filename;
+      if (tokens > 0) files.push({ name: fullPath, tokens, desc });
     }
   }
 
@@ -589,8 +487,16 @@ function parseCerebrumMd(raw) {
       currentType = "dnr";
       continue;
     }
-    if (/^#{1,3}\s.*(preference|learned|remember)/i.test(line)) {
+    if (/^#{1,3}\s.*decision/i.test(line)) {
+      currentType = "decision";
+      continue;
+    }
+    if (/^#{1,3}\s.*(preference|user pref)/i.test(line)) {
       currentType = "pref";
+      continue;
+    }
+    if (/^#{1,3}\s.*(learn|key learn)/i.test(line)) {
+      currentType = "learning";
       continue;
     }
 
@@ -632,9 +538,9 @@ function renderMemoryCards() {
     const card = document.createElement("div");
     card.className = `pi-card pi-card--${entry.type}`;
     card.innerHTML = `
-      <div class="pi-card-type">${entry.type === "dnr" ? "Do-Not-Repeat" : "Preference"}</div>
-      <div class="pi-card-text">${escHtml(entry.text)}</div>
-      ${entry.context ? `<div class="pi-card-context">${escHtml(entry.context)}</div>` : ""}
+      <div class="pi-card-type">${({ dnr: "Do-Not-Repeat", pref: "Preference", learning: "Learning", decision: "Decision" })[entry.type] || entry.type}</div>
+      <div class="pi-card-text">${renderMd(entry.text)}</div>
+      ${entry.context ? `<div class="pi-card-context">${renderMd(entry.context)}</div>` : ""}
     `;
     cards.appendChild(card);
   }
@@ -814,6 +720,13 @@ async function doSemanticSearch() {
 // Utilities
 // ============================================================
 
+function renderMd(str) {
+  if (!str) return "";
+  return escHtml(str)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
 function escHtml(str) {
   if (!str) return "";
   return String(str)
@@ -845,10 +758,6 @@ let resizeTimer;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (activePanel === "tokens" && tokenData) {
-      const chart = document.getElementById("tokenChart");
-      renderTokenChart(chart, tokenData.sessions);
-    }
     if (activePanel === "anatomy" && anatomyData) {
       const container = document.getElementById("treemapContainer");
       renderTreemap(container, anatomyData);

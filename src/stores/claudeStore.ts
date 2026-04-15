@@ -83,6 +83,7 @@ export interface ClaudeSession {
   autoCompactStartedAt: number | null; // timestamp when compacting began
   resumeAtUuid: string | null; // JSONL UUID for --resume-session-at after rewind (one-shot, cleared after use)
   forkParentSessionId: string | null; // parent session ID for --fork-session (one-shot, cleared after use)
+  skipOpenwolf: boolean; // true for widget/skill sessions — prevents .wolf/ init
   // Hook event tracking
   toolUsageStats: Record<string, number>; // tool name → invocation count (from PostToolUse)
   compactionCount: number; // number of compactions (from PostCompact)
@@ -264,6 +265,7 @@ function loadSession(sessionId: string): ClaudeSession | null {
       autoCompactStartedAt: null,
       resumeAtUuid: null,
       forkParentSessionId: null,
+      skipOpenwolf: saved.skipOpenwolf || false,
       toolUsageStats: {},
       compactionCount: 0,
       subagentIds: [],
@@ -313,7 +315,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
           model: "", totalCost: 0, totalTokens: 0, contextUsed: 0, contextMax: 0, error: null, promptCount: 0, planModeActive: false,
           pendingQuestions: null, pendingPermission: null, name: initialName || "", cwd: "",
           promptQueue: [], hasBeenStarted: false, draftPrompt: "", activeLoop: null, ephemeral: !!ephemeral, mcpServers: [], modifiedFiles: [], autoCompactStatus: "idle" as const, autoCompactStartedAt: null, resumeAtUuid: null, forkParentSessionId: null,
-          toolUsageStats: {}, compactionCount: 0, subagentIds: [], hookEventLog: [],
+          skipOpenwolf: false, toolUsageStats: {}, compactionCount: 0, subagentIds: [], hookEventLog: [],
         },
       };
       if (!ephemeral) debouncedSave();
@@ -383,16 +385,17 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
       const session = s.sessions[sessionId];
       if (!session) return s;
 
-      // Find the last assistant message that has this toolCall
-      const messages = [...session.messages];
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
+      // Find the last assistant message that has this toolCall (scan backwards)
+      const msgs = session.messages;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const msg = msgs[i];
         if (msg.role === "assistant" && msg.toolCalls) {
-          const tc = msg.toolCalls.find((t) => t.id === toolUseId);
-          if (tc) {
-            const updatedToolCalls = msg.toolCalls.map((t) =>
-              t.id === toolUseId ? { ...t, result, isError } : t
-            );
+          const tcIdx = msg.toolCalls.findIndex((t) => t.id === toolUseId);
+          if (tcIdx >= 0) {
+            // Only copy the one message that changed instead of the full array
+            const updatedToolCalls = msg.toolCalls.slice();
+            updatedToolCalls[tcIdx] = { ...updatedToolCalls[tcIdx], result, isError };
+            const messages = msgs.slice();
             messages[i] = { ...msg, toolCalls: updatedToolCalls };
             const updated = updateSession(s.sessions, sessionId, { messages });
             debouncedSave();

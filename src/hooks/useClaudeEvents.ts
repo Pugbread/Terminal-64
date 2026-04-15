@@ -81,6 +81,7 @@ interface ClaudeStreamEvent {
 const sessionToolMaps = new Map<string, Map<string, string>>();
 const sessionFilePathMaps = new Map<string, Map<string, string>>();
 
+const MAX_TOOL_MAP_ENTRIES = 2000;
 function getSessionMap(store: Map<string, Map<string, string>>, sessionId: string): Map<string, string> {
   let map = store.get(sessionId);
   if (!map) {
@@ -88,6 +89,14 @@ function getSessionMap(store: Map<string, Map<string, string>>, sessionId: strin
     store.set(sessionId, map);
   }
   return map;
+}
+
+function evictIfNeeded(map: Map<string, string>) {
+  if (map.size > MAX_TOOL_MAP_ENTRIES) {
+    const excess = map.size - MAX_TOOL_MAP_ENTRIES;
+    const iter = map.keys();
+    for (let i = 0; i < excess; i++) { map.delete(iter.next().value!); }
+  }
 }
 
 // RAF batching for streaming text — coalesces deltas into one store update per frame
@@ -160,10 +169,14 @@ function processContentArray(
       const name = block.name ?? "";
       const blockId = block.id ?? "";
       const input = block.input || {};
-      getSessionMap(sessionToolMaps, session_id).set(blockId, name);
+      const toolMap = getSessionMap(sessionToolMaps, session_id);
+      toolMap.set(blockId, name);
+      evictIfNeeded(toolMap);
 
       if ((name === "Write" || name === "Edit" || name === "MultiEdit") && input.file_path) {
-        getSessionMap(sessionFilePathMaps, session_id).set(blockId, String(input.file_path));
+        const fileMap = getSessionMap(sessionFilePathMaps, session_id);
+        fileMap.set(blockId, String(input.file_path));
+        evictIfNeeded(fileMap);
       }
 
       if (name === "EnterPlanMode") {

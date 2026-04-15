@@ -109,7 +109,6 @@ struct AppState {
     browser_manager: BrowserManager,
     widget_server: WidgetServer,
     vector_store: Arc<Mutex<Option<VectorStore>>>,
-    openwolf_daemon: Mutex<Option<std::process::Child>>,
 }
 
 #[tauri::command]
@@ -1325,63 +1324,89 @@ fn discord_bot_status(state: tauri::State<'_, AppState>) -> Result<bool, String>
 // ── OpenWolf daemon management ─────────────────────────────
 
 #[tauri::command]
-fn start_openwolf_daemon(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut daemon = state.openwolf_daemon.lock().map_err(|e| e.to_string())?;
-    // Kill any existing daemon first
-    if let Some(mut child) = daemon.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-
+fn start_openwolf_daemon(cwd: String) -> Result<(), String> {
     let wolf_bin = claude_manager::resolve_openwolf_path();
-    let mut cmd = std::process::Command::new(&wolf_bin);
-    cmd.arg("daemon")
-        .arg("start")
-        .stdout(std::process::Stdio::null())
+    let output = std::process::Command::new(&wolf_bin)
+        .args(["daemon", "start"])
+        .current_dir(&cwd)
+        .env("PATH", claude_manager::openwolf_env_path())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .stdin(std::process::Stdio::null());
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("Failed to start OpenWolf daemon: {}", e))?;
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{} {}", stdout, stderr).to_lowercase();
+
+    if combined.contains("pm2 not found") || combined.contains("pm2: not found") {
+        return Err("pm2 is required for the OpenWolf daemon. Install with: npm install -g pm2".into());
+    }
+    if combined.contains("not initialized") {
+        return Err(format!("OpenWolf not initialized in {}. Run: openwolf init", cwd));
     }
 
-    let child = cmd.spawn().map_err(|e| format!("Failed to start OpenWolf daemon: {}", e))?;
-    safe_eprintln!("[openwolf] Daemon started (pid {})", child.id());
-    *daemon = Some(child);
+    if !output.status.success() && !combined.contains("already") {
+        return Err(format!("OpenWolf daemon failed: {}", stderr.trim()));
+    }
+
+    safe_eprintln!("[openwolf] Daemon started for {}", cwd);
     Ok(())
 }
 
 #[tauri::command]
-fn stop_openwolf_daemon(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut daemon = state.openwolf_daemon.lock().map_err(|e| e.to_string())?;
-    if let Some(mut child) = daemon.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-        safe_eprintln!("[openwolf] Daemon stopped");
+fn stop_openwolf_daemon(cwd: String) -> Result<(), String> {
+    let wolf_bin = claude_manager::resolve_openwolf_path();
+    let output = std::process::Command::new(&wolf_bin)
+        .args(["daemon", "stop"])
+        .current_dir(&cwd)
+        .env("PATH", claude_manager::openwolf_env_path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("Failed to stop OpenWolf daemon: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.to_lowercase().contains("not running") {
+            return Err(format!("OpenWolf daemon stop failed: {}", stderr.trim()));
+        }
     }
+    safe_eprintln!("[openwolf] Daemon stopped for {}", cwd);
     Ok(())
 }
 
 #[tauri::command]
-fn openwolf_daemon_status(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    let mut daemon = state.openwolf_daemon.lock().map_err(|e| e.to_string())?;
-    if let Some(ref mut child) = *daemon {
-        // Check if process is still running
-        match child.try_wait() {
-            Ok(None) => Ok(true),     // still running
-            Ok(Some(_)) => {
-                *daemon = None;       // exited, clean up
-                Ok(false)
-            }
-            Err(_) => {
-                *daemon = None;
+fn openwolf_daemon_status() -> Result<bool, String> {
+    // openwolf has no `daemon status` subcommand — check pm2 directly
+    let output = std::process::Command::new("pm2")
+        .args(["jlist"])
+        .env("PATH", claude_manager::openwolf_env_path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&stdout) {
+                Ok(arr.iter().any(|proc| {
+                    let name = proc.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let status = proc
+                        .get("pm2_env")
+                        .and_then(|env| env.get("status"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    name.contains("openwolf") && status == "online"
+                }))
+            } else {
                 Ok(false)
             }
         }
-    } else {
-        Ok(false)
+        _ => Ok(false),
     }
 }
 
@@ -2803,10 +2828,7 @@ fn vector_reindex_all(
 /// Uses CARGO_MANIFEST_DIR at compile time (works reliably in dev and prod).
 #[tauri::command]
 fn install_bundled_widget(widget_name: String) -> Result<(), String> {
-    let dest_base = dirs::home_dir()
-        .ok_or("No home directory")?
-        .join(".terminal64")
-        .join("widgets");
+    let dest_base = widgets_base_dir()?;
 
     // CARGO_MANIFEST_DIR is set at compile time to src-tauri/
     let src_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2825,9 +2847,12 @@ fn install_bundled_widget(widget_name: String) -> Result<(), String> {
     let files = std::fs::read_dir(&src_dir).map_err(|e| format!("read src: {}", e))?;
     for file in files.flatten() {
         if file.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-            let dest_file = dest_dir.join(file.file_name());
+            let name = file.file_name();
+            // Don't overwrite user state
+            if name.to_string_lossy() == "state.json" { continue; }
+            let dest_file = dest_dir.join(&name);
             std::fs::copy(file.path(), &dest_file)
-                .map_err(|e| format!("copy {:?}: {}", file.file_name(), e))?;
+                .map_err(|e| format!("copy {:?}: {}", name, e))?;
         }
     }
     safe_eprintln!("[setup] Installed bundled widget: {}", widget_name);
@@ -2858,7 +2883,6 @@ pub fn run() {
                 browser_manager: BrowserManager::new(),
                 widget_server: widget_srv,
                 vector_store: Arc::new(Mutex::new(None)),
-                openwolf_daemon: Mutex::new(None),
             });
 
             // Initialize the vector store in a background thread (model download may take time)

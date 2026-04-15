@@ -24,6 +24,21 @@ import "./ClaudeChat.css";
 
 let monacoThemeForBg = "";
 
+/** Isolated streaming text component — subscribes only to streamingText,
+ *  so updates don't re-render the entire message list. */
+function StreamingBubble({ sessionId }: { sessionId: string }) {
+  const text = useClaudeStore((s) => s.sessions[sessionId]?.streamingText);
+  if (!text) return null;
+  return (
+    <div className="cc-message cc-message--assistant">
+      <div className="cc-bubble cc-bubble--assistant cc-bubble--streaming">
+        {text}
+        <span className="cc-cursor" />
+      </div>
+    </div>
+  );
+}
+
 function guessLanguage(filePath: string): string {
   const ext = filePath.split(".").pop()?.toLowerCase() || "";
   const map: Record<string, string> = {
@@ -258,12 +273,17 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     if (el) el.scrollTop = el.scrollHeight;
   }, [session?.pendingPermission]);
 
-  // Streaming text — instant scroll if sticky (fires frequently, must be cheap)
+  // Streaming text scroll — side-effect-only subscription so it doesn't re-render the component
   useEffect(() => {
-    if (!session?.streamingText || !stickyBottom.current) return;
-    const el = chatBodyRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [session?.streamingText]);
+    return useClaudeStore.subscribe((state, prev) => {
+      const text = state.sessions[sessionId]?.streamingText;
+      const prevText = prev.sessions[sessionId]?.streamingText;
+      if (text && text !== prevText && stickyBottom.current) {
+        const el = chatBodyRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      }
+    });
+  }, [sessionId]);
   useEffect(() => {
     const handler = () => { setShowModelDrop(false); setShowEffortDrop(false); setShowMcpDrop(false); };
     window.addEventListener("click", handler);
@@ -1082,6 +1102,76 @@ Coordinate actively. If another agent is working on a file you need, mention it 
     if (hasSideContent && !sidePanelOpen) setSidePanelOpen(true);
   }, [hasSideContent]);
 
+  // Memoize the message list — must be before the early return to keep hook order stable.
+  // Returns empty when session is null (pre-init).
+  const messageElements = useMemo(() => {
+    if (!session) return [];
+    const elements: React.ReactNode[] = [];
+    const allMsgs = session.messages;
+    const startIdx = Math.max(0, allMsgs.length - visibleCount);
+    const msgs = allMsgs.slice(startIdx);
+    if (startIdx > 0) {
+      elements.push(
+        <div key="load-more" className="cc-load-more" onClick={() => setVisibleCount((v) => Math.min(v + LOAD_MORE_BATCH, allMsgs.length))}>
+          ▲ {startIdx} older message{startIdx !== 1 ? "s" : ""} — click or scroll up to load
+        </div>
+      );
+    }
+    let i = 0;
+    let lastUserTs: number | null = null;
+    while (i < msgs.length) {
+      const msg = msgs[i];
+      if (msg.role === "user" && lastUserTs !== null && i > 0 && msgs[i - 1].role === "assistant") {
+        const dur = msgs[i - 1].timestamp - lastUserTs;
+        if (dur > 2000) {
+          elements.push(
+            <div key={`fin-${i}`} className="cc-turn-divider">
+              <span className="cc-turn-divider-text">Finished after {formatDuration(Math.floor(dur / 1000))}</span>
+            </div>
+          );
+        }
+      }
+      if (msg.role === "user") lastUserTs = msg.timestamp;
+      if (msg.role === "assistant" && !msg.content && msg.toolCalls?.length && msg.toolCalls.every((tc) => GROUPABLE_TOOLS.has(tc.name))) {
+        const groupTcs = [...msg.toolCalls];
+        let j = i + 1;
+        while (j < msgs.length) {
+          const next = msgs[j];
+          if (next.role === "assistant" && !next.content && next.toolCalls?.length && next.toolCalls.every((tc) => GROUPABLE_TOOLS.has(tc.name))) {
+            groupTcs.push(...next.toolCalls);
+            j++;
+          } else break;
+        }
+        if (j > i + 1) {
+          elements.push(<div key={`rg-${i}`} className="cc-message cc-message--assistant"><div className="cc-tc-list"><ToolGroupCard tcs={groupTcs} /></div></div>);
+          i = j;
+          continue;
+        }
+      }
+      elements.push(<ChatMessage key={msg.id} message={msg} onRewind={handleRewind} onFork={handleFork} onEditClick={handleEditClick} />);
+      if (msg.role === "user" && /^\/compact\b/i.test(msg.content || "")) {
+        const isLastCompact = !msgs.slice(i + 1).some((m) => m.role === "user" && /^\/compact\b/i.test(m.content || ""));
+        if (isLastCompact && session.autoCompactStatus !== "idle") {
+          elements.push(<CompactDivider key={`compact-${msg.id}`} status={session.autoCompactStatus} startedAt={session.autoCompactStartedAt} />);
+        } else {
+          elements.push(<CompactDivider key={`compact-${msg.id}`} status="done" startedAt={null} />);
+        }
+      }
+      i++;
+    }
+    if (!session.isStreaming && lastUserTs !== null && msgs.length > 0 && msgs[msgs.length - 1].role === "assistant") {
+      const dur = msgs[msgs.length - 1].timestamp - lastUserTs;
+      if (dur > 2000) {
+        elements.push(
+          <div key="fin-tail" className="cc-turn-divider">
+            <span className="cc-turn-divider-text">Finished after {formatDuration(Math.floor(dur / 1000))}</span>
+          </div>
+        );
+      }
+    }
+    return elements;
+  }, [session?.messages, visibleCount, session?.autoCompactStatus, session?.isStreaming, handleRewind, handleFork, handleEditClick]);
+
   if (!session) return <div className="cc-container cc-loading">Initializing...</div>;
 
   const hasMessages = session.messages.length > 0 || session.streamingText;
@@ -1396,81 +1486,8 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                 <span className="cc-empty-sub">Send a message, type / for commands, or drop files</span>
               </div>
             )}
-            {(() => {
-              const elements: React.ReactNode[] = [];
-              const allMsgs = session.messages;
-              const startIdx = Math.max(0, allMsgs.length - visibleCount);
-              const msgs = allMsgs.slice(startIdx);
-              if (startIdx > 0) {
-                elements.push(
-                  <div key="load-more" className="cc-load-more" onClick={() => setVisibleCount((v) => Math.min(v + LOAD_MORE_BATCH, allMsgs.length))}>
-                    ▲ {startIdx} older message{startIdx !== 1 ? "s" : ""} — click or scroll up to load
-                  </div>
-                );
-              }
-              let i = 0;
-              let lastUserTs: number | null = null;
-              while (i < msgs.length) {
-                const msg = msgs[i];
-                if (msg.role === "user" && lastUserTs !== null && i > 0 && msgs[i - 1].role === "assistant") {
-                  const dur = msgs[i - 1].timestamp - lastUserTs;
-                  if (dur > 2000) {
-                    elements.push(
-                      <div key={`fin-${i}`} className="cc-turn-divider">
-                        <span className="cc-turn-divider-text">Finished after {formatDuration(Math.floor(dur / 1000))}</span>
-                      </div>
-                    );
-                  }
-                }
-                if (msg.role === "user") lastUserTs = msg.timestamp;
-                if (msg.role === "assistant" && !msg.content && msg.toolCalls?.length && msg.toolCalls.every((tc) => GROUPABLE_TOOLS.has(tc.name))) {
-                  const groupTcs = [...msg.toolCalls];
-                  let j = i + 1;
-                  while (j < msgs.length) {
-                    const next = msgs[j];
-                    if (next.role === "assistant" && !next.content && next.toolCalls?.length && next.toolCalls.every((tc) => GROUPABLE_TOOLS.has(tc.name))) {
-                      groupTcs.push(...next.toolCalls);
-                      j++;
-                    } else break;
-                  }
-                  if (j > i + 1) {
-                    elements.push(<div key={`rg-${i}`} className="cc-message cc-message--assistant"><div className="cc-tc-list"><ToolGroupCard tcs={groupTcs} /></div></div>);
-                    i = j;
-                    continue;
-                  }
-                }
-                elements.push(<ChatMessage key={msg.id} message={msg} onRewind={handleRewind} onFork={handleFork} onEditClick={handleEditClick} />);
-                if (msg.role === "user" && /^\/compact\b/i.test(msg.content || "")) {
-                  // If this is the last /compact and compaction is still in progress, show live status
-                  const isLastCompact = !msgs.slice(i + 1).some((m) => m.role === "user" && /^\/compact\b/i.test(m.content || ""));
-                  if (isLastCompact && session.autoCompactStatus !== "idle") {
-                    elements.push(<CompactDivider key={`compact-${msg.id}`} status={session.autoCompactStatus} startedAt={session.autoCompactStartedAt} />);
-                  } else {
-                    elements.push(<CompactDivider key={`compact-${msg.id}`} status="done" startedAt={null} />);
-                  }
-                }
-                i++;
-              }
-              if (!session.isStreaming && lastUserTs !== null && msgs.length > 0 && msgs[msgs.length - 1].role === "assistant") {
-                const dur = msgs[msgs.length - 1].timestamp - lastUserTs;
-                if (dur > 2000) {
-                  elements.push(
-                    <div key="fin-tail" className="cc-turn-divider">
-                      <span className="cc-turn-divider-text">Finished after {formatDuration(Math.floor(dur / 1000))}</span>
-                    </div>
-                  );
-                }
-              }
-              return elements;
-            })()}
-            {session.streamingText && (
-              <div className="cc-message cc-message--assistant">
-                <div className="cc-bubble cc-bubble--assistant cc-bubble--streaming">
-                  {session.streamingText}
-                  <span className="cc-cursor" />
-                </div>
-              </div>
-            )}
+            {messageElements}
+            <StreamingBubble sessionId={sessionId} />
             {/* Pending questions from AskUserQuestion — yields until all answered */}
             {session.pendingQuestions && (() => {
               const pq = session.pendingQuestions;

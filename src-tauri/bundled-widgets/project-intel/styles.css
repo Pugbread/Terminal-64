@@ -65,6 +65,48 @@ body {
   gap: 6px;
 }
 
+/* ---- Project Bar ---- */
+
+.pi-project-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: var(--pi-bg);
+  border-bottom: 1px solid var(--pi-border);
+  flex-shrink: 0;
+  min-height: 32px;
+}
+
+.pi-project-label {
+  color: var(--pi-fg-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.pi-project-path {
+  color: var(--pi-accent);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  direction: rtl;
+  text-align: left;
+}
+
+.pi-project-path--none {
+  color: var(--pi-fg-muted);
+  font-style: italic;
+}
+
+.pi-btn--folder {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
 /* ---- Buttons ---- */
 
 .pi-btn {
@@ -338,6 +380,14 @@ body {
   border-left-color: var(--pi-accent);
 }
 
+.pi-card--learning {
+  border-left-color: var(--pi-green);
+}
+
+.pi-card--decision {
+  border-left-color: var(--pi-yellow);
+}
+
 .pi-card-type {
   font-size: 9px;
   font-weight: 700;
@@ -348,6 +398,8 @@ body {
 
 .pi-card--dnr .pi-card-type { color: var(--pi-red); }
 .pi-card--pref .pi-card-type { color: var(--pi-accent); }
+.pi-card--learning .pi-card-type { color: var(--pi-green); }
+.pi-card--decision .pi-card-type { color: var(--pi-yellow); }
 
 .pi-card-text {
   font-size: 12px;

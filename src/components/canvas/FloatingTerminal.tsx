@@ -59,6 +59,7 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
   useEffect(() => {
     return () => {
       if (workTimer.current) clearTimeout(workTimer.current);
+      if (widgetBarTimer.current) clearTimeout(widgetBarTimer.current);
       // Clean up ALL lingering drag/resize window listeners on unmount
       for (const fn of cleanupFns.current) fn();
       cleanupFns.current.clear();
@@ -272,6 +273,16 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const [widgetBarVisible, setWidgetBarVisible] = useState(false);
+  const widgetBarTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showWidgetBar = useCallback(() => {
+    if (widgetBarTimer.current) clearTimeout(widgetBarTimer.current);
+    setWidgetBarVisible(true);
+  }, []);
+  const hideWidgetBar = useCallback(() => {
+    if (widgetBarTimer.current) clearTimeout(widgetBarTimer.current);
+    widgetBarTimer.current = setTimeout(() => setWidgetBarVisible(false), 300);
+  }, []);
 
   return (
     <div
@@ -286,9 +297,14 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
       } as React.CSSProperties}
       onMouseDown={handleFocus}
     >
-      {/* Header — widgets wrap in hover zone */}
-      {isWidget && <div className="ft-widget-hover-zone" />}
-      <div className={`ft-header ${isWidget ? "ft-header--widget" : ""}`} onMouseDown={handleHeaderMouseDown}>
+      {/* Header — widgets use a hover zone to reveal the topbar */}
+      {isWidget && <div className="ft-widget-hover-zone" onMouseEnter={showWidgetBar} onMouseLeave={hideWidgetBar} />}
+      <div
+        className={`ft-header ${isWidget ? "ft-header--widget" : ""} ${isWidget && widgetBarVisible ? "ft-header--widget-visible" : ""}`}
+        onMouseDown={handleHeaderMouseDown}
+        onMouseEnter={isWidget ? showWidgetBar : undefined}
+        onMouseLeave={isWidget ? hideWidgetBar : undefined}
+      >
         {isClaude ? (
           editingName ? (
             <>

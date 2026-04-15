@@ -546,6 +546,12 @@ export default function ChatInput({ onSend, onCancel, onAttach, onRewrite, isRew
       )}
 
       <div className="cc-input-row" style={{ position: "relative" }}>
+        {isStreaming && (
+          <>
+            <div className="cc-beam"><div className="cc-beam-inner" /></div>
+            <div className="cc-beam-glow" />
+          </>
+        )}
         <span className="cc-prompt">&gt;</span>
         <div className="cc-textarea-wrap">
           {/* Styled overlay — renders behind the textarea */}

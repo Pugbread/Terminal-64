@@ -181,7 +181,7 @@ export default function SkillDialog({ isOpen, onClose }: SkillDialogProps) {
         canvasStore: useCanvasStore,
         claudeStore: useClaudeStore,
         settingsStore: useSettingsStore,
-      }));
+      }), { skipOpenwolf: true });
       onClose();
     } catch (err) {
       console.warn("[skill] Failed to create:", err);

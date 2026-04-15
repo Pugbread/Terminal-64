@@ -19,6 +19,7 @@ import "./XTerminal.css";
 // instead of silently failing.
 const MAX_WEBGL_CONTEXTS = 10;
 let activeWebglCount = 0;
+function releaseWebgl() { activeWebglCount = Math.max(0, activeWebglCount - 1); }
 
 interface XTerminalProps {
   terminalId: string;
@@ -67,7 +68,7 @@ export default function XTerminal({
     if (bgAlpha < 1 && webglRef.current) {
       webglRef.current.dispose();
       webglRef.current = null;
-      activeWebglCount--;
+      releaseWebgl();
     }
 
     if (bgAlpha < 1) {
@@ -93,7 +94,7 @@ export default function XTerminal({
     if (bgAlpha >= 1 && !webglRef.current && activeWebglCount < MAX_WEBGL_CONTEXTS) {
       try {
         const addon = new WebglAddon();
-        addon.onContextLoss(() => { addon.dispose(); webglRef.current = null; activeWebglCount--; });
+        addon.onContextLoss(() => { addon.dispose(); webglRef.current = null; releaseWebgl(); });
         term.loadAddon(addon);
         webglRef.current = addon;
         activeWebglCount++;
@@ -173,7 +174,7 @@ export default function XTerminal({
     if (currentAlpha >= 1 && activeWebglCount < MAX_WEBGL_CONTEXTS) {
       try {
         const addon = new WebglAddon();
-        addon.onContextLoss(() => { addon.dispose(); webglRef.current = null; activeWebglCount--; });
+        addon.onContextLoss(() => { addon.dispose(); webglRef.current = null; releaseWebgl(); });
         term.loadAddon(addon);
         webglRef.current = addon;
         activeWebglCount++;
@@ -343,7 +344,7 @@ export default function XTerminal({
       if (webglRef.current) {
         webglRef.current.dispose();
         webglRef.current = null;
-        activeWebglCount--;
+        releaseWebgl();
       }
       term.dispose();
       termRef.current = null;

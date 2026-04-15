@@ -7,6 +7,7 @@ import "./SettingsPanel.css";
 
 import { FONT_OPTIONS, fontStack } from "../../lib/fonts";
 import { ThemeDefinition } from "../../lib/types";
+import { useClaudeStore } from "../../stores/claudeStore";
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -83,6 +84,13 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   const openwolfDesignQC = useSettingsStore((s) => s.openwolfDesignQC);
   const [wolfDaemonRunning, setWolfDaemonRunning] = useState(false);
   const [wolfDaemonLoading, setWolfDaemonLoading] = useState(false);
+
+  const wolfCwd = useClaudeStore((s) => {
+    for (const sid in s.sessions) {
+      if (s.sessions[sid].cwd) return s.sessions[sid].cwd;
+    }
+    return "";
+  });
 
   const discordToken = useSettingsStore((s) => s.discordBotToken);
   const discordServerId = useSettingsStore((s) => s.discordServerId);
@@ -370,16 +378,17 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
 
                 <button
                   className={`sp-btn sp-btn--wide ${wolfDaemonRunning ? "sp-btn--danger" : ""}`}
-                  disabled={wolfDaemonLoading}
+                  disabled={wolfDaemonLoading || !wolfCwd}
+                  title={!wolfCwd ? "Open a Claude session first so the daemon knows which project to watch" : ""}
                   onClick={async () => {
                     setWolfDaemonLoading(true);
                     try {
                       if (wolfDaemonRunning) {
-                        await stopOpenwolfDaemon();
+                        await stopOpenwolfDaemon(wolfCwd);
                         setWolfDaemonRunning(false);
                         setSetting({ openwolfDaemon: false });
                       } else {
-                        await startOpenwolfDaemon();
+                        await startOpenwolfDaemon(wolfCwd);
                         setWolfDaemonRunning(true);
                         setSetting({ openwolfDaemon: true });
                       }

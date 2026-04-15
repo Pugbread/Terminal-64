@@ -15,33 +15,22 @@
       </div>
     </header>
 
+    <div class="pi-project-bar" id="projectBar">
+      <span class="pi-project-label">Project:</span>
+      <span class="pi-project-path" id="projectPath">No project selected</span>
+      <button class="pi-btn pi-btn--folder" id="pickDir" title="Select project directory">&#x1f4c1;</button>
+    </div>
+
     <nav class="pi-tabs" id="tabBar">
-      <button class="pi-tab pi-tab--active" data-panel="tokens">Tokens</button>
-      <button class="pi-tab" data-panel="anatomy">File Anatomy</button>
+      <button class="pi-tab pi-tab--active" data-panel="anatomy">File Anatomy</button>
       <button class="pi-tab" data-panel="memory">Learning Memory</button>
       <button class="pi-tab" data-panel="bugs">Bug Log</button>
       <button class="pi-tab" data-panel="search">Semantic Search</button>
     </nav>
 
     <main class="pi-content">
-      <!-- Token Usage Panel -->
-      <section class="pi-panel" id="panel-tokens">
-        <div class="pi-panel-header">
-          <h2>Token Usage</h2>
-          <span class="pi-panel-sub" id="tokenSummary"></span>
-        </div>
-        <div class="pi-chart-wrap">
-          <canvas id="tokenChart"></canvas>
-        </div>
-        <div class="pi-empty" id="tokenEmpty" style="display:none">
-          <span class="pi-empty-icon">&#x1f4ca;</span>
-          <p>No token data yet.</p>
-          <p class="pi-empty-hint">Token ledger will appear at <code>.wolf/token-ledger.json</code></p>
-        </div>
-      </section>
-
       <!-- File Anatomy Panel -->
-      <section class="pi-panel pi-panel--hidden" id="panel-anatomy">
+      <section class="pi-panel" id="panel-anatomy">
         <div class="pi-panel-header">
           <h2>File Anatomy</h2>
           <span class="pi-panel-sub" id="anatomySummary"></span>
@@ -61,8 +50,10 @@
           <h2>Learning Memory</h2>
           <div class="pi-filter-row">
             <button class="pi-filter pi-filter--active" data-filter="all">All</button>
+            <button class="pi-filter" data-filter="learning">Learnings</button>
             <button class="pi-filter" data-filter="dnr">Do-Not-Repeat</button>
             <button class="pi-filter" data-filter="pref">Preferences</button>
+            <button class="pi-filter" data-filter="decision">Decisions</button>
           </div>
         </div>
         <div class="pi-cards" id="memoryCards"></div>

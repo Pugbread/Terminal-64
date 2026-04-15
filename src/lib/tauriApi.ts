@@ -66,8 +66,14 @@ function getOpenwolfSettings(): { enabled: boolean; autoInit: boolean; designQc:
   return { enabled: false, autoInit: true, designQc: false };
 }
 
-export async function createClaudeSession(req: CreateClaudeRequest): Promise<void> {
-  const ow = getOpenwolfSettings();
+export async function createClaudeSession(req: CreateClaudeRequest, skipOpenwolf?: boolean): Promise<void> {
+  // Auto-detect from session store if not explicitly passed
+  if (skipOpenwolf == null) {
+    const { useClaudeStore } = await import("../stores/claudeStore");
+    const session = useClaudeStore.getState().sessions[req.session_id];
+    skipOpenwolf = session?.skipOpenwolf;
+  }
+  const ow = skipOpenwolf ? { enabled: false, autoInit: false, designQc: false } : getOpenwolfSettings();
   return invoke("create_claude_session", {
     req,
     openwolfEnabled: ow.enabled,
@@ -77,7 +83,11 @@ export async function createClaudeSession(req: CreateClaudeRequest): Promise<voi
 }
 
 export async function sendClaudePrompt(req: SendClaudePromptRequest): Promise<void> {
-  const ow = getOpenwolfSettings();
+  // Auto-detect skipOpenwolf from session store (widget/skill sessions)
+  const { useClaudeStore } = await import("../stores/claudeStore");
+  const session = useClaudeStore.getState().sessions[req.session_id];
+  const skip = session?.skipOpenwolf;
+  const ow = skip ? { enabled: false, autoInit: false, designQc: false } : getOpenwolfSettings();
   return invoke("send_claude_prompt", {
     req,
     openwolfEnabled: ow.enabled,
@@ -523,12 +533,12 @@ export function onPartyModeSpectrum(
 
 // OpenWolf daemon commands
 
-export async function startOpenwolfDaemon(): Promise<void> {
-  return invoke("start_openwolf_daemon");
+export async function startOpenwolfDaemon(cwd: string): Promise<void> {
+  return invoke("start_openwolf_daemon", { cwd });
 }
 
-export async function stopOpenwolfDaemon(): Promise<void> {
-  return invoke("stop_openwolf_daemon");
+export async function stopOpenwolfDaemon(cwd: string): Promise<void> {
+  return invoke("stop_openwolf_daemon", { cwd });
 }
 
 export async function openwolfDaemonStatus(): Promise<boolean> {
@@ -583,6 +593,7 @@ export function spawnClaudeWithPrompt(
     claudeStore: { getState: () => any };
     settingsStore: { getState: () => any };
   },
+  options?: { skipOpenwolf?: boolean },
 ): void {
   const { canvasStore, claudeStore, settingsStore } = getStores();
   canvasStore.getState().addClaudeTerminal(cwd, false, sessionName);
@@ -592,6 +603,10 @@ export function spawnClaudeWithPrompt(
 
   const sid = claudePanel.terminalId;
   claudeStore.getState().createSession(sid, sessionName);
+  if (options?.skipOpenwolf) {
+    const sessions = claudeStore.getState().sessions;
+    if (sessions[sid]) sessions[sid].skipOpenwolf = true;
+  }
   claudeStore.getState().addUserMessage(sid, prompt);
   const permMode = settingsStore.getState().claudePermMode || "default";
   // Small delay so ClaudeChat mounts and event listeners are ready
@@ -601,7 +616,7 @@ export function spawnClaudeWithPrompt(
       cwd,
       prompt,
       permission_mode: permMode,
-    }).catch((err: unknown) => {
+    }, options?.skipOpenwolf).catch((err: unknown) => {
       claudeStore.getState().setError(sid, String(err));
     });
     claudeStore.getState().incrementPromptCount(sid);

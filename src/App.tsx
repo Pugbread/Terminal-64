@@ -20,7 +20,7 @@ import { useThemeStore } from "./stores/themeStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { registerCommand } from "./lib/commands";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { closeTerminal, closeClaudeSession, linkSessionToDiscord, unlinkSessionFromDiscord, startDiscordBot, discordCleanupOrphaned, loadSessionHistory, mapHistoryMessages, setAllBrowsersVisible, ensureSkillsPlugin, installWidgetZip } from "./lib/tauriApi";
+import { closeTerminal, closeClaudeSession, linkSessionToDiscord, unlinkSessionFromDiscord, startDiscordBot, discordCleanupOrphaned, loadSessionHistory, mapHistoryMessages, setAllBrowsersVisible, ensureSkillsPlugin, installWidgetZip, startOpenwolfDaemon, installBundledWidget } from "./lib/tauriApi";
 import { Toast, subscribeToasts, dismissToast, pushToast } from "./lib/notifications";
 import { useDelegationStore } from "./stores/delegationStore";
 import { useClaudeStore, flushSave as flushClaudeSave, STORAGE_KEY } from "./stores/claudeStore";
@@ -98,6 +98,8 @@ function App() {
     const saved = useSettingsStore.getState();
     if (saved.theme) useThemeStore.getState().setTheme(saved.theme);
     if (saved.bgAlpha < 1) useThemeStore.getState().setBgAlpha(saved.bgAlpha);
+    // Sync bundled widgets to latest version on every launch
+    installBundledWidget("project-intel").catch(() => {});
     // Auto-connect Discord bot if credentials are saved, then link open sessions
     if (saved.discordBotToken && saved.discordServerId) {
       startDiscordBot(saved.discordBotToken, saved.discordServerId).then(async () => {
@@ -131,6 +133,14 @@ function App() {
         // Clean up Discord channels that no longer match any linked session
         discordCleanupOrphaned().catch(() => {});
       }).catch(() => {});
+    }
+    // Auto-start OpenWolf daemon if enabled — find a CWD from saved sessions
+    if (saved.openwolfEnabled && saved.openwolfDaemon) {
+      const claudeSessions = useClaudeStore.getState().sessions;
+      const sessionWithCwd = Object.values(claudeSessions).find((s) => s.cwd);
+      if (sessionWithCwd?.cwd) {
+        startOpenwolfDaemon(sessionWithCwd.cwd).catch(() => {});
+      }
     }
   }, []);
 

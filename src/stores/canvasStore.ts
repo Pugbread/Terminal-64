@@ -331,7 +331,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     moveTerminal: (id: string, x: number, y: number) => {
       set((s) => ({
         terminals: s.terminals.map((t) =>
-          t.id === id ? { ...t, x, y } : t
+          t.id === id ? { ...t, x: Math.round(x), y: Math.round(y) } : t
         ),
       }));
       markDirty();

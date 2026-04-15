@@ -66,8 +66,8 @@ export function computeDragSnap(
 
   const didSnapX = bestDx <= threshold;
   const didSnapY = bestDy <= threshold;
-  const finalX = didSnapX ? snapX : dragging.x;
-  const finalY = didSnapY ? snapY : dragging.y;
+  const finalX = didSnapX ? Math.round(snapX) : dragging.x;
+  const finalY = didSnapY ? Math.round(snapY) : dragging.y;
 
   const guides = buildGuides(
     { x: finalX, y: finalY, width: dragging.width, height: dragging.height },
@@ -167,7 +167,7 @@ export function computeResizeSnap(
     }
   }
 
-  return { x, y, width, height, guides };
+  return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height), guides };
 }
 
 function buildGuides(snapped: Rect, others: Rect[], didX: boolean, didY: boolean): SnapGuide[] {

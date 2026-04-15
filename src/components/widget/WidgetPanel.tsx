@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getWidgetServerPort, widgetFileModified, widgetGetState, widgetSetState, widgetClearState, proxyFetch, createBrowser, setBrowserBounds, setBrowserZoom, setBrowserVisible, closeBrowser, navigateBrowser, browserEval, shellExec, readFile, writeFile, listDirectory, searchFiles, deleteFiles, createTerminal, closeTerminal, writeTerminal, createClaudeSession, sendClaudePrompt, onTerminalOutput } from "../../lib/tauriApi";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { pushToast } from "../../lib/notifications";
 import { useClaudeStore, ClaudeSession } from "../../stores/claudeStore";
 import { useThemeStore } from "../../stores/themeStore";
@@ -194,6 +195,11 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
           continue;
         }
 
+        // CWD changed (set after session init)
+        if (session.cwd && session.cwd !== prevSession.cwd) {
+          post({ type: "t64:session-cwd-changed", payload: { sessionId: sid, cwd: session.cwd } });
+        }
+
         // New messages
         if (session.messages.length > prevSession.messages.length) {
           const newMsgs = session.messages.slice(prevSession.messages.length);
@@ -264,6 +270,16 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
         case "t64:request-state":
           post({ type: "t64:state", payload: { ...buildStateSnapshot(), id: msg.payload?.id } });
           return;
+
+        case "t64:pick-directory": {
+          const reqId = msg.payload?.id;
+          openDialog({ directory: true, title: "Select project directory" }).then((dir) => {
+            post({ type: "t64:directory-picked", payload: { id: reqId, path: dir || null } });
+          }).catch(() => {
+            post({ type: "t64:directory-picked", payload: { id: reqId, path: null } });
+          });
+          return;
+        }
 
         case "t64:open-url": {
           const url = msg.payload?.url;
@@ -486,6 +502,8 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
           );
           const sid = panel.terminalId;
           useClaudeStore.getState().createSession(sid, sessName || "Widget Session");
+          const wSess = useClaudeStore.getState().sessions[sid];
+          if (wSess) wSess.skipOpenwolf = true;
           if (sessPrompt) {
             setTimeout(() => {
               useClaudeStore.getState().addUserMessage(sid, sessPrompt);
@@ -495,7 +513,7 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
                 cwd: sessCwd || ".",
                 prompt: sessPrompt,
                 permission_mode: "auto",
-              }).catch((err) => {
+              }, true).catch((err) => {
                 useClaudeStore.getState().setError(sid, `Failed to start session: ${err}`);
               });
             }, 300);

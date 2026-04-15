@@ -329,7 +329,7 @@ export default function WidgetDialog({ isOpen, onClose }: WidgetDialogProps) {
         canvasStore: useCanvasStore,
         claudeStore: useClaudeStore,
         settingsStore: useSettingsStore,
-      }));
+      }), { skipOpenwolf: true });
       onClose();
     } catch (err) {
       console.warn("[widget] Failed to create:", err);

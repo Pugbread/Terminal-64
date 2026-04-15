@@ -21,7 +21,7 @@ serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = ["macos-private-api", "devtools", "unstable"] }
 portable-pty = "0.8"
 uuid = { version = "1", features = ["v4"] }
-tauri-plugin-dialog = "2.6.0"
+tauri-plugin-dialog = "2.7.0"
 dirs = "5"
 url = "2"
 chrono = "0.4"

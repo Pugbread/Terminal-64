@@ -1,3 +1,20 @@
+/* ---- Border Beam ---- */
+
+@property --beam-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes beam-spin {
+  to { --beam-angle: 360deg; }
+}
+
+@keyframes beam-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 /* ---- Container ---- */
 
 .cc-container {
@@ -1561,6 +1578,70 @@
 
 .cc-input-row:focus-within {
   border-color: color-mix(in srgb, var(--ft-border, #cba6f7) 40%, transparent);
+}
+
+/* Border beam — rendered via a dedicated child div so it never interferes
+   with sibling z-index (badge, buttons). The beam div sits behind all
+   content via order:-1 + z-index:-1. */
+.cc-beam {
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: -1;
+  animation: beam-fade-in 0.4s ease-out;
+}
+
+.cc-beam::after {
+  content: '';
+  position: absolute;
+  inset: -50%;
+  background: conic-gradient(
+    from var(--beam-angle),
+    transparent 0%,
+    transparent 55%,
+    var(--ft-border, #cba6f7) 70%,
+    color-mix(in srgb, var(--ft-border, #cba6f7) 60%, white) 75%,
+    var(--ft-border, #cba6f7) 80%,
+    transparent 95%
+  );
+  animation: beam-spin 2.2s linear infinite;
+}
+
+/* Inner cutout — covers the interior so only the border edge glows */
+.cc-beam-inner {
+  position: absolute;
+  inset: 1.5px;
+  border-radius: 5px;
+  background: var(--bg-secondary, #181825);
+}
+
+/* Soft outer glow */
+.cc-beam-glow {
+  position: absolute;
+  inset: -6px;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: -2;
+  filter: blur(6px);
+  opacity: 0.5;
+  animation: beam-fade-in 0.4s ease-out;
+}
+
+.cc-beam-glow::after {
+  content: '';
+  position: absolute;
+  inset: -50%;
+  background: conic-gradient(
+    from var(--beam-angle),
+    transparent 0%,
+    transparent 55%,
+    var(--ft-border, #cba6f7) 72%,
+    transparent 90%
+  );
+  animation: beam-spin 2.2s linear infinite;
 }
 
 .cc-prompt {
