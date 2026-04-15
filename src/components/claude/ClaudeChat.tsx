@@ -1170,7 +1170,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
       }
     }
     return elements;
-  }, [session?.messages, visibleCount, session?.autoCompactStatus, session?.isStreaming, handleRewind, handleFork, handleEditClick]);
+  }, [session?.messages, visibleCount, session?.autoCompactStatus, session?.autoCompactStartedAt, session?.isStreaming, handleRewind, handleFork, handleEditClick]);
 
   if (!session) return <div className="cc-container cc-loading">Initializing...</div>;
 

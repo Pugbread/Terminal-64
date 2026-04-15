@@ -31,10 +31,16 @@ fn build_hook_settings(port: u16, secret: &str, run_token: &str) -> serde_json::
             "http://127.0.0.1:{}/hook/{}/{}/{}",
             port, secret, run_token, event
         );
+        // PreToolUse/PostToolUse need a tool-name matcher — empty string doesn't match.
+        // PermissionRequest also needs a tool matcher. Use "." regex to match all tool names.
+        let matcher = match *event {
+            "PreToolUse" | "PostToolUse" | "PermissionRequest" => ".",
+            _ => "",
+        };
         hooks.insert(
             event.to_string(),
             serde_json::json!([{
-                "matcher": "",
+                "matcher": matcher,
                 "hooks": [{ "type": "http", "url": url }]
             }]),
         );

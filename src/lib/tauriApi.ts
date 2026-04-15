@@ -66,14 +66,14 @@ function getOpenwolfSettings(): { enabled: boolean; autoInit: boolean; designQc:
   return { enabled: false, autoInit: true, designQc: false };
 }
 
+const OW_DISABLED = { enabled: false, autoInit: false, designQc: false } as const;
+
+function resolveOpenwolf(skipOpenwolf?: boolean) {
+  return skipOpenwolf ? OW_DISABLED : getOpenwolfSettings();
+}
+
 export async function createClaudeSession(req: CreateClaudeRequest, skipOpenwolf?: boolean): Promise<void> {
-  // Auto-detect from session store if not explicitly passed
-  if (skipOpenwolf == null) {
-    const { useClaudeStore } = await import("../stores/claudeStore");
-    const session = useClaudeStore.getState().sessions[req.session_id];
-    skipOpenwolf = session?.skipOpenwolf;
-  }
-  const ow = skipOpenwolf ? { enabled: false, autoInit: false, designQc: false } : getOpenwolfSettings();
+  const ow = resolveOpenwolf(skipOpenwolf);
   return invoke("create_claude_session", {
     req,
     openwolfEnabled: ow.enabled,
@@ -82,12 +82,8 @@ export async function createClaudeSession(req: CreateClaudeRequest, skipOpenwolf
   });
 }
 
-export async function sendClaudePrompt(req: SendClaudePromptRequest): Promise<void> {
-  // Auto-detect skipOpenwolf from session store (widget/skill sessions)
-  const { useClaudeStore } = await import("../stores/claudeStore");
-  const session = useClaudeStore.getState().sessions[req.session_id];
-  const skip = session?.skipOpenwolf;
-  const ow = skip ? { enabled: false, autoInit: false, designQc: false } : getOpenwolfSettings();
+export async function sendClaudePrompt(req: SendClaudePromptRequest, skipOpenwolf?: boolean): Promise<void> {
+  const ow = resolveOpenwolf(skipOpenwolf);
   return invoke("send_claude_prompt", {
     req,
     openwolfEnabled: ow.enabled,
@@ -602,11 +598,8 @@ export function spawnClaudeWithPrompt(
   if (!claudePanel || claudePanel.panelType !== "claude") return;
 
   const sid = claudePanel.terminalId;
-  claudeStore.getState().createSession(sid, sessionName);
-  if (options?.skipOpenwolf) {
-    const sessions = claudeStore.getState().sessions;
-    if (sessions[sid]) sessions[sid].skipOpenwolf = true;
-  }
+  const skip = options?.skipOpenwolf;
+  claudeStore.getState().createSession(sid, sessionName, false, skip);
   claudeStore.getState().addUserMessage(sid, prompt);
   const permMode = settingsStore.getState().claudePermMode || "default";
   // Small delay so ClaudeChat mounts and event listeners are ready

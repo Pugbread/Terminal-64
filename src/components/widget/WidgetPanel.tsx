@@ -489,7 +489,7 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
             cwd: sess.cwd,
             prompt,
             permission_mode: "auto",
-          })
+          }, sess.skipOpenwolf)
             .then(() => post({ type: "t64:prompt-sent", payload: { id: spId, error: null } }))
             .catch((err) => post({ type: "t64:prompt-sent", payload: { id: spId, error: String(err) } }));
           return;
@@ -501,9 +501,7 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
             sessCwd || ".", false, sessName || "Widget Session"
           );
           const sid = panel.terminalId;
-          useClaudeStore.getState().createSession(sid, sessName || "Widget Session");
-          const wSess = useClaudeStore.getState().sessions[sid];
-          if (wSess) wSess.skipOpenwolf = true;
+          useClaudeStore.getState().createSession(sid, sessName || "Widget Session", false, true);
           if (sessPrompt) {
             setTimeout(() => {
               useClaudeStore.getState().addUserMessage(sid, sessPrompt);

@@ -101,7 +101,7 @@ export interface ActiveLoop {
 interface ClaudeState {
   sessions: Record<string, ClaudeSession>;
 
-  createSession: (sessionId: string, initialName?: string, ephemeral?: boolean) => void;
+  createSession: (sessionId: string, initialName?: string, ephemeral?: boolean, skipOpenwolf?: boolean) => void;
   removeSession: (sessionId: string) => void;
   addUserMessage: (sessionId: string, text: string) => void;
   appendStreamingText: (sessionId: string, text: string) => void;
@@ -287,7 +287,7 @@ function debouncedSave() {
 export const useClaudeStore = create<ClaudeState>((set, get) => ({
   sessions: {},
 
-  createSession: (sessionId: string, initialName?: string, ephemeral?: boolean) => {
+  createSession: (sessionId: string, initialName?: string, ephemeral?: boolean, skipOpenwolf?: boolean) => {
     const existing = get().sessions[sessionId];
     if (existing) {
       if (initialName && !existing.name) {
@@ -315,7 +315,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
           model: "", totalCost: 0, totalTokens: 0, contextUsed: 0, contextMax: 0, error: null, promptCount: 0, planModeActive: false,
           pendingQuestions: null, pendingPermission: null, name: initialName || "", cwd: "",
           promptQueue: [], hasBeenStarted: false, draftPrompt: "", activeLoop: null, ephemeral: !!ephemeral, mcpServers: [], modifiedFiles: [], autoCompactStatus: "idle" as const, autoCompactStartedAt: null, resumeAtUuid: null, forkParentSessionId: null,
-          skipOpenwolf: false, toolUsageStats: {}, compactionCount: 0, subagentIds: [], hookEventLog: [],
+          skipOpenwolf: !!skipOpenwolf, toolUsageStats: {}, compactionCount: 0, subagentIds: [], hookEventLog: [],
         },
       };
       if (!ephemeral) debouncedSave();

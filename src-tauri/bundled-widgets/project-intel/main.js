@@ -83,6 +83,7 @@ let anatomyData = null;
 let memoryData = null;
 let bugData = null;
 let memoryFilter = "all";
+const TYPE_LABELS = { dnr: "Do-Not-Repeat", pref: "Preference", learning: "Learning", decision: "Decision" };
 
 // ---- Init ----
 
@@ -487,7 +488,7 @@ function parseCerebrumMd(raw) {
       currentType = "dnr";
       continue;
     }
-    if (/^#{1,3}\s.*decision/i.test(line)) {
+    if (/^#{1,3}\s.*\bdecision/i.test(line)) {
       currentType = "decision";
       continue;
     }
@@ -495,7 +496,7 @@ function parseCerebrumMd(raw) {
       currentType = "pref";
       continue;
     }
-    if (/^#{1,3}\s.*(learn|key learn)/i.test(line)) {
+    if (/^#{1,3}\s.*\blearnings?\b/i.test(line)) {
       currentType = "learning";
       continue;
     }
@@ -538,7 +539,7 @@ function renderMemoryCards() {
     const card = document.createElement("div");
     card.className = `pi-card pi-card--${entry.type}`;
     card.innerHTML = `
-      <div class="pi-card-type">${({ dnr: "Do-Not-Repeat", pref: "Preference", learning: "Learning", decision: "Decision" })[entry.type] || entry.type}</div>
+      <div class="pi-card-type">${TYPE_LABELS[entry.type] || entry.type}</div>
       <div class="pi-card-text">${renderMd(entry.text)}</div>
       ${entry.context ? `<div class="pi-card-context">${renderMd(entry.context)}</div>` : ""}
     `;
