@@ -1,20 +1,3 @@
-/* ---- Border Beam ---- */
-
-@property --beam-angle {
-  syntax: "<angle>";
-  initial-value: 0deg;
-  inherits: false;
-}
-
-@keyframes beam-spin {
-  to { --beam-angle: 360deg; }
-}
-
-@keyframes beam-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
 /* ---- Container ---- */
 
 .cc-container {
@@ -1564,6 +1547,11 @@
   position: relative;
 }
 
+.cc-input-wrap {
+  position: relative;
+  border-radius: 6px;
+}
+
 .cc-input-row {
   display: flex;
   align-items: flex-end;
@@ -1574,74 +1562,59 @@
   padding: 4px 6px;
   transition: border-color 0.15s;
   position: relative;
+  z-index: 1;
 }
 
 .cc-input-row:focus-within {
   border-color: color-mix(in srgb, var(--ft-border, #cba6f7) 40%, transparent);
 }
 
-/* Border beam — rendered via a dedicated child div so it never interferes
-   with sibling z-index (badge, buttons). The beam div sits behind all
-   content via order:-1 + z-index:-1. */
-.cc-beam {
+/* ---- SVG border beam (streaming indicator) ---- */
+
+.cc-beam-svg {
   position: absolute;
-  inset: -1.5px;
-  border-radius: inherit;
-  overflow: hidden;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
-  z-index: -1;
-  animation: beam-fade-in 0.4s ease-out;
+  overflow: visible;
+  opacity: 0;
+  transition: opacity 0.35s ease-out;
+  z-index: 0;
 }
 
-.cc-beam::after {
-  content: '';
-  position: absolute;
-  inset: -50%;
-  background: conic-gradient(
-    from var(--beam-angle),
-    transparent 0%,
-    transparent 55%,
-    var(--ft-border, #cba6f7) 70%,
-    color-mix(in srgb, var(--ft-border, #cba6f7) 60%, white) 75%,
-    var(--ft-border, #cba6f7) 80%,
-    transparent 95%
-  );
-  animation: beam-spin 2.2s linear infinite;
+.cc-input-wrap--streaming .cc-beam-svg {
+  opacity: 1;
 }
 
-/* Inner cutout — covers the interior so only the border edge glows */
-.cc-beam-inner {
-  position: absolute;
-  inset: 1.5px;
-  border-radius: 5px;
-  background: var(--bg-secondary, #181825);
+.cc-beam-halo,
+.cc-beam-mid,
+.cc-beam-core {
+  fill: none;
+  stroke: var(--beam-color, #cba6f7);
+  stroke-linecap: round;
+  stroke-dasharray: 20 80;
+  animation: cc-beam-dash 2.4s linear infinite;
 }
 
-/* Soft outer glow */
-.cc-beam-glow {
-  position: absolute;
-  inset: -6px;
-  border-radius: inherit;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: -2;
-  filter: blur(6px);
-  opacity: 0.5;
-  animation: beam-fade-in 0.4s ease-out;
+.cc-beam-halo {
+  stroke-width: 6;
+  opacity: 0.45;
 }
 
-.cc-beam-glow::after {
-  content: '';
-  position: absolute;
-  inset: -50%;
-  background: conic-gradient(
-    from var(--beam-angle),
-    transparent 0%,
-    transparent 55%,
-    var(--ft-border, #cba6f7) 72%,
-    transparent 90%
-  );
-  animation: beam-spin 2.2s linear infinite;
+.cc-beam-mid {
+  stroke-width: 2.5;
+  opacity: 0.8;
+}
+
+.cc-beam-core {
+  stroke-width: 1.2;
+  opacity: 1;
+}
+
+@keyframes cc-beam-dash {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -100; }
 }
 
 .cc-prompt {
@@ -1670,7 +1643,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none;
-  z-index: 1;
+  z-index: 3;
 }
 
 /* Status line below input — permission mode or streaming */
@@ -2816,4 +2789,225 @@
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+}
+
+/* ---- Rewind prompt (inline overlay) ---- */
+
+.cc-rewind-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: cc-rewind-in 0.15s ease-out;
+}
+
+@keyframes cc-rewind-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.cc-rewind-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 300px;
+  max-width: 90%;
+}
+
+.cc-rewind-label {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ft-border, #cba6f7);
+  text-align: center;
+}
+
+.cc-rewind-changelist {
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-secondary, #181825);
+}
+
+.cc-rewind-changelist-hdr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  background: var(--bg-tertiary, #11111b);
+  color: var(--fg-secondary, #bac2de);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.05s;
+}
+
+.cc-rewind-changelist-hdr:hover { background: var(--bg-secondary, #181825); }
+
+.cc-rewind-chevron {
+  font-size: 8px;
+  color: var(--fg-muted, #6c7086);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.cc-rewind-chevron--open { transform: rotate(90deg); }
+
+.cc-rewind-changelist-title { flex: 1; }
+
+.cc-rewind-changelist-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-muted, #6c7086);
+  background: rgba(255,255,255,0.06);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
+.cc-rewind-changelist-rows {
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.cc-rewind-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 2px 10px 2px 20px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  cursor: default;
+  transition: background 0.05s;
+}
+
+.cc-rewind-row:hover { background: rgba(255,255,255,0.04); }
+
+.cc-rewind-row-name {
+  color: var(--fg, #cdd6f4);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.cc-rewind-row-dir {
+  color: var(--fg-muted, #6c7086);
+  font-size: 10px;
+  margin-left: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cc-rewind-row-stats {
+  flex-shrink: 0;
+  font-size: 10px;
+  margin-left: auto;
+  margin-right: 4px;
+  display: flex;
+  gap: 4px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+}
+
+.cc-rewind-stat-total {
+  display: flex;
+  gap: 5px;
+  font-size: 10px;
+  margin-left: 6px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+}
+
+.cc-rewind-stat-ins { color: #a6e3a1; }
+.cc-rewind-stat-del { color: #f38ba8; }
+
+.cc-rewind-row-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  width: 14px;
+  text-align: right;
+  margin-left: 8px;
+}
+
+.cc-rewind-description {
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--fg-secondary, #bac2de);
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+.cc-rewind-desc-text { white-space: pre-wrap; }
+
+.cc-rewind-gen-btn {
+  background: transparent;
+  border: 1px dashed var(--border, #313244);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 10px;
+  color: var(--fg-muted, #6c7086);
+  cursor: pointer;
+  transition: color 0.1s, border-color 0.1s;
+  text-align: center;
+}
+.cc-rewind-gen-btn:hover:not(:disabled) {
+  color: var(--fg-secondary, #bac2de);
+  border-color: var(--fg-muted, #6c7086);
+}
+.cc-rewind-gen-btn:disabled { opacity: 0.5; cursor: default; }
+
+.cc-rewind-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.cc-rewind-btn {
+  flex: 1;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.cc-rewind-btn--code {
+  background: rgba(203, 166, 247, 0.12);
+  border: 1px solid rgba(203, 166, 247, 0.3);
+  color: #cba6f7;
+}
+.cc-rewind-btn--code:hover { background: rgba(203, 166, 247, 0.2); }
+
+.cc-rewind-btn--conv {
+  background: rgba(137, 180, 250, 0.08);
+  border: 1px solid rgba(137, 180, 250, 0.25);
+  color: #89b4fa;
+}
+.cc-rewind-btn--conv:hover { background: rgba(137, 180, 250, 0.15); }
+
+.cc-rewind-btn--cancel {
+  flex: 0;
+  background: transparent;
+  border: 1px solid var(--border, #313244);
+  color: var(--fg-muted, #6c7086);
+  padding: 6px 10px;
+}
+.cc-rewind-btn--cancel:hover {
+  background: rgba(255,255,255,0.04);
+  color: var(--fg, #cdd6f4);
 }

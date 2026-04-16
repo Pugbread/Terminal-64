@@ -40,6 +40,14 @@ pub fn resolve_claude_path() -> String {
     if cfg!(windows) {
         if let Some(ref h) = home {
             candidates.push(format!("{}\\.local\\bin\\claude.exe", h));
+            candidates.push(format!("{}\\.local\\bin\\claude.cmd", h));
+        }
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            candidates.push(format!("{}\\npm\\claude.cmd", appdata));
+            candidates.push(format!("{}\\npm\\claude.exe", appdata));
+        }
+        if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+            candidates.push(format!("{}\\Programs\\claude\\claude.exe", localappdata));
         }
     } else {
         if let Some(ref h) = home {
@@ -343,11 +351,24 @@ pub fn resolve_openwolf_path() -> String {
 
 /// PATH that includes common locations for node, npm, pm2.
 pub fn openwolf_env_path() -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
     let existing = std::env::var("PATH").unwrap_or_default();
-    format!(
-        "/opt/homebrew/bin:/usr/local/bin:{home}/.cargo/bin:{home}/.npm-global/bin:/opt/homebrew/lib/node_modules/.bin:{existing}"
-    )
+    #[cfg(target_os = "windows")]
+    {
+        let home = std::env::var("USERPROFILE").unwrap_or_default();
+        let appdata = std::env::var("APPDATA").unwrap_or_default();
+        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let program_files = std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
+        return format!(
+            "{appdata}\\npm;{home}\\.cargo\\bin;{home}\\.npm-global;{localappdata}\\Programs\\nodejs;{program_files}\\nodejs;{existing}"
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!(
+            "/opt/homebrew/bin:/usr/local/bin:{home}/.cargo/bin:{home}/.npm-global/bin:/opt/homebrew/lib/node_modules/.bin:{existing}"
+        )
+    }
 }
 
 fn resolve_openwolf_path_inner() -> String {
@@ -378,27 +399,55 @@ fn resolve_openwolf_path_inner() -> String {
         .ok();
 
     let mut candidates: Vec<String> = Vec::new();
-    if let Some(ref h) = home {
-        candidates.push(format!("{}/.local/bin/openwolf", h));
-        candidates.push(format!("{}/.npm-global/bin/openwolf", h));
-        // npx cache location
-        let npx_dir = format!("{}/.npm/_npx", h);
-        if let Ok(entries) = std::fs::read_dir(&npx_dir) {
-            for entry in entries.flatten() {
-                let bin = entry.path().join("node_modules").join(".bin").join("openwolf");
-                if bin.exists() {
-                    candidates.push(bin.to_string_lossy().to_string());
+
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var("APPDATA").ok();
+        if let Some(ref a) = appdata {
+            candidates.push(format!("{}\\npm\\openwolf.cmd", a));
+            candidates.push(format!("{}\\npm\\openwolf.exe", a));
+        }
+        if let Some(ref h) = home {
+            candidates.push(format!("{}\\.npm-global\\openwolf.cmd", h));
+            let npx_dir = format!("{}\\AppData\\Local\\npm-cache\\_npx", h);
+            if let Ok(entries) = std::fs::read_dir(&npx_dir) {
+                for entry in entries.flatten() {
+                    let bin = entry.path().join("node_modules").join(".bin").join("openwolf.cmd");
+                    if bin.exists() {
+                        candidates.push(bin.to_string_lossy().to_string());
+                    }
                 }
             }
         }
     }
-    candidates.push("/usr/local/bin/openwolf".to_string());
-    candidates.push("/opt/homebrew/bin/openwolf".to_string());
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(ref h) = home {
+            candidates.push(format!("{}/.local/bin/openwolf", h));
+            candidates.push(format!("{}/.npm-global/bin/openwolf", h));
+            let npx_dir = format!("{}/.npm/_npx", h);
+            if let Ok(entries) = std::fs::read_dir(&npx_dir) {
+                for entry in entries.flatten() {
+                    let bin = entry.path().join("node_modules").join(".bin").join("openwolf");
+                    if bin.exists() {
+                        candidates.push(bin.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+        candidates.push("/usr/local/bin/openwolf".to_string());
+        candidates.push("/opt/homebrew/bin/openwolf".to_string());
+    }
 
     for c in &candidates {
         if std::path::Path::new(c).exists() { return c.clone(); }
     }
-    "openwolf".to_string()
+
+    #[cfg(target_os = "windows")]
+    return "openwolf.cmd".to_string();
+    #[cfg(not(target_os = "windows"))]
+    return "openwolf".to_string();
 }
 
 /// Check if .wolf/ exists in the project CWD. If auto_init is true
@@ -453,33 +502,43 @@ pub fn ensure_openwolf(cwd: &str, auto_init: bool) -> bool {
 /// Each returns a (event_name, hook_entry) pair for the settings JSON.
 fn openwolf_hook_entries(cwd: &str, design_qc: bool) -> Vec<(&'static str, serde_json::Value)> {
     let wolf_bin = resolve_openwolf_path();
+    let q = |s: &str| {
+        if s.contains(' ') || s.contains('\t') {
+            format!("\"{}\"", s.replace('"', "\\\""))
+        } else {
+            s.to_string()
+        }
+    };
+    let bin_q = q(&wolf_bin);
+    let cwd_q = q(cwd);
+    let mk = |event: &str| format!("{} hook {} --cwd {}", bin_q, event, cwd_q);
     let mut hooks = vec![
         ("Notification", serde_json::json!({
             "matcher": "",
-            "hooks": [{ "type": "command", "command": format!("{} hook notification --cwd {}", wolf_bin, cwd) }]
+            "hooks": [{ "type": "command", "command": mk("notification") }]
         })),
         ("Stop", serde_json::json!({
             "matcher": "",
-            "hooks": [{ "type": "command", "command": format!("{} hook stop --cwd {}", wolf_bin, cwd) }]
+            "hooks": [{ "type": "command", "command": mk("stop") }]
         })),
         ("SubagentStart", serde_json::json!({
             "matcher": "",
-            "hooks": [{ "type": "command", "command": format!("{} hook subagent-start --cwd {}", wolf_bin, cwd) }]
+            "hooks": [{ "type": "command", "command": mk("subagent-start") }]
         })),
         ("SubagentStop", serde_json::json!({
             "matcher": "",
-            "hooks": [{ "type": "command", "command": format!("{} hook subagent-stop --cwd {}", wolf_bin, cwd) }]
+            "hooks": [{ "type": "command", "command": mk("subagent-stop") }]
         })),
     ];
 
     if design_qc {
         hooks.push(("PreToolUse", serde_json::json!({
             "matcher": "",
-            "hooks": [{ "type": "command", "command": format!("{} hook pre-tool-use --cwd {}", wolf_bin, cwd) }]
+            "hooks": [{ "type": "command", "command": mk("pre-tool-use") }]
         })));
         hooks.push(("PostToolUse", serde_json::json!({
             "matcher": "",
-            "hooks": [{ "type": "command", "command": format!("{} hook post-tool-use --cwd {}", wolf_bin, cwd) }]
+            "hooks": [{ "type": "command", "command": mk("post-tool-use") }]
         })));
     }
 
@@ -503,12 +562,12 @@ pub fn merge_openwolf_hooks(settings_path: &str, cwd: &str, design_qc: bool) -> 
 
     let hooks_map = hooks_obj.as_object_mut().ok_or("hooks not an object")?;
 
+    let mut modified = false;
     for (event_name, entry) in openwolf_hook_entries(cwd, design_qc) {
         let arr = hooks_map
             .entry(event_name)
             .or_insert_with(|| serde_json::json!([]));
         if let Some(existing) = arr.as_array_mut() {
-            // Skip if openwolf hooks already present for this event
             let already_has = existing.iter().any(|e| {
                 e.get("hooks")
                     .and_then(|h| h.as_array())
@@ -522,9 +581,12 @@ pub fn merge_openwolf_hooks(settings_path: &str, cwd: &str, design_qc: bool) -> 
             });
             if !already_has {
                 existing.push(entry);
+                modified = true;
             }
         }
     }
+
+    if !modified { return Ok(()); }
 
     std::fs::write(settings_path, serde_json::to_string(&settings).unwrap())
         .map_err(|e| format!("write settings: {}", e))?;

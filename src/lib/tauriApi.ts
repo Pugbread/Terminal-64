@@ -449,6 +449,10 @@ export async function revertFilesGit(cwd: string, paths: string[]): Promise<stri
   return invoke("revert_files_git", { cwd, paths });
 }
 
+export async function filterUntrackedFiles(cwd: string, paths: string[]): Promise<string[]> {
+  return invoke("filter_untracked_files", { cwd, paths });
+}
+
 // Browser (native webview) commands
 
 export async function createBrowser(id: string, url: string, x: number, y: number, w: number, h: number): Promise<void> {

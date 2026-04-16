@@ -167,9 +167,8 @@ fn create_claude_session(
     openwolf_auto_init: Option<bool>,
     openwolf_design_qc: Option<bool>,
 ) -> Result<(), String> {
-    let settings_path = if req.permission_mode != "bypass_all" {
-        state.permission_server.register_session(&req.session_id).ok().map(|(_, p)| p.to_string_lossy().to_string())
-    } else { None };
+    let settings_path = state.permission_server.register_session(&req.session_id)
+        .ok().map(|(_, p)| p.to_string_lossy().to_string());
     maybe_apply_openwolf(
         &settings_path, &req.cwd,
         openwolf_enabled.unwrap_or(false),
@@ -189,9 +188,8 @@ fn send_claude_prompt(
     openwolf_auto_init: Option<bool>,
     openwolf_design_qc: Option<bool>,
 ) -> Result<(), String> {
-    let settings_path = if req.permission_mode != "bypass_all" {
-        state.permission_server.register_session(&req.session_id).ok().map(|(_, p)| p.to_string_lossy().to_string())
-    } else { None };
+    let settings_path = state.permission_server.register_session(&req.session_id)
+        .ok().map(|(_, p)| p.to_string_lossy().to_string());
     maybe_apply_openwolf(
         &settings_path, &req.cwd,
         openwolf_enabled.unwrap_or(false),
@@ -399,6 +397,77 @@ Rules:
         }
         let _ = app_handle.emit("theme-gen-done", serde_json::json!({ "id": gid, "text": full_text }));
         safe_eprintln!("[theme-gen] Done ({})", gid);
+    });
+
+    Ok(gen_id)
+}
+
+#[tauri::command]
+fn generate_rewind_summary(app_handle: tauri::AppHandle, summary: String) -> Result<String, String> {
+    const SYSTEM_PROMPT: &str = "You are a concise code change summarizer. Given a list of tool calls (file writes, edits, bash commands) that an AI made during a coding session, write a 1-3 sentence description of what was accomplished. Focus on the PURPOSE and EFFECT of the changes, not individual file operations. Use past tense. Be specific but brief. Output ONLY the description, nothing else.";
+
+    static REWIND_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let gen_id = format!("rwdesc-{}", REWIND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+
+    let full_prompt = format!("{}\n\nSummarize these changes:\n{}", SYSTEM_PROMPT, summary);
+    let claude_bin = claude_manager::resolve_claude_path();
+    let mut cmd = std::process::Command::new(&claude_bin);
+    cmd.arg("-p").arg(&full_prompt)
+        .arg("--output-format").arg("stream-json")
+        .arg("--verbose")
+        .arg("--include-partial-messages")
+        .arg("--model").arg("haiku")
+        .arg("--effort").arg("high")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn claude: {}", e))?;
+    let stdout = child.stdout.take().ok_or("No stdout")?;
+
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(stderr);
+            for line in reader.lines().flatten() {
+                safe_eprintln!("[rewind-desc:stderr] {}", line);
+            }
+        });
+    }
+
+    let gid = gen_id.clone();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(stdout);
+        for line in reader.lines().flatten() {
+            if line.trim().is_empty() { continue; }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&line) {
+                let event_type = parsed["type"].as_str().unwrap_or("");
+                if event_type == "content_block_delta" {
+                    if let Some(text) = parsed["delta"]["text"].as_str() {
+                        let _ = app_handle.emit("rewind-desc-chunk", serde_json::json!({ "id": gid, "text": text }));
+                    }
+                } else if event_type == "assistant" {
+                    if let Some(content) = parsed["message"]["content"].as_array() {
+                        for block in content {
+                            if block["type"].as_str() == Some("text") {
+                                if let Some(text) = block["text"].as_str() {
+                                    let _ = app_handle.emit("rewind-desc-chunk", serde_json::json!({ "id": gid, "text": text }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = app_handle.emit("rewind-desc-done", serde_json::json!({ "id": gid }));
+        safe_eprintln!("[rewind-desc] Done ({})", gid);
     });
 
     Ok(gen_id)
@@ -1323,10 +1392,29 @@ fn discord_bot_status(state: tauri::State<'_, AppState>) -> Result<bool, String>
 
 // ── OpenWolf daemon management ─────────────────────────────
 
+/// Build a Command that works for npm shim scripts (.cmd/.ps1) on Windows
+/// AND plain binaries on Unix. On Windows it routes through `cmd /C` so
+/// PATHEXT resolution works and .cmd shims (pm2, claude, openwolf) execute
+/// correctly. CREATE_NO_WINDOW suppresses the console flash.
+fn shim_command(bin: &str) -> std::process::Command {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut c = std::process::Command::new("cmd");
+        c.arg("/C").arg(bin);
+        c.creation_flags(0x08000000);
+        c
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new(bin)
+    }
+}
+
 #[tauri::command]
 fn start_openwolf_daemon(cwd: String) -> Result<(), String> {
     let wolf_bin = claude_manager::resolve_openwolf_path();
-    let output = std::process::Command::new(&wolf_bin)
+    let output = shim_command(&wolf_bin)
         .args(["daemon", "start"])
         .current_dir(&cwd)
         .env("PATH", claude_manager::openwolf_env_path())
@@ -1358,7 +1446,7 @@ fn start_openwolf_daemon(cwd: String) -> Result<(), String> {
 #[tauri::command]
 fn stop_openwolf_daemon(cwd: String) -> Result<(), String> {
     let wolf_bin = claude_manager::resolve_openwolf_path();
-    let output = std::process::Command::new(&wolf_bin)
+    let output = shim_command(&wolf_bin)
         .args(["daemon", "stop"])
         .current_dir(&cwd)
         .env("PATH", claude_manager::openwolf_env_path())
@@ -1381,7 +1469,7 @@ fn stop_openwolf_daemon(cwd: String) -> Result<(), String> {
 #[tauri::command]
 fn openwolf_daemon_status() -> Result<bool, String> {
     // openwolf has no `daemon status` subcommand — check pm2 directly
-    let output = std::process::Command::new("pm2")
+    let output = shim_command("pm2")
         .args(["jlist"])
         .env("PATH", claude_manager::openwolf_env_path())
         .stdout(std::process::Stdio::piped())
@@ -1466,21 +1554,55 @@ fn get_delegation_secret(
 fn resolve_node_path() -> &'static str {
     static NODE_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     NODE_PATH.get_or_init(|| {
-        for p in &["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
-            if std::path::Path::new(p).exists() { return p.to_string(); }
-        }
-        if let Ok(output) = std::process::Command::new("/bin/sh")
-            .args(["-lc", "which node"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
+        #[cfg(target_os = "windows")]
         {
-            if output.status.success() {
-                let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !s.is_empty() && std::path::Path::new(&s).exists() { return s; }
+            let mut cands: Vec<String> = Vec::new();
+            if let Ok(pf) = std::env::var("ProgramFiles") {
+                cands.push(format!("{}\\nodejs\\node.exe", pf));
             }
+            if let Ok(lad) = std::env::var("LOCALAPPDATA") {
+                cands.push(format!("{}\\Programs\\nodejs\\node.exe", lad));
+            }
+            if let Ok(h) = std::env::var("USERPROFILE") {
+                cands.push(format!("{}\\scoop\\apps\\nodejs\\current\\node.exe", h));
+                cands.push(format!("{}\\AppData\\Roaming\\nvm\\node.exe", h));
+            }
+            for p in &cands {
+                if std::path::Path::new(p).exists() { return p.clone(); }
+            }
+            let mut c = std::process::Command::new("where");
+            c.arg("node.exe")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null());
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x08000000);
+            if let Ok(output) = c.output() {
+                if output.status.success() {
+                    let s = String::from_utf8_lossy(&output.stdout)
+                        .lines().next().unwrap_or("").trim().to_string();
+                    if !s.is_empty() && std::path::Path::new(&s).exists() { return s; }
+                }
+            }
+            return "node.exe".to_string();
         }
-        "node".to_string()
+        #[cfg(not(target_os = "windows"))]
+        {
+            for p in &["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
+                if std::path::Path::new(p).exists() { return p.to_string(); }
+            }
+            if let Ok(output) = std::process::Command::new("/bin/sh")
+                .args(["-lc", "which node"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .output()
+            {
+                if output.status.success() {
+                    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !s.is_empty() && std::path::Path::new(&s).exists() { return s; }
+                }
+            }
+            "node".to_string()
+        }
     })
 }
 
@@ -1620,6 +1742,38 @@ fn widgets_base_dir() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".terminal64").join("widgets"))
 }
 
+/// Create a directory link (symlink on Unix, symlink-or-junction on Windows).
+/// On Windows, junctions don't require Admin/Developer Mode like symlinks do,
+/// so we fall back to `mklink /J` when symlink_dir fails.
+fn create_dir_link(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    { std::os::unix::fs::symlink(target, link) }
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+            return Ok(());
+        }
+        use std::os::windows::process::CommandExt;
+        let mut c = std::process::Command::new("cmd");
+        c.creation_flags(0x08000000)
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target);
+        let out = c.output()?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!(
+                    "mklink /J failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ),
+            ))
+        }
+    }
+}
+
 #[tauri::command]
 fn create_widget_folder(widget_id: String) -> Result<String, String> {
     let dir = widgets_base_dir()?.join(&widget_id);
@@ -1724,9 +1878,21 @@ fn install_widget_zip(zip_path: String) -> Result<String, String> {
 
         if rel.is_empty() { continue; }
 
-        let out_path = dest.join(rel);
+        // Reject path traversal BEFORE joining — PathBuf::starts_with is a
+        // lexical prefix check that doesn't collapse ".." segments, so a
+        // crafted zip with "..\..\foo" would escape `dest` on Windows.
+        let rel_norm = rel.replace('\\', "/");
+        let rel_path = std::path::Path::new(&rel_norm);
+        if rel_path.is_absolute() { continue; }
+        let has_traversal = rel_path.components().any(|c| matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        ));
+        if has_traversal { continue; }
 
-        // Prevent path traversal
+        let out_path = dest.join(rel_path);
         if !out_path.starts_with(&dest) { continue; }
 
         if entry.is_dir() {
@@ -2162,12 +2328,8 @@ fn ensure_skills_plugin() -> Result<(), String> {
                 std::fs::remove_dir_all(&symlink_target).ok();
             }
         }
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&skills_dir, &symlink_target)
-            .map_err(|e| format!("symlink: {}", e))?;
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(&skills_dir, &symlink_target)
-            .map_err(|e| format!("symlink: {}", e))?;
+        create_dir_link(&skills_dir, &symlink_target)
+            .map_err(|e| format!("link: {}", e))?;
     }
 
     // Ensure plugin is registered in installed_plugins.json
@@ -2236,13 +2398,8 @@ fn ensure_skills_plugin() -> Result<(), String> {
                 Err(_) if dest.exists() => continue, // real dir exists, don't clobber
                 Err(_) => {} // doesn't exist, create it
             }
-            #[cfg(unix)]
-            if let Err(e) = std::os::unix::fs::symlink(&src, &dest) {
-                safe_eprintln!("[skills] Failed to symlink {:?} -> {:?}: {}", dest, src, e);
-            }
-            #[cfg(windows)]
-            if let Err(e) = std::os::windows::fs::symlink_dir(&src, &dest) {
-                safe_eprintln!("[skills] Failed to symlink {:?} -> {:?}: {}", dest, src, e);
+            if let Err(e) = create_dir_link(&src, &dest) {
+                safe_eprintln!("[skills] Failed to link {:?} -> {:?}: {}", dest, src, e);
             }
         }
     }
@@ -2538,6 +2695,19 @@ fn revert_files_git(cwd: String, paths: Vec<String>) -> Result<Vec<String>, Stri
     }
     let mut reverted = Vec::new();
 
+    fn git_cmd() -> std::process::Command {
+        let c = std::process::Command::new("git");
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let mut c = c;
+            c.creation_flags(0x08000000);
+            return c;
+        }
+        #[cfg(not(target_os = "windows"))]
+        c
+    }
+
     for path in &paths {
         let abs = if std::path::Path::new(path).is_absolute() {
             std::path::PathBuf::from(path)
@@ -2545,44 +2715,99 @@ fn revert_files_git(cwd: String, paths: Vec<String>) -> Result<Vec<String>, Stri
             cwd_path.join(path)
         };
 
-        // Check if this file is tracked by git
-        let is_tracked = std::process::Command::new("git")
+        // Check if this file is tracked by git.
+        // CRITICAL: distinguish "git not available" from "untracked" — deleting
+        // on Err() would nuke user-edited tracked files when git isn't on PATH
+        // (common on stock Windows GUI processes).
+        let tracked_status = git_cmd()
             .args(["ls-files", "--error-unmatch"])
             .arg(&abs)
             .current_dir(cwd_path)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+            .status();
 
-        if is_tracked {
-            // File is tracked — restore from HEAD
-            let status = std::process::Command::new("git")
-                .args(["checkout", "HEAD", "--"])
-                .arg(&abs)
-                .current_dir(cwd_path)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-            if let Ok(s) = status {
-                if s.success() {
-                    reverted.push(path.clone());
+        match tracked_status {
+            Ok(s) if s.success() => {
+                // File is tracked — restore from HEAD
+                let status = git_cmd()
+                    .args(["checkout", "HEAD", "--"])
+                    .arg(&abs)
+                    .current_dir(cwd_path)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+                if let Ok(s) = status {
+                    if s.success() {
+                        reverted.push(path.clone());
+                    }
                 }
             }
-        } else if abs.exists() {
-            // File is untracked (new) — delete it
-            if std::fs::remove_file(&abs).is_ok() {
-                reverted.push(path.clone());
+            Ok(_) => {
+                // File is untracked (new) — delete it
+                if abs.exists() {
+                    if std::fs::remove_file(&abs).is_ok() {
+                        reverted.push(path.clone());
+                    }
+                }
+            }
+            Err(e) => {
+                // git didn't even launch — refuse to touch anything (data safety).
+                safe_eprintln!("[rewind] git unavailable ({}): skipping revert for {}", e, path);
             }
         }
-        // If file doesn't exist and isn't tracked, nothing to do
     }
 
     if !reverted.is_empty() {
         safe_println!("[rewind] Git-reverted {} files", reverted.len());
     }
     Ok(reverted)
+}
+
+/// Return the subset of `paths` that are NOT tracked by git in `cwd`.
+/// Used by rewind to identify created-but-not-committed files for deletion.
+/// Safer than shelling from the frontend — avoids cross-platform quoting issues.
+#[tauri::command]
+fn filter_untracked_files(cwd: String, paths: Vec<String>) -> Result<Vec<String>, String> {
+    let cwd_path = std::path::Path::new(&cwd);
+    if !cwd_path.exists() {
+        return Err("CWD does not exist".to_string());
+    }
+    fn git_cmd() -> std::process::Command {
+        let c = std::process::Command::new("git");
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let mut c = c;
+            c.creation_flags(0x08000000);
+            return c;
+        }
+        #[cfg(not(target_os = "windows"))]
+        c
+    }
+    let mut untracked = Vec::new();
+    for path in &paths {
+        let abs = if std::path::Path::new(path).is_absolute() {
+            std::path::PathBuf::from(path)
+        } else {
+            cwd_path.join(path)
+        };
+        match git_cmd()
+            .args(["ls-files", "--error-unmatch"])
+            .arg(&abs)
+            .current_dir(cwd_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+        {
+            Ok(s) if s.success() => {} // tracked — skip
+            Ok(_) => untracked.push(path.clone()),
+            Err(_) => {
+                // git unavailable — don't classify anything as untracked (data safety)
+            }
+        }
+    }
+    Ok(untracked)
 }
 
 // Party Mode commands
@@ -2825,15 +3050,26 @@ fn vector_reindex_all(
 }
 
 /// Install a specific bundled widget by name to ~/.terminal64/widgets/.
-/// Uses CARGO_MANIFEST_DIR at compile time (works reliably in dev and prod).
+/// In production: reads from the Tauri resource dir (packaged via tauri.conf.json).
+/// In dev: falls back to CARGO_MANIFEST_DIR so unpackaged runs still work.
 #[tauri::command]
-fn install_bundled_widget(widget_name: String) -> Result<(), String> {
+fn install_bundled_widget(app_handle: tauri::AppHandle, widget_name: String) -> Result<(), String> {
+    use tauri::Manager;
     let dest_base = widgets_base_dir()?;
 
-    // CARGO_MANIFEST_DIR is set at compile time to src-tauri/
-    let src_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("bundled-widgets")
-        .join(&widget_name);
+    let src_dir = {
+        let resource_src = app_handle
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|d| d.join("bundled-widgets").join(&widget_name));
+        match resource_src {
+            Some(p) if p.is_dir() => p,
+            _ => std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("bundled-widgets")
+                .join(&widget_name),
+        }
+    };
 
     if !src_dir.is_dir() {
         return Err(format!("Bundled widget '{}' not found at {:?}", widget_name, src_dir));
@@ -2978,6 +3214,7 @@ pub fn run() {
             create_checkpoint,
             delete_files,
             revert_files_git,
+            filter_untracked_files,
             restore_checkpoint,
             cleanup_checkpoints,
             start_party_mode,
@@ -2995,6 +3232,7 @@ pub fn run() {
             set_browser_zoom,
             set_all_browsers_visible,
             generate_theme,
+            generate_rewind_summary,
             save_pasted_image,
             read_file_base64,
             create_skill_folder,

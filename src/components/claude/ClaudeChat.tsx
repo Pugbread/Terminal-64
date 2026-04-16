@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useClaudeStore } from "../../stores/claudeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useThemeStore } from "../../stores/themeStore";
-import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, readFileBase64, writeFile, loadSessionHistory, mapHistoryMessages, findRewindUuid, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, revertFilesGit, deleteFiles, shellExec, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile, savePastedImage, resolveSkillPrompt } from "../../lib/tauriApi";
+import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, readFileBase64, writeFile, loadSessionHistory, mapHistoryMessages, findRewindUuid, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, revertFilesGit, deleteFiles, shellExec, filterUntrackedFiles, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile, savePastedImage, resolveSkillPrompt } from "../../lib/tauriApi";
 import { SlashCommand, PermissionMode, McpServer, HookEvent } from "../../lib/types";
 import type { McpServerStatus } from "../../stores/claudeStore";
 import { rewritePromptStream } from "../../lib/ai";
@@ -23,6 +23,132 @@ import { formatDuration } from "../../lib/constants";
 import "./ClaudeChat.css";
 
 let monacoThemeForBg = "";
+
+const REWIND_ACTION_META: Record<string, { label: string; color: string }> = {
+  M: { label: "M", color: "#f9e2af" },
+  A: { label: "A", color: "#a6e3a1" },
+  D: { label: "D", color: "#f38ba8" },
+  U: { label: "U", color: "#89b4fa" },
+};
+
+interface AffectedFile {
+  path: string;
+  action: "M" | "A" | "D" | "U";
+  insertions: number;
+  deletions: number;
+}
+
+function RewindPromptDialog({ affectedFiles, toolSummary, onConfirm, onCancel }: {
+  affectedFiles: AffectedFile[];
+  toolSummary: string;
+  onConfirm: (revertCode: boolean) => void;
+  onCancel: () => void;
+}) {
+  const [filesOpen, setFilesOpen] = useState(affectedFiles.length > 0 && affectedFiles.length <= 8);
+  const [description, setDescription] = useState<string | null>(null);
+  const [descLoading, setDescLoading] = useState(false);
+  const hasFiles = affectedFiles.length > 0;
+  const totalIns = affectedFiles.reduce((s, f) => s + f.insertions, 0);
+  const totalDel = affectedFiles.reduce((s, f) => s + f.deletions, 0);
+
+  const generateDescription = useCallback(async () => {
+    setDescLoading(true);
+    setDescription("");
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const { listen } = await import("@tauri-apps/api/event");
+      let genId: string | null = null;
+      const pending: { type: string; id: string; text: string }[] = [];
+      let resolveDone!: () => void;
+      const doneP = new Promise<void>((r) => { resolveDone = r; });
+      const unChunk = await listen<{ id: string; text: string }>("rewind-desc-chunk", (e) => {
+        if (genId && e.payload.id === genId) setDescription((p) => (p || "") + e.payload.text);
+        else if (!genId) pending.push({ type: "chunk", ...e.payload });
+      });
+      const unDone = await listen<{ id: string }>("rewind-desc-done", (e) => {
+        if (genId && e.payload.id === genId) resolveDone();
+        else if (!genId) pending.push({ type: "done", id: e.payload.id, text: "" });
+      });
+      try {
+        genId = await invoke<string>("generate_rewind_summary", { summary: toolSummary });
+      } catch (e) {
+        unChunk(); unDone(); setDescription("Failed to generate description."); setDescLoading(false); return;
+      }
+      for (const evt of pending) {
+        if (evt.id === genId) { if (evt.type === "done") resolveDone(); else setDescription((p) => (p || "") + evt.text); }
+      }
+      await Promise.race([doneP, new Promise<void>((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000))]);
+      unChunk(); unDone();
+    } catch { setDescription((p) => p || "Failed to generate description."); }
+    setDescLoading(false);
+  }, [toolSummary]);
+
+  return (
+    <div className="cc-rewind-overlay" onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className="cc-rewind-prompt">
+        {hasFiles && (
+          <div className="cc-rewind-changelist">
+            <button className="cc-rewind-changelist-hdr" onClick={() => setFilesOpen(!filesOpen)}>
+              <span className={`cc-rewind-chevron${filesOpen ? " cc-rewind-chevron--open" : ""}`}>&#9654;</span>
+              <span className="cc-rewind-changelist-title">Changes</span>
+              <span className="cc-rewind-changelist-count">{affectedFiles.length} file{affectedFiles.length !== 1 ? "s" : ""}</span>
+              {(totalIns > 0 || totalDel > 0) && (
+                <span className="cc-rewind-stat-total">
+                  {totalIns > 0 && <span className="cc-rewind-stat-ins">+{totalIns}</span>}
+                  {totalDel > 0 && <span className="cc-rewind-stat-del">-{totalDel}</span>}
+                </span>
+              )}
+            </button>
+            {filesOpen && (
+              <div className="cc-rewind-changelist-rows">
+                {affectedFiles.map(({ path, action, insertions, deletions }) => {
+                  const fileName = path.split("/").pop() || path;
+                  const dir = path.slice(0, path.length - fileName.length).replace(/\/$/, "");
+                  const meta = REWIND_ACTION_META[action];
+                  return (
+                    <div key={path} className="cc-rewind-row">
+                      <span className="cc-rewind-row-name">{fileName}</span>
+                      <span className="cc-rewind-row-dir">{dir}</span>
+                      {(insertions > 0 || deletions > 0) && (
+                        <span className="cc-rewind-row-stats">
+                          {insertions > 0 && <span className="cc-rewind-stat-ins">+{insertions}</span>}
+                          {deletions > 0 && <span className="cc-rewind-stat-del">-{deletions}</span>}
+                        </span>
+                      )}
+                      <span className="cc-rewind-row-badge" style={{ color: meta.color }}>{meta.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {description !== null ? (
+          <div className="cc-rewind-description">
+            <span className="cc-rewind-desc-text">{description}{descLoading && <span className="cc-cursor" />}</span>
+          </div>
+        ) : (
+          <button className="cc-rewind-gen-btn" onClick={generateDescription} disabled={descLoading}>
+            {descLoading ? "generating..." : "generate description"}
+          </button>
+        )}
+
+        <div className="cc-rewind-actions">
+          <button className="cc-rewind-btn cc-rewind-btn--code" onClick={() => onConfirm(true)}>
+            Conversation + Code
+          </button>
+          <button className="cc-rewind-btn cc-rewind-btn--conv" onClick={() => onConfirm(false)}>
+            Conversation Only
+          </button>
+          <button className="cc-rewind-btn cc-rewind-btn--cancel" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Isolated streaming text component — subscribes only to streamingText,
  *  so updates don't re-render the entire message list. */
@@ -154,6 +280,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [isRewriting, setIsRewriting] = useState(false);
   const [rewindText, setRewindText] = useState<string | null>(null);
+  const [rewindPrompt, setRewindPrompt] = useState<{ messageId: string; content: string; affectedFiles: AffectedFile[] } | null>(null);
   const [queueExpanded, setQueueExpanded] = useState(false);
   const [editOverlay, setEditOverlay] = useState<{ tcId: string; filePath: string; fullContent: string; changedLines: Set<number> } | null>(null);
   const editOverrides = useRef<Record<string, string>>({});
@@ -162,6 +289,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const [editorDirty, setEditorDirty] = useState(false);
   const editorSavedVersionId = useRef<number>(0);
   const [showHookLog, setShowHookLog] = useState(false);
+  const panelColor = useCanvasStore((s) => s.terminals.find((t) => t.terminalId === sessionId)?.borderColor);
   const hookEventLog = useClaudeStore((s) => s.sessions[sessionId]?.hookEventLog ?? []);
   const toolUsageStats = useClaudeStore((s) => s.sessions[sessionId]?.toolUsageStats ?? {});
   const compactionCount = useClaudeStore((s) => s.sessions[sessionId]?.compactionCount ?? 0);
@@ -724,8 +852,117 @@ Rules:
       setIsRewriting(false);
     }
   }, [sessionId]);
-  const handleRewind = useCallback(async (messageId: string, content: string) => {
-    console.log("[rewind] === REWIND START ===", { sessionId, messageId, content: content.slice(0, 80) });
+  const extractAffectedFiles = useCallback((messageId: string): AffectedFile[] => {
+    const sess = useClaudeStore.getState().sessions[sessionId];
+    if (!sess) return [];
+    const msgs = sess.messages;
+    const idx = msgs.findIndex((m) => m.id === messageId);
+    if (idx < 0) return [];
+    const fileMap = new Map<string, { action: "M" | "A" | "D" | "U"; ins: number; del: number }>();
+    const countLines = (s: unknown) => typeof s === "string" && s.length > 0 ? s.split("\n").length : 0;
+    const add = (fp: string, action: "M" | "A" | "D" | "U", ins: number, del: number) => {
+      const prev = fileMap.get(fp);
+      if (prev) { prev.ins += ins; prev.del += del; if (action === "M" && prev.action === "A") { /* keep A */ } else prev.action = action; }
+      else fileMap.set(fp, { action, ins, del });
+    };
+    for (let i = idx; i < msgs.length; i++) {
+      const msg = msgs[i];
+      if (msg.role !== "assistant" || !msg.toolCalls) continue;
+      for (const tc of msg.toolCalls) {
+        const inp = tc.input || {};
+        const n = tc.name?.toLowerCase() || "";
+        if (n === "write") {
+          const fp = (inp.file_path || inp.path) as string | undefined;
+          if (fp) add(fp, fileMap.has(fp) ? "M" : "A", countLines(inp.content), 0);
+        } else if (n === "edit" || n === "multiedit" || n === "multi_edit" || n === "notebookedit" || n === "notebook_edit") {
+          const fp = (inp.file_path || inp.path) as string | undefined;
+          if (fp) add(fp, "M", countLines(inp.new_string), countLines(inp.old_string));
+        } else if (n === "bash") {
+          const cmd = (inp.command || inp.cmd || "") as string;
+          const writeRedirect = cmd.match(/(?:>|>>)\s*["']?([^\s"'|;&]+)/g);
+          if (writeRedirect) {
+            for (const m of writeRedirect) {
+              const fp = m.replace(/^>+\s*["']?/, "").replace(/["']$/, "").trim();
+              if (fp && !fp.startsWith("/dev/")) add(fp, "U", 0, 0);
+            }
+          }
+          const mvCp = cmd.match(/\b(?:mv|cp)\s+.*\s+["']?([^\s"'|;&]+)["']?\s*$/);
+          if (mvCp?.[1]) add(mvCp[1], "U", 0, 0);
+          const rm = cmd.match(/\brm\s+(?:-\w+\s+)*["']?([^\s"'|;&]+)/);
+          if (rm?.[1] && !rm[1].startsWith("-")) add(rm[1], "D", 0, 0);
+        }
+      }
+    }
+    return [...fileMap.entries()]
+      .map(([path, { action, ins, del }]) => ({ path, action, insertions: ins, deletions: del }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }, [sessionId]);
+
+  const buildToolSummary = useCallback((messageId: string): string => {
+    const sess = useClaudeStore.getState().sessions[sessionId];
+    if (!sess) return "";
+    const msgs = sess.messages;
+    const idx = msgs.findIndex((m) => m.id === messageId);
+    if (idx < 0) return "";
+    const parts: string[] = [];
+    for (let i = idx; i < msgs.length; i++) {
+      const msg = msgs[i];
+      if (msg.role === "user") { parts.push(`User: ${msg.content.slice(0, 200)}`); continue; }
+      if (msg.role !== "assistant" || !msg.toolCalls) continue;
+      for (const tc of msg.toolCalls) {
+        const n = tc.name || "unknown";
+        const inp = tc.input || {};
+        const fp = (inp.file_path || inp.path || "") as string;
+        if (n.toLowerCase() === "write") parts.push(`Write ${fp} (${typeof inp.content === "string" ? inp.content.split("\n").length : "?"} lines)`);
+        else if (n.toLowerCase() === "edit" || n.toLowerCase() === "multiedit") parts.push(`Edit ${fp}`);
+        else if (n.toLowerCase() === "bash") parts.push(`Bash: ${((inp.command || inp.cmd || "") as string).slice(0, 120)}`);
+        else parts.push(`${n} ${fp}`.trim());
+      }
+    }
+    return parts.slice(0, 40).join("\n");
+  }, [sessionId]);
+
+  const onRewindClick = useCallback((messageId: string, content: string) => {
+    const affectedFiles = extractAffectedFiles(messageId);
+    setRewindPrompt({ messageId, content, affectedFiles });
+  }, [extractAffectedFiles]);
+
+  const handleRewind = useCallback(async (messageId: string, content: string, revertCode = true) => {
+    console.log("[rewind] === REWIND START ===", { sessionId, messageId, content: content.slice(0, 80), revertCode });
+
+    const preStore = useClaudeStore.getState();
+    const preSess = preStore.sessions[sessionId];
+    const preMsgs = preSess?.messages ?? [];
+
+    // Detect "undo send" — rewinding to the last message which is a user message
+    // with no assistant response after it. Claude never modified files, so skip all
+    // file operations and just remove the message + prefill input.
+    const targetIdx = preMsgs.findIndex((m) => m.id === messageId);
+    const targetMsg = targetIdx >= 0 ? preMsgs[targetIdx] : null;
+    const isUndoSend = targetMsg?.role === "user" && targetIdx === preMsgs.length - 1;
+    const isUndoSendPair = targetMsg?.role === "user" && targetIdx === preMsgs.length - 2
+      && preMsgs[preMsgs.length - 1]?.role === "assistant"
+      && (!preMsgs[preMsgs.length - 1]?.toolCalls || preMsgs[preMsgs.length - 1]?.toolCalls!.length === 0)
+      && (preMsgs[preMsgs.length - 1]?.content || "").length < 5;
+
+    if (isUndoSend || isUndoSendPair) {
+      console.log("[rewind] Undo-send detected — removing last user message without file revert");
+      try { await cancelClaude(sessionId); } catch {}
+      try { await closeClaudeSession(sessionId); } catch {}
+      const store = useClaudeStore.getState();
+      store.setStreaming(sessionId, false);
+      store.setError(sessionId, null);
+      store.clearStreamingText(sessionId);
+      store.truncateFromMessage(sessionId, messageId);
+      const updatedSess = useClaudeStore.getState().sessions[sessionId];
+      const rewindCwd = updatedSess?.cwd || effectiveCwd;
+      const keepMessages = updatedSess ? updatedSess.messages.length : 0;
+      const uuid = await findRewindUuid(sessionId, rewindCwd, keepMessages);
+      useClaudeStore.getState().setResumeAtUuid(sessionId, uuid);
+      setRewindText(targetMsg!.content);
+      console.log("[rewind] === UNDO-SEND COMPLETE ===", { prefill: targetMsg!.content.slice(0, 80) });
+      return;
+    }
 
     // Kill the CLI process first and wait for it to die before touching the JSONL
     try {
@@ -807,50 +1044,48 @@ Rules:
         }
       }
 
-      // Restore parent's own modified files from checkpoint
-      const restoredSet = new Set<string>();
-      try {
-        const restored = await restoreCheckpoint(sessionId, keepTurns + 1);
-        restored.forEach((f) => restoredSet.add(f));
-        if (restored.length > 0) console.log("[rewind] Restored files from checkpoint:", restored);
-      } catch (err) {
-        console.warn("[rewind] No checkpoint to restore:", err);
-      }
-
-      // Delete files that were CREATED by Claude (not in git) and weren't restored from checkpoint
-      const allModified = sess.modifiedFiles || [];
-      if (allModified.length > 0) {
+      if (revertCode) {
+        // Restore parent's own modified files from checkpoint
+        const restoredSet = new Set<string>();
         try {
-          // git ls-files returns relative paths; compare by resolving to absolute
-          const { stdout } = await shellExec(
-            `git ls-files -- ${allModified.map((f) => `'${f.replace(/'/g, "'\\''")}'`).join(" ")}`,
-            rewindCwd,
-          );
-          const trackedRelative = new Set(stdout.trim().split("\n").filter(Boolean));
-          // Build set of tracked absolute paths for comparison
-          const cwdPrefix = rewindCwd.endsWith("/") ? rewindCwd : rewindCwd + "/";
-          const trackedAbsolute = new Set([...trackedRelative].map((rel) => cwdPrefix + rel));
-          const createdFiles = allModified.filter((f) => !trackedAbsolute.has(f) && !restoredSet.has(f));
-          if (createdFiles.length > 0) {
-            const deleted = await deleteFiles(createdFiles);
-            console.log("[rewind] Deleted newly-created files:", deleted);
-          }
+          const restored = await restoreCheckpoint(sessionId, keepTurns + 1);
+          restored.forEach((f) => restoredSet.add(f));
+          if (restored.length > 0) console.log("[rewind] Restored files from checkpoint:", restored);
         } catch (err) {
-          console.warn("[rewind] Failed to check/delete created files:", err);
+          console.warn("[rewind] No checkpoint to restore:", err);
         }
-      }
 
-      // Revert ALL files modified by delegation children using git
-      if (childModifiedFiles.length > 0) {
-        const uniqueFiles = [...new Set(childModifiedFiles)];
-        revertFilesGit(rewindCwd, uniqueFiles)
-          .then((reverted) => { if (reverted.length > 0) console.log("[rewind] Git-reverted delegation files:", reverted); })
-          .catch((err) => console.warn("[rewind] Failed to git-revert delegation files:", err));
-      }
+        // Delete files that were CREATED by Claude (not in git) and weren't restored from checkpoint
+        const allModified = sess.modifiedFiles || [];
+        if (allModified.length > 0) {
+          try {
+            const candidates = allModified.filter((f) => !restoredSet.has(f));
+            if (candidates.length > 0) {
+              const createdFiles = await filterUntrackedFiles(rewindCwd, candidates);
+              if (createdFiles.length > 0) {
+                const deleted = await deleteFiles(createdFiles);
+                console.log("[rewind] Deleted newly-created files:", deleted);
+              }
+            }
+          } catch (err) {
+            console.warn("[rewind] Failed to check/delete created files:", err);
+          }
+        }
 
-      cleanupCheckpoints(sessionId, keepTurns)
-        .catch((err) => console.warn("[rewind] Checkpoint cleanup:", err));
-      store.resetModifiedFiles(sessionId);
+        // Revert ALL files modified by delegation children using git
+        if (childModifiedFiles.length > 0) {
+          const uniqueFiles = [...new Set(childModifiedFiles)];
+          revertFilesGit(rewindCwd, uniqueFiles)
+            .then((reverted) => { if (reverted.length > 0) console.log("[rewind] Git-reverted delegation files:", reverted); })
+            .catch((err) => console.warn("[rewind] Failed to git-revert delegation files:", err));
+        }
+
+        cleanupCheckpoints(sessionId, keepTurns)
+          .catch((err) => console.warn("[rewind] Checkpoint cleanup:", err));
+        store.resetModifiedFiles(sessionId);
+      } else {
+        console.log("[rewind] Conversation-only rewind — skipping file revert");
+      }
 
       setRewindText(rewindContent);
       console.log("[rewind] === REWIND COMPLETE ===", {
@@ -1148,7 +1383,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
           continue;
         }
       }
-      elements.push(<ChatMessage key={msg.id} message={msg} onRewind={handleRewind} onFork={handleFork} onEditClick={handleEditClick} />);
+      elements.push(<ChatMessage key={msg.id} message={msg} onRewind={onRewindClick} onFork={handleFork} onEditClick={handleEditClick} />);
       if (msg.role === "user" && /^\/compact\b/i.test(msg.content || "")) {
         const isLastCompact = !msgs.slice(i + 1).some((m) => m.role === "user" && /^\/compact\b/i.test(m.content || ""));
         if (isLastCompact && session.autoCompactStatus !== "idle") {
@@ -1170,7 +1405,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
       }
     }
     return elements;
-  }, [session?.messages, visibleCount, session?.autoCompactStatus, session?.autoCompactStartedAt, session?.isStreaming, handleRewind, handleFork, handleEditClick]);
+  }, [session?.messages, visibleCount, session?.autoCompactStatus, session?.autoCompactStartedAt, session?.isStreaming, onRewindClick, handleFork, handleEditClick]);
 
   if (!session) return <div className="cc-container cc-loading">Initializing...</div>;
 
@@ -1705,6 +1940,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                   onRewrite={handleRewrite}
                   isRewriting={isRewriting}
                   isStreaming={session.isStreaming}
+                  accentColor={panelColor}
                   streamingStartedAt={session.streamingStartedAt}
                   slashCommands={slashCommands}
                   initialText={rewindText}
@@ -1781,6 +2017,19 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             <button className="cc-side-close" onClick={() => setSidePanelOpen(false)}>×</button>
           </div>
         )}
+
+      {rewindPrompt && (
+        <RewindPromptDialog
+          affectedFiles={rewindPrompt.affectedFiles}
+          toolSummary={buildToolSummary(rewindPrompt.messageId)}
+          onConfirm={(revertCode) => {
+            const { messageId, content } = rewindPrompt;
+            setRewindPrompt(null);
+            handleRewind(messageId, content, revertCode);
+          }}
+          onCancel={() => setRewindPrompt(null)}
+        />
+      )}
 
     </div>
   );

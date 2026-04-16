@@ -1,4 +1,17 @@
 {
   "version": 1,
-  "bugs": []
+  "bugs": [
+    {
+      "id": "bug-001",
+      "timestamp": "2026-04-16",
+      "error_message": "Rewinding to a just-sent prompt reverts all file changes even though Claude never modified anything",
+      "file": "src/components/claude/ClaudeChat.tsx",
+      "root_cause": "handleRewind always runs restoreCheckpoint(keepTurns+1) which restores the PREVIOUS turn's checkpoint, not the current state. When the target is the last user message with no assistant response, this rolls back to an older snapshot.",
+      "fix": "Added undo-send detection at the top of handleRewind: if the rewind target is the last message (user, no assistant response), skip all file operations and just truncate the message + prefill the input. Also handles the edge case where a near-empty assistant response exists.",
+      "tags": ["rewind", "checkpoint", "undo-send", "data-loss"],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-16"
+    }
+  ]
 }

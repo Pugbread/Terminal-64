@@ -487,9 +487,25 @@ async fn run_gateway(
                                     };
                                     for att in atts {
                                         let url = att["url"].as_str().unwrap_or("");
-                                        let filename = att["filename"].as_str().unwrap_or("file");
+                                        let raw_filename = att["filename"].as_str().unwrap_or("file");
                                         if url.is_empty() { continue; }
-                                        let dest = att_dir.join(filename);
+                                        // Sanitize: strip path separators, drive letters, and traversal.
+                                        // Discord filenames can contain "../" or "\" — treating them as
+                                        // path segments would let a malicious attachment write outside
+                                        // the attachment dir (more severe on Windows where "\" is a separator).
+                                        let filename: String = raw_filename
+                                            .rsplit(|c| c == '/' || c == '\\')
+                                            .next()
+                                            .unwrap_or("file")
+                                            .chars()
+                                            .filter(|c| !matches!(c, '\0'..='\x1f' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+                                            .collect();
+                                        let filename = if filename.trim().is_empty() || filename == "." || filename == ".." {
+                                            "file".to_string()
+                                        } else {
+                                            filename
+                                        };
+                                        let dest = att_dir.join(&filename);
                                         match typing_http.get(url).send().await {
                                             Ok(resp) => {
                                                 if let Ok(bytes) = resp.bytes().await {

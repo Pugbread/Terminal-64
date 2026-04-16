@@ -12,6 +12,7 @@ interface ChatInputProps {
   onRewrite?: (text: string, setText: (t: string) => void) => void;
   isRewriting?: boolean;
   isStreaming: boolean;
+  accentColor?: string;
   streamingStartedAt?: number | null;
   disabled?: boolean;
   slashCommands?: SlashCommand[];
@@ -28,7 +29,7 @@ interface ChatInputProps {
   onPasteImage?: (file: File) => void;
 }
 
-export default function ChatInput({ onSend, onCancel, onAttach, onRewrite, isRewriting, isStreaming, streamingStartedAt, disabled, slashCommands, initialText, onInitialTextConsumed, permLabel, permColor, onCyclePerm, sessionName, cwd, queueCount, draftPrompt, onDraftChange, onPasteImage }: ChatInputProps) {
+export default function ChatInput({ onSend, onCancel, onAttach, onRewrite, isRewriting, isStreaming, accentColor, streamingStartedAt, disabled, slashCommands, initialText, onInitialTextConsumed, permLabel, permColor, onCyclePerm, sessionName, cwd, queueCount, draftPrompt, onDraftChange, onPasteImage }: ChatInputProps) {
   const [text, setText] = useState(draftPrompt || "");
   const [elapsed, setElapsed] = useState("");
   const [inlineFiles, setInlineFiles] = useState<Set<string>>(new Set());
@@ -98,7 +99,9 @@ export default function ChatInput({ onSend, onCancel, onAttach, onRewrite, isRew
   useEffect(() => {
     for (const file of inlineFiles) {
       if (IMAGE_EXTS.test(file) && !imagePreviews[file]) {
-        const fullPath = cwd ? (file.startsWith("/") ? file : `${cwd}/${file}`) : file;
+        const isAbs = file.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(file) || file.startsWith("\\\\");
+        const sep = cwd && /[\\]/.test(cwd) && !/[/]/.test(cwd) ? "\\" : "/";
+        const fullPath = cwd ? (isAbs ? file : `${cwd}${sep}${file}`) : file;
         readFileBase64(fullPath).then((b64) => {
           const ext = file.split(".").pop()?.toLowerCase() || "png";
           const mime = ext === "svg" ? "image/svg+xml" : `image/${ext.replace("jpg", "jpeg")}`;
@@ -545,64 +548,70 @@ export default function ChatInput({ onSend, onCancel, onAttach, onRewrite, isRew
         </div>
       )}
 
-      <div className="cc-input-row" style={{ position: "relative" }}>
-        {isStreaming && (
-          <>
-            <div className="cc-beam"><div className="cc-beam-inner" /></div>
-            <div className="cc-beam-glow" />
-          </>
-        )}
-        <span className="cc-prompt">&gt;</span>
-        <div className="cc-textarea-wrap">
-          {/* Styled overlay — renders behind the textarea */}
-          {overlayContent && (
-            <div ref={overlayRef} className="cc-textarea-overlay" aria-hidden="true">
-              {overlayContent}
-            </div>
+      <div className={`cc-input-wrap ${isStreaming ? "cc-input-wrap--streaming" : ""}`} style={accentColor ? { ['--beam-color' as string]: accentColor } as React.CSSProperties : undefined}>
+        <svg className="cc-beam-svg" aria-hidden="true" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <filter id="cc-beam-blur" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="3" />
+            </filter>
+          </defs>
+          <rect className="cc-beam-halo" x="0" y="0" width="100%" height="100%" rx="6" ry="6" pathLength="100" vectorEffect="non-scaling-stroke" filter="url(#cc-beam-blur)" />
+          <rect className="cc-beam-mid" x="0" y="0" width="100%" height="100%" rx="6" ry="6" pathLength="100" vectorEffect="non-scaling-stroke" />
+          <rect className="cc-beam-core" x="0" y="0" width="100%" height="100%" rx="6" ry="6" pathLength="100" vectorEffect="non-scaling-stroke" />
+        </svg>
+        <div className="cc-input-row">
+          <span className="cc-prompt">&gt;</span>
+          <div className="cc-textarea-wrap">
+            {/* Styled overlay — renders behind the textarea */}
+            {overlayContent && (
+              <div ref={overlayRef} className="cc-textarea-overlay" aria-hidden="true">
+                {overlayContent}
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              className={`cc-textarea ${overlayContent ? "cc-textarea--has-overlay" : ""}`}
+              defaultValue={draftPrompt || ""}
+              onInput={handleInput}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              onScroll={handleScroll}
+              placeholder={isStreaming ? "Queue a message..." : "Type a message, / for commands, @ for files"}
+              rows={1}
+              disabled={disabled}
+              onBlur={() => {
+                if (blurTimer.current) clearTimeout(blurTimer.current);
+                blurTimer.current = setTimeout(() => { setShowSlash(false); setShowFiles(false); }, 200);
+              }}
+            />
+          </div>
+          {sessionName && (
+            <span className="cc-session-badge">{sessionName}</span>
           )}
-          <textarea
-            ref={textareaRef}
-            className={`cc-textarea ${overlayContent ? "cc-textarea--has-overlay" : ""}`}
-            defaultValue={draftPrompt || ""}
-            onInput={handleInput}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            onScroll={handleScroll}
-            placeholder={isStreaming ? "Queue a message..." : "Type a message, / for commands, @ for files"}
-            rows={1}
-            disabled={disabled}
-            onBlur={() => {
-              if (blurTimer.current) clearTimeout(blurTimer.current);
-              blurTimer.current = setTimeout(() => { setShowSlash(false); setShowFiles(false); }, 200);
-            }}
-          />
+          {onAttach && (
+            <button
+              className="cc-attach-btn"
+              onClick={onAttach}
+              title="Attach files"
+              type="button"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M7 1V10M7 1L4 4M7 1L10 4M2 9V12H12V9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+          )}
+          {isStreaming && (
+            <button
+              className="cc-cancel-btn-inline"
+              onClick={onCancel}
+              title="Cancel (Esc)"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <rect x="2" y="2" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+              </svg>
+            </button>
+          )}
         </div>
-        {sessionName && (
-          <span className="cc-session-badge">{sessionName}</span>
-        )}
-        {onAttach && (
-          <button
-            className="cc-attach-btn"
-            onClick={onAttach}
-            title="Attach files"
-            type="button"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M7 1V10M7 1L4 4M7 1L10 4M2 9V12H12V9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </button>
-        )}
-        {isStreaming && (
-          <button
-            className="cc-cancel-btn-inline"
-            onClick={onCancel}
-            title="Cancel (Esc)"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <rect x="2" y="2" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.5"/>
-            </svg>
-          </button>
-        )}
       </div>
 
       <div className="cc-status-line">
