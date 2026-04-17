@@ -106,7 +106,7 @@ pub fn shim_command(bin: &str) -> Command {
 fn build_command(
     session_flag: &str,
     session_value: &str,
-    prompt: &str,
+    _prompt: &str,
     permission_mode: &str,
     model: &Option<String>,
     effort: &Option<String>,
@@ -185,10 +185,12 @@ fn build_command(
         }
     }
 
-    // "--" ensures prompt is never misinterpreted as a flag
-    cmd.arg("--").arg(prompt);
-
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
+    // Prompt is sent via stdin (see spawn_and_stream). We do NOT pass it as a
+    // CLI arg because cmd.exe (used by shim_command on Windows) truncates
+    // arguments at literal newline characters, silently losing multi-line
+    // prompts. Claude CLI's --print mode reads stdin when no positional
+    // prompt is given.
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::piped());
 
     cmd
 }
@@ -198,6 +200,7 @@ fn spawn_and_stream(
     app_handle: &AppHandle,
     session_id: String,
     mut cmd: Command,
+    prompt: &str,
 ) -> Result<(), String> {
     {
         let mut inst = instances.lock().map_err(|e| e.to_string())?;
@@ -211,6 +214,21 @@ fn spawn_and_stream(
     }
 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn claude: {}", e))?;
+
+    // Write prompt to stdin and close it. Done in a thread so a very large
+    // prompt cannot block this function if the child's stdin pipe buffer fills
+    // before it begins reading.
+    if let Some(mut stdin) = child.stdin.take() {
+        let prompt_bytes = prompt.as_bytes().to_vec();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            if let Err(e) = stdin.write_all(&prompt_bytes) {
+                safe_eprintln!("[claude] Failed to write prompt to stdin: {}", e);
+            }
+            // Drop stdin to send EOF so Claude knows the prompt is complete.
+        });
+    }
+
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
 
     // Capture stderr into a shared buffer so the stdout reader can surface errors
@@ -330,7 +348,7 @@ impl ClaudeManager {
             &req.permission_mode, &req.model, &req.effort, &req.cwd, &None, &settings_path, &channel_server, &req.mcp_config, &None,
             &req.max_turns, &req.max_budget_usd, &req.no_session_persistence, &None,
         );
-        spawn_and_stream(&self.instances, app_handle, req.session_id, cmd)
+        spawn_and_stream(&self.instances, app_handle, req.session_id, cmd, &req.prompt)
     }
 
     pub fn send_prompt(&self, app_handle: &AppHandle, req: SendClaudePromptRequest, settings_path: Option<String>, channel_server: Option<String>) -> Result<(), String> {
@@ -340,7 +358,7 @@ impl ClaudeManager {
             &req.permission_mode, &req.model, &req.effort, &req.cwd, &req.disallowed_tools, &settings_path, &channel_server, &None, &req.resume_session_at,
             &req.max_turns, &req.max_budget_usd, &req.no_session_persistence, &req.fork_session,
         );
-        spawn_and_stream(&self.instances, app_handle, req.session_id, cmd)
+        spawn_and_stream(&self.instances, app_handle, req.session_id, cmd, &req.prompt)
     }
 
     pub fn cancel(&self, session_id: &str) -> Result<(), String> {
