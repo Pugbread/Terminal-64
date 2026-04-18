@@ -555,6 +555,31 @@ fn list_disk_sessions(cwd: String) -> Result<Vec<DiskSession>, String> {
     Ok(sessions)
 }
 
+/// Remove `<system-reminder>…</system-reminder>` blocks from user-facing text.
+/// These are harness-injected reminders (TodoWrite nudges, skill availability lists,
+/// file-read malware notices, etc.) that get persisted into JSONL as part of the
+/// user message content. They should never be shown in the chat UI.
+fn strip_system_reminders(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    const OPEN: &str = "<system-reminder>";
+    const CLOSE: &str = "</system-reminder>";
+    while let Some(start) = rest.find(OPEN) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + OPEN.len()..];
+        if let Some(end) = after.find(CLOSE) {
+            rest = &after[end + CLOSE.len()..];
+        } else {
+            // Unterminated block — drop the rest to be safe
+            rest = "";
+            break;
+        }
+    }
+    out.push_str(rest);
+    // Collapse leading/trailing whitespace left behind after removal
+    out.trim().to_string()
+}
+
 #[tauri::command]
 fn load_session_history(session_id: String, cwd: String) -> Result<Vec<HistoryMessage>, String> {
     let path = session_jsonl_path(&cwd, &session_id)?;
@@ -581,9 +606,10 @@ fn load_session_history(session_id: String, cwd: String) -> Result<Vec<HistoryMe
             if let Some(text) = content_val.as_str() {
                 let uuid = val["uuid"].as_str().unwrap_or("").to_string();
                 let ts = parse_timestamp(val["timestamp"].as_str().unwrap_or(""));
-                if !text.is_empty() {
+                let cleaned = strip_system_reminders(text);
+                if !cleaned.is_empty() {
                     messages.push(HistoryMessage {
-                        id: uuid, role: "user".to_string(), content: text.to_string(), timestamp: ts, tool_calls: None,
+                        id: uuid, role: "user".to_string(), content: cleaned, timestamp: ts, tool_calls: None,
                     });
                 }
             } else if let Some(blocks) = content_val.as_array() {
@@ -616,11 +642,12 @@ fn load_session_history(session_id: String, cwd: String) -> Result<Vec<HistoryMe
                     }
                 }
                 // If the array contained text blocks (not just tool_results), emit a user message
-                if !user_text.trim().is_empty() {
+                let cleaned = strip_system_reminders(&user_text);
+                if !cleaned.is_empty() {
                     let uuid = val["uuid"].as_str().unwrap_or("").to_string();
                     let ts = parse_timestamp(val["timestamp"].as_str().unwrap_or(""));
                     messages.push(HistoryMessage {
-                        id: uuid, role: "user".to_string(), content: user_text.trim().to_string(), timestamp: ts, tool_calls: None,
+                        id: uuid, role: "user".to_string(), content: cleaned, timestamp: ts, tool_calls: None,
                     });
                 }
             }

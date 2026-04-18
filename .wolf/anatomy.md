@@ -1,12 +1,12 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-17T16:00:00.118Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-18T10:00:00.771Z
 > Files: 137 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ./
 
 - `.DS_Store` (~2186 tok)
-- `.gitignore` — Git ignore rules (~29 tok)
+- `.gitignore` — Git ignore rules (~130 tok)
 - `.mcp.json` (~57 tok)
 - `CLAUDE.md` — OpenWolf (~2718 tok)
 - `index.html` — Terminal 64 (~139 tok)
@@ -115,7 +115,7 @@
 - `browser_manager.rs` — BrowserManager: new, create, navigate, set_bounds + 8 more (~1235 tok)
 - `claude_manager.rs` — ClaudeManager: resolve_claude_path, shim_command (~6974 tok)
 - `discord_bot.rs` — DiscordBot: new, start, stop, is_running + 4 more (~10130 tok)
-- `lib.rs` — Safe stderr logging — never panics if the pipe is broken. (~38681 tok)
+- `lib.rs` — Safe stderr logging — never panics if the pipe is broken. (~38996 tok)
 - `main.rs` — Prevents additional console window on Windows in release, DO NOT REMOVE!! (~51 tok)
 - `permission_server.rs` — All Claude Code lifecycle hook events to register for each session. (~6558 tok)
 - `pty_manager.rs` — PtyManager: new, create, write, resize + 1 more (~1667 tok)

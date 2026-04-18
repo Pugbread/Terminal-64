@@ -168,6 +168,18 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-04-16"
+    },
+    {
+      "id": "bug-015",
+      "timestamp": "2026-04-18",
+      "error_message": "Chat panel background flickers in/out at specific canvas positions; clicking the panel temporarily restores it",
+      "file": "src/components/canvas/FloatingTerminal.css",
+      "root_cause": "`.floating-terminal` uses `overflow: hidden` + `border-radius: 8px` while its parent `.canvas-content` has `transform: scale(z)`. On WebKit, the rounded-corner clip is repainted non-atomically at fractional pixel positions caused by the scale, invalidating the panel's background paint. A click triggers `bringToFront` → zIndex change → repaint, briefly restoring it.",
+      "fix": "Promoted `.floating-terminal` to its own compositor layer: added `will-change: transform`, `transform: translateZ(0)`, `backface-visibility: hidden`, `contain: layout paint`, `isolation: isolate`. This keeps the rounded clip stable across subpixel-scaled positions.",
+      "tags": ["rendering", "flicker", "webkit", "transform", "compositor", "canvas"],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-18"
     }
   ]
 }
