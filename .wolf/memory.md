@@ -51,3 +51,4 @@
 
 | Time | Action | File(s) | Outcome | ~Tokens |
 |------|--------|---------|---------|--------|
+| 18:33 | UX fixes: Settings z-index 100→210; global Escape handlers on Settings/Claude/Skill/Widget dialogs; round resize width/height | SettingsPanel.css, SettingsPanel.tsx, ClaudeDialog.tsx, SkillDialog.tsx, WidgetDialog.tsx, canvasStore.ts | done | ~1800 |
