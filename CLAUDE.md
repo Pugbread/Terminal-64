@@ -13,6 +13,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Terminal 64 is a canvas-based terminal emulator built with Tauri v2 (Rust backend) + React 19 (TypeScript frontend) + xterm.js. It manages multiple terminal sessions and Claude Code agent sessions simultaneously on a free-form pan/zoom canvas. Features include multi-agent delegation, MCP server monitoring, Monaco editor integration, file tree browsing, Discord bot integration, session history with rewind/fork, an AI prompt rewriter, a widget system with full bridge APIs, a skill library for reusable AI instructions, audio-reactive party mode visualizations, and embedded native browser panels.
 
+## Repository Standards
+
+This repo is under CI. Every PR and push to `master` runs `.github/workflows/ci.yml`: `tsc --noEmit` on frontend, `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` + `cargo check` on 3 OSes, then `tauri build` on 3 OSes. Green CI is the bar for merge.
+
+**Invariants — do not relax:**
+- `tsconfig.json` strict flags (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`, `verbatimModuleSyntax`) stay on. Fix the code, never loosen the flag.
+- `src-tauri/Cargo.toml` `[lints]` block stays as-is. For unavoidable cases (genuine `unsafe`, FFI glue, `too_many_arguments`), add a targeted `#[allow(clippy::X)]` at the call site with a one-line justifying comment — do not demote the project-wide lint.
+- `cargo fmt` is the source of truth for Rust formatting. Run it before committing; don't hand-format around it.
+- TypeScript type-only imports must use `import type` (`verbatimModuleSyntax` enforces this).
+
+**Live-work files — change only with explicit intent:**
+- `src-tauri/src/voice/whisper.rs` — dictation pipeline with an anti-hallucination reconciliation layer. Cosmetic fmt is fine; logic edits need a reason.
+- `src/hooks/useVoiceControl.ts` — the "Jarvis send" snapshot-before-clear logic is load-bearing. Don't regress it.
+
+**Do not commit:**
+- `.wolf/cron-state.json`, `.wolf/daemon.log` — runtime state, not content.
+- Anything referencing secrets (`APPLE_API_KEY`, `AZURE_*`, `TAURI_SIGNING_PRIVATE_KEY`). Secrets live in GitHub repo settings only.
+
+**Git hygiene:**
+- Never use `--no-verify` to bypass hooks. If a hook fails, fix the underlying issue.
+- Never force-push `master`.
+- Prefer new commits over `--amend` on pushed commits.
+- Commit messages: imperative mood, terse subject, bullets for details. See recent history for style.
+
+**Release process:**
+1. Bump version in both `src-tauri/tauri.conf.json` and `package.json` (must match).
+2. `git tag vX.Y.Z && git push origin vX.Y.Z` — triggers `.github/workflows/release.yml`.
+3. Workflow creates a **draft** release. Review artifacts, then publish manually.
+4. Signing is still TODO (Apple notarytool + Azure Trusted Signing). Builds ship unsigned until those secrets are added — macOS users will need to right-click → Open on first launch.
+
+**Security:**
+- Vulnerability reports go through GitHub private advisories (`/security/advisories/new`). Do not discuss unfixed vulns in public issues or PRs.
+- Any code touching PTY spawning, the widget HTTP server, permission server, or Discord bot needs extra scrutiny — those are the exposed surfaces listed in `SECURITY.md`.
+
 ## Build & Development Commands
 
 ```bash
