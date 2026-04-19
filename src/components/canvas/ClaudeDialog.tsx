@@ -55,6 +55,15 @@ export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: C
     }).catch(() => { setDiskSessions([]); setLoading(false); });
   }, [dir]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleBrowse = async () => {

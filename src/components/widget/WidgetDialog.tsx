@@ -312,6 +312,15 @@ export default function WidgetDialog({ isOpen, onClose }: WidgetDialogProps) {
     return () => { if (unlisten) unlisten(); };
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleCreate = async () => {

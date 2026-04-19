@@ -7,7 +7,7 @@
   backdrop-filter: blur(4px);
   display: flex;
   justify-content: flex-end;
-  z-index: 100;
+  z-index: 210;
   animation: sp-fade-in 0.15s ease-out;
 }
 
