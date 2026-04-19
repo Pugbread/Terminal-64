@@ -6,7 +6,7 @@ import { useClaudeStore } from "../../stores/claudeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useThemeStore } from "../../stores/themeStore";
 import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, readFileBase64, writeFile, loadSessionHistory, mapHistoryMessages, findRewindUuid, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, deleteFiles, shellExec, filterUntrackedFiles, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile, savePastedImage, resolveSkillPrompt } from "../../lib/tauriApi";
-import type { SlashCommand, PermissionMode, McpServer, HookEvent } from "../../lib/types";
+import type { SlashCommand, PermissionMode, McpServer, HookEvent, ChatMessage as ChatMessageData } from "../../lib/types";
 import type { McpServerStatus } from "../../stores/claudeStore";
 import { rewritePromptStream } from "../../lib/ai";
 import ChatMessage, { toolHeader, renderContent, ToolGroupCard, GROUPABLE_TOOLS } from "./ChatMessage";
@@ -32,6 +32,7 @@ const REWIND_ACTION_META: Record<string, { label: string; color: string }> = {
   D: { label: "D", color: "#f38ba8" },
   U: { label: "U", color: "#89b4fa" },
 };
+const REWIND_ACTION_FALLBACK = { label: "?", color: "#89b4fa" };
 
 interface AffectedFile {
   path: string;
@@ -106,7 +107,7 @@ function RewindPromptDialog({ affectedFiles, toolSummary, onConfirm, onCancel }:
                 {affectedFiles.map(({ path, action, insertions, deletions }) => {
                   const fileName = baseName(path) || path;
                   const dir = dirName(path);
-                  const meta = REWIND_ACTION_META[action];
+                  const meta = REWIND_ACTION_META[action] ?? REWIND_ACTION_FALLBACK;
                   return (
                     <div key={path} className="cc-rewind-row">
                       <span className="cc-rewind-row-name">{fileName}</span>
@@ -309,7 +310,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const compactionCount = useClaudeStore((s) => s.sessions[sessionId]?.compactionCount ?? 0);
   const totalToolCalls = useMemo(() => Object.values(toolUsageStats).reduce((a, b) => a + b, 0), [toolUsageStats]);
 
-  const permMode = PERMISSION_MODES[permModeIdx];
+  const permMode = PERMISSION_MODES[permModeIdx] ?? PERMISSION_MODES[0]!;
 
   useEffect(() => {
     createSession(sessionId);
@@ -438,7 +439,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Tab" && e.shiftKey) {
         e.preventDefault();
-        setPermModeIdx((i) => { const next = (i + 1) % PERMISSION_MODES.length; const s = useSettingsStore.getState(); if (!s.claudeDefaultPermMode) s.set({ claudePermMode: PERMISSION_MODES[next].id }); return next; });
+        setPermModeIdx((i) => { const next = (i + 1) % PERMISSION_MODES.length; const s = useSettingsStore.getState(); if (!s.claudeDefaultPermMode) s.set({ claudePermMode: PERMISSION_MODES[next]!.id }); return next; });
       }
     };
     window.addEventListener("keydown", handler);
@@ -490,12 +491,12 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     // Find the last user message index to know where the current turn started
     let turnStart = planScanFrom.current;
     for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === "user") { turnStart = i; break; }
+      if (msgs[i]!.role === "user") { turnStart = i; break; }
     }
     planScanFrom.current = turnStart;
     for (let i = msgs.length - 1; i >= turnStart; i--) {
       const msg = msgs[i];
-      if (msg.role === "assistant" && msg.toolCalls) {
+      if (msg && msg.role === "assistant" && msg.toolCalls) {
         for (const tc of msg.toolCalls) {
           if ((tc.name === "Write" || tc.name === "Edit" || tc.name === "Read") && tc.input.file_path) {
             const fp = String(tc.input.file_path);
@@ -632,9 +633,9 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
 
         const req = {
           session_id: sessionId, cwd: effectiveCwd, prompt,
-          permission_mode: permissionOverride || permMode.id,
-          model: selectedModel || undefined,
-          effort: selectedEffort || undefined,
+          permission_mode: permissionOverride || permMode!.id,
+          ...(selectedModel ? { model: selectedModel } : {}),
+          ...(selectedEffort ? { effort: selectedEffort } : {}),
         };
         if (!started && (!effectiveCwd || effectiveCwd === ".")) {
           useClaudeStore.getState().setError(sessionId, "No working directory set. Create a new session.");
@@ -672,7 +673,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
           console.log("[send] sendClaudePrompt (--fork-session) succeeded");
         } else if (started) {
           try {
-            await sendClaudePrompt({ ...req, cwd: effectiveCwd, resume_session_at: resumeAtUuid }, skipOw);
+            await sendClaudePrompt({ ...req, cwd: effectiveCwd, ...(resumeAtUuid ? { resume_session_at: resumeAtUuid } : {}) }, skipOw);
             console.log("[send] sendClaudePrompt (--resume) succeeded");
           } catch (resumeErr) {
             console.log("[send] sendClaudePrompt failed, falling back to createClaudeSession:", resumeErr);
@@ -704,7 +705,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     async (text: string, permissionOverride?: PermissionMode) => {
       const loopMatch = text.match(/^\/loop\s*(.*)/i);
       if (loopMatch) {
-        const args = loopMatch[1].trim();
+        const args = loopMatch[1]!.trim();
         if (!args || args === "stop" || args === "cancel" || args === "off") {
           useClaudeStore.getState().setLoop(sessionId, null);
           return;
@@ -714,14 +715,14 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
         let intervalMs = 10 * 60 * 1000; // default 10m
         let loopPrompt = args;
         if (parts) {
-          const raw = parts[1];
+          const raw = parts[1]!;
           const num = parseInt(raw);
           const unit = raw.replace(/\d+/, "") || "m";
           if (unit === "s") intervalMs = num * 1000;
           else if (unit === "m") intervalMs = num * 60 * 1000;
           else if (unit === "h") intervalMs = num * 60 * 60 * 1000;
           else if (unit === "d") intervalMs = num * 24 * 60 * 60 * 1000;
-          loopPrompt = parts[2];
+          loopPrompt = parts[2]!;
         }
         useClaudeStore.getState().setLoop(sessionId, {
           prompt: loopPrompt,
@@ -748,7 +749,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
 
       const delegateMatch = text.match(/^\/delegate\s+([\s\S]+)/i);
       if (delegateMatch) {
-        const userGoal = delegateMatch[1].trim();
+        const userGoal = delegateMatch[1]!.trim();
         if (!userGoal) return;
 
         const skillPrompt = `You are orchestrating a delegation. The user wants to split work across multiple parallel Claude agents.
@@ -783,7 +784,7 @@ Rules:
       // (with <command-name> tags + rendered body instead of raw /skill-name text)
       const skillMatch = text.match(/^\/([a-zA-Z0-9_:.-]+)\s*([\s\S]*)?$/);
       if (skillMatch) {
-        const cmdName = skillMatch[1];
+        const cmdName = skillMatch[1]!;
         const cmdArgs = (skillMatch[2] || "").trim();
         // Skills have source: "user", "project", "Terminal 64", or plugin-related.
         // Built-in commands have source: "built-in" or are in the T64 commands list.
@@ -902,7 +903,7 @@ Rules:
     };
     for (let i = idx; i < msgs.length; i++) {
       const msg = msgs[i];
-      if (msg.role !== "assistant" || !msg.toolCalls) continue;
+      if (!msg || msg.role !== "assistant" || !msg.toolCalls) continue;
       for (const tc of msg.toolCalls) {
         const inp = tc.input || {};
         const n = tc.name?.toLowerCase() || "";
@@ -942,6 +943,7 @@ Rules:
     const parts: string[] = [];
     for (let i = idx; i < msgs.length; i++) {
       const msg = msgs[i];
+      if (!msg) continue;
       if (msg.role === "user") { parts.push(`User: ${msg.content.slice(0, 200)}`); continue; }
       if (msg.role !== "assistant" || !msg.toolCalls) continue;
       for (const tc of msg.toolCalls) {
@@ -1256,7 +1258,7 @@ Rules:
       const buf = await file.arrayBuffer();
       const bytes = new Uint8Array(buf);
       let binary = "";
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
       const base64 = btoa(binary);
       const ext = file.name.split(".").pop() || file.type.split("/")[1] || "png";
       const savedPath = await savePastedImage(base64, ext);
@@ -1355,7 +1357,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             cwd: appDir,
             prompt: initialPrompt,
             permission_mode: "bypass_all",
-            mcp_config: mcpConfigPath || undefined,
+            ...(mcpConfigPath ? { mcp_config: mcpConfigPath } : {}),
             no_session_persistence: true,
           }, inheritSkipOpenwolf).catch((err) => {
             console.warn(`[delegation] Failed to start child ${childSessionId}:`, err);
@@ -1386,7 +1388,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
     const taskMatches = [...block.matchAll(/\[TASK\]\s*(.*)/g)];
     if (taskMatches.length === 0) return;
     const context = contextMatch?.[1]?.trim() || "";
-    const tasks = taskMatches.map((m) => ({ description: m[1].trim() }));
+    const tasks = taskMatches.map((m) => ({ description: m[1]!.trim() }));
     spawnDelegation(tasks, context);
   }, [session?.messages, spawnDelegation]);
 
@@ -1416,9 +1418,10 @@ Coordinate actively. If another agent is working on a file you need, mention it 
     let i = 0;
     let lastUserTs: number | null = null;
     while (i < msgs.length) {
-      const msg = msgs[i];
-      if (msg.role === "user" && lastUserTs !== null && i > 0 && msgs[i - 1].role === "assistant") {
-        const dur = msgs[i - 1].timestamp - lastUserTs;
+      const msg = msgs[i]!;
+      const prevMsg = msgs[i - 1];
+      if (msg.role === "user" && lastUserTs !== null && i > 0 && prevMsg && prevMsg.role === "assistant") {
+        const dur = prevMsg.timestamp - lastUserTs;
         if (dur > 2000) {
           elements.push(
             <div key={`fin-${i}`} className="cc-turn-divider">
@@ -1433,7 +1436,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
         let j = i + 1;
         while (j < msgs.length) {
           const next = msgs[j];
-          if (next.role === "assistant" && !next.content && next.toolCalls?.length && next.toolCalls.every((tc) => GROUPABLE_TOOLS.has(tc.name))) {
+          if (next && next.role === "assistant" && !next.content && next.toolCalls?.length && next.toolCalls.every((tc) => GROUPABLE_TOOLS.has(tc.name))) {
             groupTcs.push(...next.toolCalls);
             j++;
           } else break;
@@ -1455,8 +1458,9 @@ Coordinate actively. If another agent is working on a file you need, mention it 
       }
       i++;
     }
-    if (!session.isStreaming && lastUserTs !== null && msgs.length > 0 && msgs[msgs.length - 1].role === "assistant") {
-      const dur = msgs[msgs.length - 1].timestamp - lastUserTs;
+    const lastMsg = msgs[msgs.length - 1];
+    if (!session.isStreaming && lastUserTs !== null && lastMsg && lastMsg.role === "assistant") {
+      const dur = lastMsg.timestamp - lastUserTs;
       if (dur > 2000) {
         elements.push(
           <div key="fin-tail" className="cc-turn-divider">
@@ -1471,8 +1475,8 @@ Coordinate actively. If another agent is working on a file you need, mention it 
   if (!session) return <div className="cc-container cc-loading">Initializing...</div>;
 
   const hasMessages = session.messages.length > 0 || session.streamingText;
-  const currentModel = MODELS.find((m) => m.id === selectedModel) || MODELS[0];
-  const currentEffort = EFFORTS.find((e) => e.id === selectedEffort) || EFFORTS[2];
+  const currentModel = MODELS.find((m) => m.id === selectedModel) || MODELS[0]!;
+  const currentEffort = EFFORTS.find((e) => e.id === selectedEffort) || EFFORTS[2]!;
 
   return (
     <div
@@ -1611,7 +1615,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
               if (effectiveCwd) {
                 loadSessionHistory(sessionId, effectiveCwd).then((history) => {
                   if (history?.length) {
-                    store.loadFromDisk(sessionId, mapHistoryMessages(history));
+                    store.loadFromDisk(sessionId, mapHistoryMessages(history) as ChatMessageData[]);
                   }
                 }).catch(() => {});
               }
@@ -1732,7 +1736,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                       // Auto-scroll to center of changed region
                       const sorted = [...changed].sort((a, b) => a - b);
                       const mid = sorted[Math.floor(sorted.length / 2)];
-                      editor.revealLineInCenter(mid);
+                      if (mid !== undefined) editor.revealLineInCenter(mid);
                     }
                     // Track dirty state
                     editor.onDidChangeModelContent(() => {
@@ -1993,15 +1997,15 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                   onRewrite={handleRewrite}
                   isRewriting={isRewriting}
                   isStreaming={session.isStreaming}
-                  accentColor={panelColor}
+                  {...(panelColor ? { accentColor: panelColor } : {})}
                   streamingStartedAt={session.streamingStartedAt}
                   slashCommands={slashCommands}
                   initialText={rewindText}
                   onInitialTextConsumed={() => setRewindText(null)}
                   permLabel={`${permMode.id === "default" ? "ask permissions" : permMode.id === "bypass_all" ? "bypass permissions" : permMode.id === "accept_edits" ? "auto-accept edits" : permMode.id === "auto" ? "auto-approve" : "plan mode"} on`}
                   permColor={permMode.color}
-                  onCyclePerm={() => setPermModeIdx((i) => { const next = (i + 1) % PERMISSION_MODES.length; const s = useSettingsStore.getState(); if (!s.claudeDefaultPermMode) s.set({ claudePermMode: PERMISSION_MODES[next].id }); return next; })}
-                  sessionName={session.name || undefined}
+                  onCyclePerm={() => setPermModeIdx((i) => { const next = (i + 1) % PERMISSION_MODES.length; const s = useSettingsStore.getState(); if (!s.claudeDefaultPermMode) s.set({ claudePermMode: PERMISSION_MODES[next]!.id }); return next; })}
+                  {...(session.name ? { sessionName: session.name } : {})}
                   cwd={effectiveCwd}
                   queueCount={session.promptQueue.length}
                   draftPrompt={session.draftPrompt}
@@ -2009,7 +2013,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                   onPasteImage={handlePasteImage}
                   contextPct={session.contextMax > 0 ? Math.round((session.contextUsed / session.contextMax) * 100) : 0}
                   autoCompactAt={autoCompactEnabled ? autoCompactThreshold : 0}
-                  onRegisterVoiceActions={isActive ? handleRegisterVoiceActions : undefined}
+                  {...(isActive ? { onRegisterVoiceActions: handleRegisterVoiceActions } : {})}
                   sessionId={sessionId}
                 />
               </>
