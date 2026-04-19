@@ -138,7 +138,12 @@ export function useVoiceControl() {
       switch (intent.kind) {
         case "Send":
           endDictationThen((snapshot) => {
-            const payload = intent.payload?.trim() || snapshot;
+            // Prefer the textarea snapshot: it's what the user SAW on screen
+            // and includes prior commits from mid-dictation pause finalizes
+            // plus any manually-typed content. intent.payload is only the
+            // current chunk's residual — a subset. Fall back to it only
+            // when the snapshot is empty (mute blocked all partials).
+            const payload = snapshot || intent.payload?.trim() || "";
             if (payload) actions.send(payload);
             else actions.send();
           });
@@ -148,7 +153,7 @@ export function useVoiceControl() {
           break;
         case "Rewrite":
           endDictationThen((snapshot) => {
-            const payload = intent.payload?.trim() || snapshot;
+            const payload = snapshot || intent.payload?.trim() || "";
             if (payload) actions.rewrite(payload);
             else actions.rewrite();
           });
