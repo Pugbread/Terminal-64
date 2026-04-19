@@ -1,0 +1,169 @@
+name: Release
+
+# Builds and publishes Terminal 64 installers for macOS (universal), Linux (x86_64), and Windows (x86_64).
+# Triggers on a semver tag push (v*.*.*) or manual dispatch.
+#
+# MVP scope: unsigned builds. See TODO markers below for signing + updater wiring.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0). Required for manual runs; a draft release is created if it does not exist."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: macos-universal
+            os: macos-latest
+            args: "--target universal-apple-darwin"
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            args: ""
+            rust-targets: ""
+          - name: windows-x86_64
+            os: windows-latest
+            args: ""
+            rust-targets: ""
+
+    runs-on: ${{ matrix.platform.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.rust-targets }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Linux system dependencies
+        if: matrix.platform.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libssl-dev \
+            build-essential \
+            curl \
+            wget \
+            file
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # TODO: signing — macOS (Apple notarytool + codesign)
+          #   https://tauri.app/v2/distribute/sign/macos/
+          #   https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution
+          # Secrets to add once we have an Apple Developer account:
+          #   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
+          #   APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+          #
+          # TODO: signing — Windows (Azure Trusted Signing)
+          #   https://tauri.app/v2/distribute/sign/windows/
+          #   https://learn.microsoft.com/en-us/azure/trusted-signing/
+          # Secrets to add once an Azure Trusted Signing account exists:
+          #   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+          #   AZURE_TRUSTED_SIGNING_ENDPOINT, AZURE_CODE_SIGNING_ACCOUNT,
+          #   AZURE_CERTIFICATE_PROFILE
+          #
+          # TODO: Tauri updater
+          #   https://tauri.app/v2/guide/distribute/updater/
+          #   Generate a keypair with `tauri signer generate` and store:
+          #     TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          #   Then enable the `updater` bundle target in tauri.conf.json and
+          #   publish a latest.json manifest alongside each release.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          releaseName: "Terminal 64 ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.platform.args }}
+
+      - name: Collect bundle artifacts
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p dist-artifacts
+          # macOS
+          find src-tauri/target/universal-apple-darwin/release/bundle/dmg -maxdepth 1 -name "*.dmg" -exec cp {} dist-artifacts/ \; 2>/dev/null || true
+          # Linux
+          find src-tauri/target/release/bundle/deb -maxdepth 1 -name "*.deb" -exec cp {} dist-artifacts/ \; 2>/dev/null || true
+          find src-tauri/target/release/bundle/appimage -maxdepth 1 -name "*.AppImage" -exec cp {} dist-artifacts/ \; 2>/dev/null || true
+          find src-tauri/target/release/bundle/rpm -maxdepth 1 -name "*.rpm" -exec cp {} dist-artifacts/ \; 2>/dev/null || true
+          # Windows
+          find src-tauri/target/release/bundle/nsis -maxdepth 1 -name "*.exe" -exec cp {} dist-artifacts/ \; 2>/dev/null || true
+          find src-tauri/target/release/bundle/msi -maxdepth 1 -name "*.msi" -exec cp {} dist-artifacts/ \; 2>/dev/null || true
+          ls -la dist-artifacts || true
+
+      - name: Upload bundle artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal64-${{ matrix.platform.name }}
+          path: dist-artifacts/*
+          if-no-files-found: warn
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -la release-assets || true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          name: "Terminal 64 ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/*.dmg
+            release-assets/*.deb
+            release-assets/*.AppImage
+            release-assets/*.rpm
+            release-assets/*.exe
+            release-assets/*.msi

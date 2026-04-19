@@ -1,0 +1,77 @@
+name: Bug report
+description: Report a reproducible problem in Terminal 64.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill out the fields below so we can reproduce and fix the issue quickly.
+  - type: input
+    id: version
+    attributes:
+      label: Terminal 64 version
+      description: The app version (see About / package.json) or commit SHA if running from source.
+      placeholder: "e.g. 0.3.1 or commit 2aa1dbf"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows 10
+        - Windows 11
+        - Linux
+        - Other (specify in steps)
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      placeholder: "e.g. macOS 14.5, Windows 11 23H2, Ubuntu 24.04"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, ordered steps. Include any commands, keybindings, or UI actions.
+      placeholder: |
+        1. Open Terminal 64
+        2. Click …
+        3. Type …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, stack traces, or screenshots
+      description: |
+        Paste relevant console output, Rust panics, or attach screenshots/recordings.
+        For Tauri errors, include output from `npm run tauri dev` if possible.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched existing issues and this has not been reported.
+          required: true
+        - label: I can reproduce this on the latest `master`.
+          required: false
