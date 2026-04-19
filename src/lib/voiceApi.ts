@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { VoiceIntent, VoiceState, VoiceModelsDownloaded } from "../stores/voiceStore";
 
 export type VoiceModelKind = "wake" | "command" | "dictation";

@@ -1,4 +1,4 @@
-import { KeyCombo, Keybinding } from "./types";
+import type { KeyCombo, Keybinding } from "./types";
 import { IS_MAC } from "./platform";
 
 function parseKeyCombo(str: string): KeyCombo {

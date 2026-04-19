@@ -1,4 +1,4 @@
-import { ThemeDefinition, UiTheme } from "./types";
+import type { ThemeDefinition, UiTheme } from "./types";
 
 export function hexToRgba(hex: string, alpha: number): string {
   const r = parseInt(hex.slice(1, 3), 16);

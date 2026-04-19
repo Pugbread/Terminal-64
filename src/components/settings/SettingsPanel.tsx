@@ -6,7 +6,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import "./SettingsPanel.css";
 
 import { FONT_OPTIONS, fontStack } from "../../lib/fonts";
-import { ThemeDefinition } from "../../lib/types";
+import type { ThemeDefinition } from "../../lib/types";
 import { useClaudeStore } from "../../stores/claudeStore";
 import { useVoiceStore } from "../../stores/voiceStore";
 import { downloadVoiceModel, voiceModelsStatus, onVoiceDownloadProgress, setVoiceSensitivity as setVoiceSensitivityBackend, type VoiceModelKind } from "../../lib/voiceApi";

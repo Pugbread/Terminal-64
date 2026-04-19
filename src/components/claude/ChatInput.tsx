@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { SlashCommand } from "../../lib/types";
+import type { SlashCommand } from "../../lib/types";
 import { searchFiles, readFileBase64 } from "../../lib/tauriApi";
 import { formatDuration } from "../../lib/constants";
 import { isAbsolutePath, joinPath } from "../../lib/platform";

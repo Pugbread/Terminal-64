@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { getWidgetServerPort, widgetFileModified, widgetGetState, widgetSetState, widgetClearState, proxyFetch, createBrowser, setBrowserBounds, setBrowserZoom, setBrowserVisible, closeBrowser, navigateBrowser, browserEval, shellExec, readFile, writeFile, listDirectory, searchFiles, deleteFiles, createTerminal, closeTerminal, writeTerminal, createClaudeSession, sendClaudePrompt, onTerminalOutput, openwolfDaemonSwitch, openwolfDaemonInfo, openwolfDaemonStopAll } from "../../lib/tauriApi";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { pushToast } from "../../lib/notifications";
-import { useClaudeStore, ClaudeSession } from "../../stores/claudeStore";
+import { useClaudeStore, type ClaudeSession } from "../../stores/claudeStore";
 import { useThemeStore } from "../../stores/themeStore";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { useVoiceStore } from "../../stores/voiceStore";

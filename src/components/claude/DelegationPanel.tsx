@@ -1,7 +1,7 @@
 import { useDelegationStore } from "../../stores/delegationStore";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { performMerge, endDelegation } from "../../hooks/useDelegationOrchestrator";
-import { DelegateTask } from "../../lib/types";
+import type { DelegateTask } from "../../lib/types";
 import "./Delegation.css";
 
 interface DelegationPanelProps {

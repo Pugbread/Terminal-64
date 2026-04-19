@@ -1,7 +1,7 @@
 import { memo, useCallback, useRef, useState, useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { useCanvasStore, CanvasTerminal } from "../../stores/canvasStore";
+import { useCanvasStore, type CanvasTerminal } from "../../stores/canvasStore";
 import { useClaudeStore } from "../../stores/claudeStore";
 import { closeTerminal, writeTerminal, closeClaudeSession, renameDiscordSession, closeBrowser, createWidgetFolder } from "../../lib/tauriApi";
 import { BORDER_COLORS, ACTIVITY_TIMEOUT_MS } from "../../lib/constants";

@@ -1,4 +1,4 @@
-import { SlashCommand } from "./types";
+import type { SlashCommand } from "./types";
 
 /**
  * Known Claude Code built-in slash commands.

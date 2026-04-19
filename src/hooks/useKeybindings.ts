@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Keybinding } from "../lib/types";
+import type { Keybinding } from "../lib/types";
 import { findMatchingBinding, DEFAULT_KEYBINDINGS } from "../lib/keybindingEngine";
 import { executeCommand } from "../lib/commands";
 

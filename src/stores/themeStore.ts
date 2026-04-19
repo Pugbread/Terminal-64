@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { ThemeDefinition } from "../lib/types";
+import type { ThemeDefinition } from "../lib/types";
 
 import catppuccinMocha from "../themes/catppuccin-mocha.json";
 import dracula from "../themes/dracula.json";

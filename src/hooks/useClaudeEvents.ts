@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { onClaudeEvent, onClaudeDone, cancelClaude, sendClaudePrompt } from "../lib/tauriApi";
 import { useClaudeStore, type ClaudeTask } from "../stores/claudeStore";
 import { useSettingsStore } from "../stores/settingsStore";
-import { ToolCall, HookEventPayload, HookEvent, HookEventType } from "../lib/types";
+import type { ToolCall, HookEventPayload, HookEvent, HookEventType } from "../lib/types";
 
 // --- Claude CLI stream JSON types ---
 

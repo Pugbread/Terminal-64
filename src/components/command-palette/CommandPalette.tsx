@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useSettingsStore, QuickPaste } from "../../stores/settingsStore";
+import { useSettingsStore, type QuickPaste } from "../../stores/settingsStore";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { writeTerminal } from "../../lib/tauriApi";
 import "./CommandPalette.css";

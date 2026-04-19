@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { v4 as uuidv4 } from "uuid";
-import { ChatMessage, ToolCall, McpTool, HookEvent } from "../lib/types";
+import type { ChatMessage, ToolCall, McpTool, HookEvent } from "../lib/types";
 
 export const STORAGE_KEY = "terminal64-claude-sessions";
 

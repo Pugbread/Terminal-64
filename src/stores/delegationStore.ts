@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { v4 as uuidv4 } from "uuid";
-import { DelegateTaskStatus, DelegationGroup, DelegationStatus } from "../lib/types";
+import type { DelegateTaskStatus, DelegationGroup, DelegationStatus } from "../lib/types";
 
 const STORAGE_KEY = "terminal64-delegations";
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { ChatMessage as ChatMessageType, ToolCall } from "../../lib/types";
+import type { ChatMessage as ChatMessageType, ToolCall } from "../../lib/types";
 import { readFileBase64 } from "../../lib/tauriApi";
 
 const DELEGATION_BLOCK_RE = /\[DELEGATION_START\][\s\S]*?\[DELEGATION_END\]/;
