@@ -26,7 +26,7 @@ dirs = "5"
 url = "2"
 chrono = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
-reqwest = { version = "0.12", features = ["json", "native-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "native-tls", "stream"], default-features = false }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
 spectrum-analyzer = "1.5"
@@ -35,15 +35,13 @@ base64 = "0.22"
 rand = "0.8"
 zip = "2"
 rusqlite = { version = "0.39", features = ["bundled"] }
-fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-native-tls", "online"] }
 zerocopy = "0.8"
 # Voice control: mic capture + resample + ASR
 cpal = "0.15"
 rubato = "0.15"
-# Pin ort to fastembed's transitive version (Cargo.lock: 2.0.0-rc.11) so the two deps share one build.
-ort = { version = "=2.0.0-rc.11", default-features = false, features = ["ndarray", "download-binaries"] }
+# ONNX runtime for voice models (wake word, VAD, Moonshine ASR).
+ort = { version = "=2.0.0-rc.11", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-native"] }
 ndarray = "0.17"
-# Pin to the version fastembed already pulls in (Cargo.lock: 0.22.2) so there's one build.
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 sha2 = "0.10"
 hex = "0.4"

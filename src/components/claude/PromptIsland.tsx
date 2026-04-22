@@ -29,7 +29,9 @@ function PromptIslandImpl({ prompts, isScrolledUp, progress, open, onOpen, onClo
     if (open && !hasPrompts) onClose();
   }, [open, hasPrompts, onClose]);
 
-  if (!visible) return null;
+  // When there are no prompts at all, nothing to render — no fade transition
+  // needed because we've never shown anything in the first place.
+  if (!hasPrompts) return null;
 
   const clamped = Math.max(0, Math.min(1, progress));
   const dashOffset = (1 - clamped) * RING_CIRC;
@@ -40,7 +42,7 @@ function PromptIslandImpl({ prompts, isScrolledUp, progress, open, onOpen, onClo
         className={`cc-island-backdrop${open ? " cc-island-backdrop--open" : ""}`}
         onClick={onClose}
       />
-      <div className={`cc-island${open ? " cc-island--open" : ""}`}>
+      <div className={`cc-island${open ? " cc-island--open" : ""}${visible ? "" : " cc-island--hidden"}`}>
         <button className="cc-island-pill" onClick={onOpen} aria-label="Open prompt history">
           <span className="cc-island-progress" aria-hidden="true">
             <svg width="14" height="14" viewBox="0 0 14 14">

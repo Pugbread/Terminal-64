@@ -29,7 +29,6 @@ mod permission_server;
 mod plugin_manifest_store;
 mod pty_manager;
 mod types;
-mod vector_store;
 mod voice;
 mod voice_manager;
 mod widget_server;
@@ -100,7 +99,6 @@ use pty_manager::PtyManager;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 use types::*;
-use vector_store::VectorStore;
 use voice_manager::VoiceManager;
 use widget_server::WidgetServer;
 
@@ -133,7 +131,6 @@ struct AppState {
     audio_manager: Arc<AudioManager>,
     browser_manager: BrowserManager,
     widget_server: WidgetServer,
-    vector_store: Arc<Mutex<Option<VectorStore>>>,
     // Retained on AppState so its subscribers stay alive for the duration of the app,
     // even though all mic access currently flows through VoiceManager.
     #[allow(dead_code)]
@@ -940,6 +937,24 @@ fn load_session_history(session_id: String, cwd: String) -> Result<Vec<HistoryMe
         // Skip queue-operation, last-prompt, etc.
     }
     Ok(messages)
+}
+
+/// Tail variant: parses the full JSONL but returns only the last `limit`
+/// messages. Used by the refresh button to re-sync recent messages without
+/// pumping thousands of older ones over IPC. The frontend merges the tail
+/// into the store by message id, so older already-loaded messages survive.
+#[tauri::command]
+fn load_session_history_tail(
+    session_id: String,
+    cwd: String,
+    limit: usize,
+) -> Result<Vec<HistoryMessage>, String> {
+    let mut messages = load_session_history(session_id, cwd)?;
+    if limit == 0 || messages.len() <= limit {
+        return Ok(messages);
+    }
+    let start = messages.len() - limit;
+    Ok(messages.split_off(start))
 }
 
 /// Collect JSONL lines up to `keep_turns` user messages (actual user prompts, not tool_result-only messages).
@@ -4150,138 +4165,6 @@ fn browser_eval(
     state.browser_manager.eval_js(&app_handle, &id, &js)
 }
 
-// ---- Vector Store Commands ----
-
-#[tauri::command]
-fn vector_search(
-    state: tauri::State<'_, AppState>,
-    table: String,
-    query: String,
-    top_k: Option<usize>,
-) -> Result<Vec<vector_store::VectorSearchResult>, String> {
-    let mut guard = state
-        .vector_store
-        .lock()
-        .map_err(|e| format!("Lock error: {e}"))?;
-    let store = guard.as_mut().ok_or("Vector store not initialized yet")?;
-    let k = top_k.unwrap_or(10);
-    if table == "all" {
-        store.search_all(&query, k)
-    } else {
-        store.search(&table, &query, k)
-    }
-}
-
-#[tauri::command]
-fn vector_index_file(
-    state: tauri::State<'_, AppState>,
-    path: String,
-    content: String,
-) -> Result<(), String> {
-    let mut guard = state
-        .vector_store
-        .lock()
-        .map_err(|e| format!("Lock error: {e}"))?;
-    let store = guard.as_mut().ok_or("Vector store not initialized yet")?;
-    let title = std::path::Path::new(&path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.clone());
-    let preview = content.chars().take(200).collect::<String>();
-    store.upsert_file(&path, &content, &title, &path, &preview)
-}
-
-#[tauri::command]
-fn vector_index_session(
-    state: tauri::State<'_, AppState>,
-    session_id: String,
-    summary: String,
-    cwd: String,
-) -> Result<(), String> {
-    let mut guard = state
-        .vector_store
-        .lock()
-        .map_err(|e| format!("Lock error: {e}"))?;
-    let store = guard.as_mut().ok_or("Vector store not initialized yet")?;
-    let preview = summary.chars().take(200).collect::<String>();
-    store.upsert_session(&session_id, &summary, &session_id, &cwd, &preview)
-}
-
-#[tauri::command]
-fn vector_reindex_all(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let mut guard = state
-        .vector_store
-        .lock()
-        .map_err(|e| format!("Lock error: {e}"))?;
-    let store = guard.as_mut().ok_or("Vector store not initialized yet")?;
-
-    let mut indexed = 0usize;
-
-    // Index skills from ~/.terminal64/skills/
-    let base = dirs::home_dir()
-        .ok_or("No home dir")?
-        .join(".terminal64")
-        .join("skills");
-    if base.exists() {
-        if let Ok(entries) = std::fs::read_dir(&base) {
-            for entry in entries.flatten() {
-                let skill_dir = entry.path();
-                let skill_md = skill_dir.join("SKILL.md");
-                if skill_md.exists() {
-                    if let Ok(content) = std::fs::read_to_string(&skill_md) {
-                        let name = skill_dir
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        let preview = content.chars().take(200).collect::<String>();
-                        let _ = store.upsert_skill(
-                            &name,
-                            &content,
-                            &name,
-                            &skill_dir.to_string_lossy(),
-                            &preview,
-                        );
-                        indexed += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    // Index widgets from ~/.terminal64/widgets/
-    let widgets_base = dirs::home_dir()
-        .ok_or("No home dir")?
-        .join(".terminal64")
-        .join("widgets");
-    if widgets_base.exists() {
-        if let Ok(entries) = std::fs::read_dir(&widgets_base) {
-            for entry in entries.flatten() {
-                let widget_dir = entry.path();
-                let index_html = widget_dir.join("index.html");
-                if index_html.exists() {
-                    if let Ok(content) = std::fs::read_to_string(&index_html) {
-                        let name = widget_dir
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        let preview = content.chars().take(200).collect::<String>();
-                        let _ = store.upsert_widget(
-                            &name,
-                            &content,
-                            &name,
-                            &widget_dir.to_string_lossy(),
-                            &preview,
-                        );
-                        indexed += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(format!("Reindexed {indexed} items"))
-}
-
 // ---- Voice control commands ----
 // Names and payload shapes match src/lib/voiceApi.ts exactly.
 
@@ -4508,44 +4391,15 @@ pub fn run() {
                 audio_manager: Arc::new(AudioManager::new()),
                 browser_manager: BrowserManager::new(),
                 widget_server: widget_srv,
-                vector_store: Arc::new(Mutex::new(None)),
                 mic_manager: mic_mgr,
                 voice_manager: voice_mgr,
             });
 
-            // Initialize the vector store in a background thread (model download may take time)
-            {
-                let vs_arc = {
-                    let state: tauri::State<'_, AppState> = app.state();
-                    Arc::clone(&state.vector_store)
-                };
-                std::thread::spawn(move || match VectorStore::initialize() {
-                    Ok(store) => match vs_arc.lock() {
-                        Ok(mut slot) => {
-                            *slot = Some(store);
-                            safe_eprintln!("[vector_store] Initialized successfully");
-                        }
-                        Err(e) => {
-                            safe_eprintln!("[vector_store] Failed to acquire lock: {}", e);
-                        }
-                    },
-                    Err(e) => {
-                        safe_eprintln!("[vector_store] Failed to initialize: {}", e);
-                    }
-                });
-            }
-
-            // Voice self-test (Agent 4 §7): load each model once, run one
-            // inference, emit `voice-selftest` with per-stage ms + ok/err.
-            // Background thread so whisper's Metal shader compile doesn't
-            // block the window from appearing. Silent when all models are
-            // missing — models.rs::is_downloaded gates each adapter load.
-            {
-                let app_for_selftest = app.handle().clone();
-                std::thread::spawn(move || {
-                    let _ = voice::testkit::run_self_test(&app_for_selftest);
-                });
-            }
+            // Voice self-test is opt-in — only run when the user explicitly
+            // triggers it via the `voice_run_selftest` Tauri command. Running it
+            // at startup on fresh installs spams stderr with "model missing"
+            // errors and forces whisper's Metal shader compile for a feature
+            // the user hasn't opted into.
 
             // Bridge skills on startup: set up the outgoing ~/.claude/skills
             // symlinks, then pull in any skills that live under ~/.claude/skills
@@ -4619,6 +4473,7 @@ pub fn run() {
             search_files,
             list_disk_sessions,
             load_session_history,
+            load_session_history_tail,
             truncate_session_jsonl,
             truncate_session_jsonl_by_messages,
             find_rewind_uuid,
@@ -4684,10 +4539,6 @@ pub fn run() {
             ensure_skills_plugin,
             sync_claude_skills,
             generate_skill_metadata,
-            vector_search,
-            vector_index_file,
-            vector_index_session,
-            vector_reindex_all,
             install_bundled_widget,
             start_voice,
             stop_voice,

@@ -19,7 +19,6 @@ import type {
   ResolvedSkill,
   ProxyFetchResponse,
   SpectrumData,
-  VectorSearchResult,
   ChatMessage,
   ToolCall,
 } from "./types";
@@ -129,6 +128,12 @@ export async function listDiskSessions(cwd: string): Promise<DiskSession[]> {
 
 export async function loadSessionHistory(sessionId: string, cwd: string): Promise<HistoryMessage[]> {
   return invoke("load_session_history", { sessionId, cwd });
+}
+
+/** Load only the last `limit` messages from JSONL. Cheap re-sync for the
+ *  refresh button — avoids pumping a full 10k-message history over IPC. */
+export async function loadSessionHistoryTail(sessionId: string, cwd: string, limit: number): Promise<HistoryMessage[]> {
+  return invoke("load_session_history_tail", { sessionId, cwd, limit });
 }
 
 /** Map Rust HistoryMessage[] (snake_case) to frontend ChatMessage format (camelCase) */
@@ -617,24 +622,6 @@ export async function savePastedImage(base64Data: string, extension: string): Pr
 
 export async function readFileBase64(path: string): Promise<string> {
   return invoke("read_file_base64", { path });
-}
-
-// Vector search commands (sqlite-vec)
-
-export async function vectorSearch(table: string, query: string, topK: number): Promise<VectorSearchResult[]> {
-  return invoke("vector_search", { table, query, topK });
-}
-
-export async function vectorIndexFile(path: string, content: string): Promise<void> {
-  return invoke("vector_index_file", { path, content });
-}
-
-export async function vectorIndexSession(sessionId: string, summary: string, cwd: string): Promise<void> {
-  return invoke("vector_index_session", { sessionId, summary, cwd });
-}
-
-export async function vectorReindexAll(): Promise<void> {
-  return invoke("vector_reindex_all");
 }
 
 // ── Shared helpers ──────────────────────────────────

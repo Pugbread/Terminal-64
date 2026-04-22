@@ -98,6 +98,11 @@ export default function VoiceMascot() {
   const { frames, interval } = pickFrameSet(state, enabled, error);
   const [tick, setTick] = useState(0);
 
+  // Voice is opt-in — no mascot clutter for users who haven't enabled it.
+  // Hiding here instead of returning null below the hooks so state changes
+  // after re-enable still hydrate cleanly.
+  const hidden = !enabled && !error;
+
   // Reset tick on state change so the new animation starts from frame 0
   // instead of an arbitrary index that was valid for the old frame set.
   useEffect(() => {
@@ -109,6 +114,8 @@ export default function VoiceMascot() {
     const id = setInterval(() => setTick((t) => t + 1), interval);
     return () => clearInterval(id);
   }, [frames, interval]);
+
+  if (hidden) return null;
 
   const frame = frames[tick % frames.length];
   const mood = error

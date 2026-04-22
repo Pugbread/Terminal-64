@@ -295,17 +295,6 @@ export interface SpectrumData {
   treble: number;
 }
 
-// Vector search types (sqlite-vec)
-
-export interface VectorSearchResult {
-  id: string;
-  distance: number;
-  table: string;
-  title: string;
-  source: string;
-  content_preview: string;
-}
-
 // Hook event types — lifecycle events emitted by Claude CLI hooks
 
 export type HookEventType =

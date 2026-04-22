@@ -414,6 +414,18 @@
 
 /* ---- Messages ---- */
 
+/* Positioning frame around the scroll viewport. Holds `.cc-messages` plus
+   floating UI (prompt island, jump-to-bottom button) so they anchor to the
+   scroll frame's rect instead of the whole chat column (which includes the
+   input/footer). */
+.cc-scroll-frame {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .cc-messages {
   flex: 1;
   overflow-y: auto;
@@ -2445,7 +2457,7 @@
 
 .cc-island {
   position: absolute;
-  top: 10px;
+  bottom: 14px;
   left: 50%;
   z-index: 12;
   overflow: hidden;
@@ -2462,10 +2474,18 @@
   height: 32px;
   border-radius: 999px;
   transform: translate(-50%, 0) scale(1);
-  transform-origin: top center;
+  transform-origin: bottom center;
+  opacity: 1;
   transition-property: width, height, border-radius, box-shadow, background-color, opacity, transform;
   transition-duration: 0.28s;
   transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Fade/slide out when hidden — still mounted so the transition can play. */
+.cc-island--hidden {
+  opacity: 0;
+  transform: translate(-50%, 8px) scale(0.96);
+  pointer-events: none;
 }
 
 .cc-island--open {
@@ -2532,16 +2552,17 @@
 .cc-island-pill:active { transform: scale(0.96); }
 
 .cc-jump-bottom {
-  position: sticky;
-  bottom: 14px;
-  align-self: flex-end;
-  margin-top: auto;
-  margin-right: 4px;
+  position: absolute;
+  top: 50%;
+  right: 18px;
+  /* translateY centers vertically regardless of scroll position, so the
+     button stays at a fixed spot in the viewport (not riding the scroll
+     flow or bouncing with zoom). */
+  transform: translateY(-50%) scale(1);
   z-index: 11;
   width: 30px;
   height: 30px;
   border-radius: 999px;
-  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2554,8 +2575,11 @@
     0 6px 22px rgba(0, 0, 0, 0.35);
   color: var(--fg, #cdd6f4);
   cursor: pointer;
-  transition: transform 0.15s cubic-bezier(0.32, 0.72, 0, 1), color 0.15s ease, background-color 0.15s ease;
-  animation: cc-jump-bottom-in 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+  opacity: 1;
+  transition: transform 0.18s cubic-bezier(0.32, 0.72, 0, 1),
+              opacity 0.18s ease,
+              color 0.15s ease,
+              background-color 0.15s ease;
 }
 
 .cc-jump-bottom:hover {
@@ -2564,12 +2588,13 @@
 }
 
 .cc-jump-bottom:active {
-  transform: scale(0.94);
+  transform: translateY(-50%) scale(0.94);
 }
 
-@keyframes cc-jump-bottom-in {
-  from { opacity: 0; transform: translateY(4px) scale(0.94); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+.cc-jump-bottom--hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) scale(0.94);
 }
 
 /* Island enter/exit when scrolling crosses the bottom-pin boundary */

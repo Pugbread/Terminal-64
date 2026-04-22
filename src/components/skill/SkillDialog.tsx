@@ -4,7 +4,6 @@ import { listSkills, createSkillFolder, deleteSkill, getSkillCreatorPath, ensure
 import { useCanvasStore } from "../../stores/canvasStore";
 import { useClaudeStore } from "../../stores/claudeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { useSemanticSearch } from "../../hooks/useSemanticSearch";
 import { formatRelativeTime, openSystemFolder } from "../../lib/constants";
 import type { SkillInfo } from "../../lib/types";
 import "./Skill.css";
@@ -101,8 +100,6 @@ export default function SkillDialog({ isOpen, onClose }: SkillDialogProps) {
   const [creating, setCreating] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [activeTag, setActiveTag] = useState<string | null>(null);
-  const [searchMode, setSearchMode] = useState<"keyword" | "semantic">("keyword");
-  const semantic = useSemanticSearch("skills", 10);
   const searchRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const recentDirs = useSettingsStore((s) => s.recentDirs);
@@ -128,8 +125,6 @@ export default function SkillDialog({ isOpen, onClose }: SkillDialogProps) {
     setShowCreate(false);
     setDetailSkill(null);
     setDetailContent(null);
-    semantic.clear();
-    setSearchMode("keyword");
     (async () => {
       try { await syncClaudeSkills(); } catch {}
       refreshList();
@@ -357,46 +352,13 @@ export default function SkillDialog({ isOpen, onClose }: SkillDialogProps) {
                     <circle cx="11" cy="11" r="8"/>
                     <path d="M21 21l-4.35-4.35"/>
                   </svg>
-                  {searchMode === "keyword" ? (
-                    <input
-                      ref={searchRef}
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Search skills..."
-                      onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
-                    />
-                  ) : (
-                    <input
-                      value={semantic.query}
-                      onChange={(e) => semantic.search(e.target.value)}
-                      placeholder="Describe what you need..."
-                      onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
-                      autoFocus
-                    />
-                  )}
-                  {semantic.searching && <span className="vs-search-spinner" />}
-                </div>
-                <div className="vs-mode-toggle vs-mode-toggle--compact">
-                  <button
-                    className={`vs-mode-btn ${searchMode === "keyword" ? "vs-mode-btn--active" : ""}`}
-                    onClick={() => { setSearchMode("keyword"); semantic.clear(); }}
-                    title="Keyword search"
-                  >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
-                    </svg>
-                  </button>
-                  <button
-                    className={`vs-mode-btn ${searchMode === "semantic" ? "vs-mode-btn--active" : ""}`}
-                    onClick={() => { setSearchMode("semantic"); setSearch(""); }}
-                    title="Semantic search"
-                  >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93L12 22"/>
-                      <path d="M8 6a4 4 0 0 1 8 0"/>
-                      <path d="M5.2 11.2a8 8 0 0 1 13.6 0"/>
-                    </svg>
-                  </button>
+                  <input
+                    ref={searchRef}
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search skills..."
+                    onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+                  />
                 </div>
                 <button
                   className={`skl-new-btn ${showCreate ? "skl-new-btn--cancel" : ""}`}
@@ -405,44 +367,6 @@ export default function SkillDialog({ isOpen, onClose }: SkillDialogProps) {
                   {showCreate ? "Cancel" : "+ New"}
                 </button>
               </div>
-
-              {/* Semantic search results */}
-              {searchMode === "semantic" && semantic.results.length > 0 && (
-                <div className="vs-results vs-results--skills">
-                  <label className="skl-section-label">
-                    Semantic Matches
-                    <span className="claude-dialog-count" style={{ marginLeft: 6 }}>{semantic.results.length}</span>
-                  </label>
-                  <div className="vs-results-list">
-                    {semantic.results.map((r) => {
-                      const matchedSkill = skills.find((s) => s.name === r.id);
-                      return (
-                        <button
-                          key={r.id}
-                          className="vs-result-item vs-result-item--skill"
-                          onClick={() => matchedSkill ? handleOpen(matchedSkill) : undefined}
-                        >
-                          <div className="vs-result-top">
-                            <span className="vs-result-text">{r.title || r.id}</span>
-                            <span className="vs-result-score">{Math.max(0, (1 - r.distance) * 100).toFixed(0)}%</span>
-                          </div>
-                          {matchedSkill?.tags && matchedSkill.tags.length > 0 && (
-                            <div className="vs-result-tags">
-                              {matchedSkill.tags.map((t) => (
-                                <span key={t} className="skl-card-tag" style={{ "--skl-tag-color": tagColor(t) } as React.CSSProperties}>{t}</span>
-                              ))}
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {searchMode === "semantic" && !semantic.searching && semantic.query.trim() && semantic.results.length === 0 && (
-                <div className="vs-empty">No semantic matches found</div>
-              )}
 
               {/* Create panel (collapsible) */}
               {showCreate && (
@@ -498,8 +422,8 @@ export default function SkillDialog({ isOpen, onClose }: SkillDialogProps) {
                 </div>
               )}
 
-              {/* Tag filter + grid (keyword mode only) */}
-              {searchMode === "keyword" && allTags.length > 0 && (
+              {/* Tag filter + grid */}
+              {allTags.length > 0 && (
                 <div className="skl-tags">
                   {allTags.filter((tag) => !search.trim() || tag.toLowerCase().includes(search.trim().toLowerCase())).map((tag) => {
                     const color = tagColor(tag);
@@ -518,8 +442,8 @@ export default function SkillDialog({ isOpen, onClose }: SkillDialogProps) {
                 </div>
               )}
 
-              {/* Skills grid (keyword mode) */}
-              {searchMode === "keyword" && filteredSkills.length > 0 && (
+              {/* Skills grid */}
+              {filteredSkills.length > 0 && (
                 <>
                   <div className="skl-section-label">
                     {activeTag ? `Tagged "${activeTag}"` : search.trim() ? "Results" : "All skills"}
@@ -577,8 +501,8 @@ export default function SkillDialog({ isOpen, onClose }: SkillDialogProps) {
                 </>
               )}
 
-              {/* Empty states (keyword mode) */}
-              {searchMode === "keyword" && filteredSkills.length === 0 && skills.length === 0 && (
+              {/* Empty states */}
+              {filteredSkills.length === 0 && skills.length === 0 && (
                 <div className="skl-empty">
                   <div className="skl-empty-glyph">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -595,7 +519,7 @@ export default function SkillDialog({ isOpen, onClose }: SkillDialogProps) {
                 </div>
               )}
 
-              {searchMode === "keyword" && filteredSkills.length === 0 && skills.length > 0 && (
+              {filteredSkills.length === 0 && skills.length > 0 && (
                 <div className="skl-empty">
                   <div className="skl-empty-text">
                     <div className="skl-empty-title">No matches</div>

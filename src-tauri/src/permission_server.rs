@@ -9,8 +9,12 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 /// All Claude Code lifecycle hook events to register for each session.
+///
+/// `PreToolUse` doubles as the permission gate: Claude Code no longer ships a
+/// standalone `PermissionRequest` hook, so we return a `permissionDecision`
+/// from the PreToolUse response instead. `PreToolUse` for safe read-only
+/// tools auto-allows; everything else blocks on a frontend decision.
 const HOOK_EVENTS: &[&str] = &[
-    "PermissionRequest",
     "PreToolUse",
     "PostToolUse",
     "Stop",
@@ -21,6 +25,28 @@ const HOOK_EVENTS: &[&str] = &[
     "PostCompact",
     "SessionStart",
     "SessionEnd",
+];
+
+/// Tools we auto-approve in PreToolUse. Read-only / navigational / bookkeeping
+/// tools that don't mutate files, exec shell, or touch the network — prompting
+/// for each of these drowns the user in dialogs.
+const AUTO_ALLOW_TOOLS: &[&str] = &[
+    "Read",
+    "Glob",
+    "Grep",
+    "LS",
+    "TodoWrite",
+    "BashOutput",
+    "KillShell",
+    "KillBash",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "Agent",
+    "NotebookRead",
+    "AskUserQuestion",
+    "ExitPlanMode",
+    "SlashCommand",
 ];
 
 /// Build a complete hooks settings JSON registering HTTP hooks for all lifecycle events.
@@ -34,9 +60,7 @@ fn build_hook_settings(port: u16, secret: &str, run_token: &str) -> serde_json::
         // Events with a `matcher` field (tool name / source / trigger) need a non-empty
         // regex to fire. "." matches any single char, covering all values.
         let matcher = match *event {
-            "PreToolUse" | "PostToolUse" | "PermissionRequest" | "SessionStart" | "PreCompact" => {
-                "."
-            }
+            "PreToolUse" | "PostToolUse" | "SessionStart" | "PreCompact" => ".",
             _ => "",
         };
         hooks.insert(
@@ -542,15 +566,15 @@ fn handle_connection(
         .unwrap_or_default();
 
     if session_id.is_empty() {
-        // Unknown token — fail-closed
-        if event_name == "PermissionRequest" {
+        // Unknown token — fail-closed. For PreToolUse we must return a
+        // permissionDecision of "deny" using the Claude Code 2.x shape;
+        // other events can just 200 {} and move on.
+        if event_name == "PreToolUse" {
             let resp = serde_json::json!({
                 "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
-                    "decision": {
-                        "behavior": "deny",
-                        "message": "Unknown session — denied for safety"
-                    }
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Unknown session — denied for safety"
                 }
             });
             send_http(&mut stream, 200, &resp.to_string());
@@ -560,21 +584,70 @@ fn handle_connection(
         return Ok(());
     }
 
+    // Emit the generic Tauri event for every hook (except we synthesize
+    // PreToolUse's emit after the permission gate so listeners see a single
+    // consistent flow).
+    let emit_hook_event = |evt: &str, payload: &serde_json::Value| {
+        let hook_event = HookEvent {
+            session_id: session_id.clone(),
+            event_name: evt.to_string(),
+            payload: payload.clone(),
+        };
+        let specific_event = format!("claude-hook-{}", evt);
+        let _ = app_handle.emit(&specific_event, &hook_event);
+        let _ = app_handle.emit("claude-hook-event", &hook_event);
+    };
+
     match event_name {
-        "PermissionRequest" => {
+        "PreToolUse" => {
             let tool_name = parsed["tool_name"]
                 .as_str()
                 .unwrap_or("unknown")
                 .to_string();
             let tool_input = parsed["tool_input"].clone();
+            // Claude CLI stamps the session's current permission mode onto
+            // every hook payload. When the user has selected "bypass
+            // permissions", the CLI won't prompt itself, but PreToolUse hooks
+            // still fire — so we must auto-allow here or we'd prompt the user
+            // for tools they've already opted to bypass.
+            let permission_mode = parsed["permission_mode"].as_str().unwrap_or("");
 
+            // Emit the Claude-facing hook event for orchestrator / listeners.
+            emit_hook_event(event_name, &parsed);
+
+            // Bypass mode: rubber-stamp every tool call.
+            if permission_mode == "bypassPermissions" {
+                let resp = serde_json::json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "permissionDecisionReason": "bypassPermissions mode"
+                    }
+                });
+                send_http(&mut stream, 200, &resp.to_string());
+                return Ok(());
+            }
+
+            // Auto-allow read-only / navigational tools without prompting.
+            if AUTO_ALLOW_TOOLS.iter().any(|t| *t == tool_name) {
+                let resp = serde_json::json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "permissionDecisionReason": "Auto-approved (read-only tool)"
+                    }
+                });
+                send_http(&mut stream, 200, &resp.to_string());
+                return Ok(());
+            }
+
+            // Everything else: block until the frontend resolves.
             let request_id = next_id();
             safe_eprintln!(
-                "[perm-server] Permission request {} for {} in session {}: {}",
+                "[perm-server] Permission request {} for {} in session {}",
                 request_id,
                 tool_name,
-                &session_id[..session_id.len().min(8)],
-                tool_name
+                &session_id[..session_id.len().min(8)]
             );
 
             let (tx, rx) = mpsc::sync_channel(1);
@@ -588,6 +661,7 @@ fn handle_connection(
                 serde_json::json!({
                     "request_id": request_id,
                     "session_id": session_id,
+                    "provider_id": "claude-code",
                     "tool_name": tool_name,
                     "tool_input": tool_input,
                 }),
@@ -611,50 +685,23 @@ fn handle_connection(
             let decision = if allow { "allow" } else { "deny" };
             safe_eprintln!("[perm-server] Resolved {}: {}", request_id, decision);
 
-            let resp = if allow {
-                serde_json::json!({
-                    "hookSpecificOutput": {
-                        "hookEventName": "PermissionRequest",
-                        "decision": {
-                            "behavior": "allow"
-                        }
-                    }
-                })
-            } else {
-                serde_json::json!({
-                    "hookSpecificOutput": {
-                        "hookEventName": "PermissionRequest",
-                        "decision": {
-                            "behavior": "deny",
-                            "message": reason
-                        }
-                    }
-                })
-            };
+            let resp = serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": decision,
+                    "permissionDecisionReason": reason
+                }
+            });
             send_http(&mut stream, 200, &resp.to_string());
         }
-        "PreToolUse" | "PostToolUse" | "Stop" | "SubagentStart" | "SubagentStop"
-        | "Notification" | "PreCompact" | "PostCompact" | "SessionStart" | "SessionEnd" => {
-            // Non-blocking hook events: emit Tauri event and respond immediately
-            let hook_event = HookEvent {
-                session_id: session_id.clone(),
-                event_name: event_name.to_string(),
-                payload: parsed.clone(),
-            };
-
-            // Emit event-specific Tauri event: claude-hook-{EventName}
-            // Session ID is in the payload — listeners filter by it
-            let specific_event = format!("claude-hook-{}", event_name);
-            let _ = app_handle.emit(&specific_event, &hook_event);
-            // Also emit generic event for catch-all listeners
-            let _ = app_handle.emit("claude-hook-event", &hook_event);
-
+        "PostToolUse" | "Stop" | "SubagentStart" | "SubagentStop" | "Notification"
+        | "PreCompact" | "PostCompact" | "SessionStart" | "SessionEnd" => {
+            emit_hook_event(event_name, &parsed);
             safe_eprintln!(
                 "[perm-server] Hook event {} for session {}",
                 event_name,
                 &session_id[..session_id.len().min(8)]
             );
-
             send_http(&mut stream, 200, r#"{}"#);
         }
         _ => {

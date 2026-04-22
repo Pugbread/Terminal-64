@@ -28,7 +28,6 @@
       <button class="pi-tab pi-tab--active" data-panel="anatomy">File Anatomy</button>
       <button class="pi-tab" data-panel="memory">Learning Memory</button>
       <button class="pi-tab" data-panel="bugs">Bug Log</button>
-      <button class="pi-tab" data-panel="search">Semantic Search</button>
     </nav>
 
     <main class="pi-content">
@@ -96,22 +95,6 @@
         </div>
       </section>
 
-      <!-- Semantic Search Panel -->
-      <section class="pi-panel pi-panel--hidden" id="panel-search">
-        <div class="pi-panel-header">
-          <h2>Semantic Search</h2>
-        </div>
-        <div class="pi-search-row pi-search-row--main">
-          <input class="pi-input pi-input--lg" id="semanticInput" type="text" placeholder="Search sessions, skills, files..." />
-          <button class="pi-btn pi-btn--search" id="semanticGo">Search</button>
-        </div>
-        <div class="pi-results" id="searchResults"></div>
-        <div class="pi-empty" id="searchEmpty">
-          <span class="pi-empty-icon">&#x1f50d;</span>
-          <p>Enter a query to search across your project.</p>
-          <p class="pi-empty-hint">Uses vector similarity to find related sessions, skills, and files</p>
-        </div>
-      </section>
     </main>
   </div>
 

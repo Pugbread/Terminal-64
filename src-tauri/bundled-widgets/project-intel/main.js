@@ -2,7 +2,7 @@
  * Project Intelligence Dashboard — main.js
  *
  * Communicates with Terminal 64 via postMessage bridge (t64:* protocol).
- * Five panels: Token Usage, File Anatomy, Learning Memory, Bug Log, Semantic Search.
+ * Panels: File Anatomy, Learning Memory, Bug Log.
  */
 
 // ---- T64 Bridge Helpers ----
@@ -751,84 +751,6 @@ bugSearch.addEventListener("input", () => {
     if (bugData) renderBugTable(bugSearch.value);
   }, 200);
 });
-
-// ============================================================
-// PANEL 5: Semantic Search
-// ============================================================
-
-const semanticInput = document.getElementById("semanticInput");
-const semanticGo = document.getElementById("semanticGo");
-const searchResults = document.getElementById("searchResults");
-const searchEmpty = document.getElementById("searchEmpty");
-
-semanticGo.addEventListener("click", doSemanticSearch);
-semanticInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") doSemanticSearch();
-});
-
-async function doSemanticSearch() {
-  const query = semanticInput.value.trim();
-  if (!query) return;
-
-  searchResults.innerHTML = `<div class="pi-loading"><div class="pi-spinner"></div>Searching...</div>`;
-  searchEmpty.style.display = "none";
-
-  try {
-    // Try vector_search via shell exec (if sqlite-vec backend is available)
-    const result = await execCommand(
-      `echo '{"query":"${query.replace(/"/g, '\\"')}","limit":20}' | timeout 5 cat`,
-      projectCwd
-    ).catch(() => null);
-
-    // Fallback: use file search
-    let results = [];
-    try {
-      const fileResults = await searchFiles(projectCwd, query);
-      if (Array.isArray(fileResults)) {
-        results = fileResults.map(r => ({
-          type: "file",
-          title: typeof r === "string" ? r.split("/").pop() : (r.path || r.file || "").split("/").pop(),
-          path: typeof r === "string" ? r : (r.path || r.file || ""),
-          snippet: typeof r === "object" ? (r.line || r.match || r.snippet || "") : "",
-          score: typeof r === "object" ? (r.score || 0.5) : 0.5,
-        }));
-      }
-    } catch { /* no results */ }
-
-    if (results.length === 0) {
-      searchResults.innerHTML = "";
-      searchEmpty.style.display = "flex";
-      searchEmpty.querySelector("p").textContent = `No results for "${query}"`;
-      return;
-    }
-
-    searchResults.innerHTML = "";
-    searchEmpty.style.display = "none";
-
-    for (const r of results.slice(0, 20)) {
-      const card = document.createElement("div");
-      card.className = "pi-result";
-
-      const typeClass = r.type === "session" ? "session" : r.type === "skill" ? "skill" : "file";
-      card.innerHTML = `
-        <div class="pi-result-header">
-          <span class="pi-result-type pi-result-type--${typeClass}">${r.type}</span>
-          <span class="pi-result-title">${escHtml(r.title || r.path || "Untitled")}</span>
-          ${r.score ? `<span class="pi-result-score">${(r.score * 100).toFixed(0)}%</span>` : ""}
-        </div>
-        ${r.snippet ? `<div class="pi-result-snippet">${escHtml(r.snippet).slice(0, 200)}</div>` : ""}
-      `;
-
-      card.addEventListener("click", () => {
-        if (r.path) post("t64:open-file", { path: r.path.startsWith("/") ? r.path : `${projectCwd}/${r.path}` });
-      });
-
-      searchResults.appendChild(card);
-    }
-  } catch (err) {
-    searchResults.innerHTML = `<div class="pi-empty"><p>Search failed: ${escHtml(err.message)}</p></div>`;
-  }
-}
 
 // ============================================================
 // Utilities

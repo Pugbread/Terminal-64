@@ -130,6 +130,7 @@ interface ClaudeState {
   removeQueuedPrompt: (sessionId: string, promptId: string) => void;
   clearQueue: (sessionId: string) => void;
   loadFromDisk: (sessionId: string, messages: ChatMessage[]) => void;
+  mergeFromDisk: (sessionId: string, messages: ChatMessage[]) => void;
   setDraftPrompt: (sessionId: string, text: string) => void;
   setLoop: (sessionId: string, loop: ActiveLoop | null) => void;
   tickLoop: (sessionId: string) => void;
@@ -592,6 +593,26 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
       if (!session) return s;
       const promptCount = messages.filter((m) => m.role === "user").length;
       const updated = updateSession(s.sessions, sessionId, { messages, promptCount, hasBeenStarted: promptCount > 0 });
+      debouncedSave();
+      return { sessions: updated };
+    });
+  },
+
+  /** Merge a JSONL tail into the existing store. Keeps everything we already
+   *  have; appends any messages whose id isn't already present. Used by the
+   *  refresh button to pull in missed trailing messages without reloading the
+   *  entire history. */
+  mergeFromDisk: (sessionId, incoming) => {
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      if (incoming.length === 0) return s;
+      const existingIds = new Set(session.messages.map((m) => m.id));
+      const toAppend = incoming.filter((m) => !existingIds.has(m.id));
+      if (toAppend.length === 0) return s;
+      const merged = [...session.messages, ...toAppend];
+      const promptCount = merged.filter((m) => m.role === "user").length;
+      const updated = updateSession(s.sessions, sessionId, { messages: merged, promptCount, hasBeenStarted: promptCount > 0 });
       debouncedSave();
       return { sessions: updated };
     });

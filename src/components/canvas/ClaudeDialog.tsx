@@ -3,7 +3,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useClaudeStore, STORAGE_KEY } from "../../stores/claudeStore";
 import { listDiskSessions } from "../../lib/tauriApi";
-import { useSemanticSearch } from "../../hooks/useSemanticSearch";
 import type { DiskSession } from "../../lib/types";
 import { formatRelativeTime } from "../../lib/constants";
 import "./ClaudeDialog.css";
@@ -26,8 +25,6 @@ export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: C
   const [name, setName] = useState("");
   const [diskSessions, setDiskSessions] = useState<DiskSession[]>([]);
   const [loading, setLoading] = useState(false);
-  const [searchMode, setSearchMode] = useState<"keyword" | "semantic">("keyword");
-  const semantic = useSemanticSearch("sessions", 10);
   const recentDirs = useSettingsStore((s) => s.recentDirs);
   const addRecentDir = useSettingsStore((s) => s.addRecentDir);
   const sessions = useClaudeStore((s) => s.sessions);
@@ -40,8 +37,6 @@ export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: C
       setDir("");
       setName("");
       setDiskSessions([]);
-      setSearchMode("keyword");
-      semantic.clear();
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen]);
@@ -136,133 +131,51 @@ export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: C
           {/* Step 2: Sessions (shown after directory is selected) */}
           {hasDir && (
             <>
-              {/* Search mode toggle */}
-              <div className="vs-mode-toggle">
-                <button
-                  className={`vs-mode-btn ${searchMode === "keyword" ? "vs-mode-btn--active" : ""}`}
-                  onClick={() => { setSearchMode("keyword"); semantic.clear(); }}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
-                  </svg>
-                  Keyword
-                </button>
-                <button
-                  className={`vs-mode-btn ${searchMode === "semantic" ? "vs-mode-btn--active" : ""}`}
-                  onClick={() => setSearchMode("semantic")}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93L12 22"/>
-                    <path d="M8 6a4 4 0 0 1 8 0"/>
-                    <path d="M5.2 11.2a8 8 0 0 1 13.6 0"/>
-                    <path d="M2 16.8a12 12 0 0 1 20 0"/>
-                  </svg>
-                  Semantic
-                </button>
-              </div>
-
-              {/* Semantic search mode */}
-              {searchMode === "semantic" && (
-                <div className="vs-search-section">
-                  <div className="vs-search-bar">
-                    <svg className="vs-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93L12 22"/>
-                      <path d="M8 6a4 4 0 0 1 8 0"/>
-                      <path d="M5.2 11.2a8 8 0 0 1 13.6 0"/>
-                      <path d="M2 16.8a12 12 0 0 1 20 0"/>
-                    </svg>
-                    <input
-                      className="vs-search-input"
-                      value={semantic.query}
-                      onChange={(e) => semantic.search(e.target.value)}
-                      placeholder="Describe what you're looking for..."
-                      autoFocus
-                    />
-                    {semantic.searching && <span className="vs-search-spinner" />}
-                  </div>
-
-                  {semantic.results.length > 0 && (
-                    <div className="vs-results">
-                      <label className="claude-dialog-label">
-                        Semantic Matches
-                        <span className="claude-dialog-count">{semantic.results.length}</span>
-                      </label>
-                      <div className="vs-results-list">
-                        {semantic.results.map((r) => (
-                          <button
-                            key={r.id}
-                            className="vs-result-item"
-                            onClick={() => handleOpenSession(r.id)}
-                          >
-                            <div className="vs-result-top">
-                              <span className="vs-result-text">{r.title || r.id}</span>
-                              <span className="vs-result-score">{Math.max(0, (1 - r.distance) * 100).toFixed(0)}%</span>
-                            </div>
-                            {r.content_preview && (
-                              <span className="vs-result-meta">{r.content_preview}</span>
-                            )}
-                          </button>
-                        ))}
-                      </div>
+              {/* Named/saved sessions pinned at top */}
+              {namedSessions.length > 0 && (
+                <div className="claude-dialog-section">
+                  <label className="claude-dialog-label">Saved Sessions</label>
+                  {namedSessions.map((s) => (
+                    <div key={s.id} className="claude-dialog-session-row">
+                      <button className="claude-dialog-session claude-dialog-session--named" onClick={() => handleOpenSession(s.id)}>
+                        <span className="claude-dialog-session-pin">&#9733;</span>
+                        <span className="claude-dialog-session-name">{s.name}</span>
+                        <span className="claude-dialog-session-meta">{s.messageCount} msgs</span>
+                      </button>
+                      <button
+                        className="claude-dialog-session-delete"
+                        onClick={() => useClaudeStore.getState().deleteSession(s.id)}
+                        title="Delete session"
+                      >
+                        <svg width="10" height="10" viewBox="0 0 10 10">
+                          <path d="M1 1L9 9M9 1L1 9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                        </svg>
+                      </button>
                     </div>
-                  )}
-
-                  {!semantic.searching && semantic.query.trim() && semantic.results.length === 0 && (
-                    <div className="vs-empty">No semantic matches found</div>
-                  )}
+                  ))}
                 </div>
               )}
 
-              {/* Keyword mode: original session browser */}
-              {searchMode === "keyword" && (
-                <>
-                  {/* Named/saved sessions pinned at top */}
-                  {namedSessions.length > 0 && (
-                    <div className="claude-dialog-section">
-                      <label className="claude-dialog-label">Saved Sessions</label>
-                      {namedSessions.map((s) => (
-                        <div key={s.id} className="claude-dialog-session-row">
-                          <button className="claude-dialog-session claude-dialog-session--named" onClick={() => handleOpenSession(s.id)}>
-                            <span className="claude-dialog-session-pin">&#9733;</span>
-                            <span className="claude-dialog-session-name">{s.name}</span>
-                            <span className="claude-dialog-session-meta">{s.messageCount} msgs</span>
-                          </button>
-                          <button
-                            className="claude-dialog-session-delete"
-                            onClick={() => useClaudeStore.getState().deleteSession(s.id)}
-                            title="Delete session"
-                          >
-                            <svg width="10" height="10" viewBox="0 0 10 10">
-                              <path d="M1 1L9 9M9 1L1 9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-                            </svg>
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* All disk sessions */}
-                  {otherDiskSessions.length > 0 && (
-                    <div className="claude-dialog-section">
-                      <label className="claude-dialog-label">
-                        Previous Sessions
-                        <span className="claude-dialog-count">{otherDiskSessions.length}</span>
-                      </label>
-                      <div className="claude-dialog-session-list">
-                        {otherDiskSessions.map((s) => (
-                          <button key={s.id} className="claude-dialog-session" onClick={() => handleOpenSession(s.id)}>
-                            <span className="claude-dialog-session-id">{s.summary || s.id.slice(0, 8)}</span>
-                            <span className="claude-dialog-session-meta">{formatRelativeTime(s.modified * 1000)}</span>
-                            <span className="claude-dialog-session-size">{formatSize(s.size)}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
+              {/* All disk sessions */}
+              {otherDiskSessions.length > 0 && (
+                <div className="claude-dialog-section">
+                  <label className="claude-dialog-label">
+                    Previous Sessions
+                    <span className="claude-dialog-count">{otherDiskSessions.length}</span>
+                  </label>
+                  <div className="claude-dialog-session-list">
+                    {otherDiskSessions.map((s) => (
+                      <button key={s.id} className="claude-dialog-session" onClick={() => handleOpenSession(s.id)}>
+                        <span className="claude-dialog-session-id">{s.summary || s.id.slice(0, 8)}</span>
+                        <span className="claude-dialog-session-meta">{formatRelativeTime(s.modified * 1000)}</span>
+                        <span className="claude-dialog-session-size">{formatSize(s.size)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
 
-              {loading && searchMode === "keyword" && (
+              {loading && (
                 <div className="claude-dialog-loading">Scanning sessions...</div>
               )}
 

@@ -6,7 +6,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useClaudeStore } from "../../stores/claudeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useThemeStore } from "../../stores/themeStore";
-import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, readFileBase64, writeFile, loadSessionHistory, mapHistoryMessages, findRewindUuid, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, deleteFiles, shellExec, filterUntrackedFiles, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile, savePastedImage, resolveSkillPrompt } from "../../lib/tauriApi";
+import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, readFileBase64, writeFile, loadSessionHistoryTail, mapHistoryMessages, findRewindUuid, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, deleteFiles, shellExec, filterUntrackedFiles, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile, savePastedImage, resolveSkillPrompt } from "../../lib/tauriApi";
 import type { SlashCommand, PermissionMode, McpServer, HookEvent, ChatMessage as ChatMessageData } from "../../lib/types";
 import type { McpServerStatus } from "../../stores/claudeStore";
 import { rewritePromptStream } from "../../lib/ai";
@@ -380,7 +380,10 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   //   3. Content-growth auto-scrolls (messages, streaming text, permission
   //      prompts) only fire while pinned. Users who scrolled up stay put.
   //   4. Scrolling back within BOTTOM_TOLERANCE_PX re-pins, resuming auto-follow.
-  const BOTTOM_TOLERANCE_PX = 8;
+  // 32px tolerance (not 8): padding-bottom + scrollbar gutter + sub-pixel
+  // rounding can leave distFromBottom at 10-20px even when the user is
+  // visually at the end. Tighter values make re-pinning brittle.
+  const BOTTOM_TOLERANCE_PX = 32;
   const pinnedToBottom = useRef(true);
   const programmaticScroll = useRef(false);
   const firstVisibleIdxRef = useRef(firstVisibleIdx);
@@ -580,12 +583,42 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: true });
 
+    // Discord-style auto-follow: whenever the scroll container's content
+    // grows (markdown hydration, image decode, katex layout, streaming
+    // token append) AND the user is pinned to the bottom, snap back down.
+    // The React-effect-driven scrollToBottom only fires on discrete state
+    // changes (messages.length, streamingText); async layout shifts don't
+    // show up there and were leaving the user stranded 20–200px above the
+    // true bottom.
+    let lastScrollHeight = el.scrollHeight;
+    const autoFollow = () => {
+      if (el.scrollHeight === lastScrollHeight) return;
+      lastScrollHeight = el.scrollHeight;
+      if (!pinnedToBottom.current) return;
+      programmaticScroll.current = true;
+      el.scrollTop = el.scrollHeight;
+    };
+    const roFollow = new ResizeObserver(autoFollow);
+    roFollow.observe(el);
+    for (const child of Array.from(el.children)) roFollow.observe(child);
+    const moFollow = new MutationObserver((records) => {
+      for (const rec of records) {
+        for (const node of Array.from(rec.addedNodes)) {
+          if (node instanceof Element) roFollow.observe(node);
+        }
+      }
+      autoFollow();
+    });
+    moFollow.observe(el, { childList: true, subtree: false });
+
     return () => {
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("keydown", onKeyDown);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
+      roFollow.disconnect();
+      moFollow.disconnect();
     };
     // Rebind when the live `.cc-messages` element changes (overlay/plan-viewer
     // round-trips swap it in and out of the tree). chatBodyEl is updated by
@@ -1903,23 +1936,26 @@ Coordinate actively. If another agent is working on a file you need, mention it 
           <button
             className="cc-refresh-btn"
             onClick={() => {
-              // Cancel running process and reset UI state, keeping conversation history
+              // Cancel running process + reset UI state, then pull just the
+              // last slice of JSONL and merge in any new messages we missed.
+              // Loading the full history on every click re-parses the entire
+              // file and pumps thousands of messages over IPC; we only need
+              // the tail to catch up.
               cancelClaude(sessionId).catch(() => {});
               closeClaudeSession(sessionId).catch(() => {});
               const store = useClaudeStore.getState();
               store.setStreaming(sessionId, false);
               store.setError(sessionId, null);
               store.clearStreamingText(sessionId);
-              // Reload messages from JSONL to ensure sync with Claude CLI
               if (effectiveCwd) {
-                loadSessionHistory(sessionId, effectiveCwd).then((history) => {
+                loadSessionHistoryTail(sessionId, effectiveCwd, 50).then((history) => {
                   if (history?.length) {
-                    store.loadFromDisk(sessionId, mapHistoryMessages(history) as ChatMessageData[]);
+                    store.mergeFromDisk(sessionId, mapHistoryMessages(history) as ChatMessageData[]);
                   }
                 }).catch(() => {});
               }
             }}
-            title="Refresh chat (reset state, reload history)"
+            title="Refresh chat (cancel in-flight request, merge recent JSONL)"
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
               <path d="M1.5 6A4.5 4.5 0 0 1 10 3.5M10.5 6A4.5 4.5 0 0 1 2 8.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
@@ -1963,19 +1999,6 @@ Coordinate actively. If another agent is working on a file you need, mention it 
       {/* Main area */}
       <div className="cc-main">
         <div className="cc-chat-col">
-          {/* Prompt island — visibility is driven by the live scroll state
-              of `.cc-messages` via `useChatScrollState`. Reattaches cleanly
-              on overlay round-trips because the scroll element is tracked
-              as React state, not a ref. */}
-          <PromptIsland
-            prompts={userPrompts}
-            isScrolledUp={isScrolledUp}
-            progress={scrollProgress}
-            open={islandOpen}
-            onOpen={() => setIslandOpen(true)}
-            onClose={() => setIslandOpen(false)}
-            onJump={jumpToPrompt}
-          />
           {editOverlay ? (
             <div className="cc-messages cc-edit-overlay">
               <div className="cc-edit-overlay-header">
@@ -2078,6 +2101,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
               </div>
             </div>
           ) : (
+          <div className="cc-scroll-frame">
           <div className="cc-messages" ref={setChatBody}>
             {!hasMessages && (
               <div className="cc-empty">
@@ -2160,21 +2184,35 @@ Coordinate actively. If another agent is working on a file you need, mention it 
               </div>
             )}
             <div ref={messagesEndRef} />
-            {isScrolledUp && userPrompts.length > 0 && (
-              <button
-                className="cc-jump-bottom"
-                onClick={() => {
-                  pinnedToBottom.current = true;
-                  scrollToBottom();
-                }}
-                aria-label="Scroll to bottom"
-                title="Scroll to bottom"
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M7 2V11M7 11L3 7M7 11L11 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </button>
-            )}
+          </div>
+          {/* Prompt island + jump-to-bottom live inside `.cc-scroll-frame`
+              (a position:relative sibling of `.cc-messages`) so they anchor
+              to the scroll viewport's rect, not the full chat column. Island
+              fades in/out via the --hidden class on PromptIsland; jump
+              button is vertically centered in the frame so it doesn't
+              drift with scroll position. */}
+          <PromptIsland
+            prompts={userPrompts}
+            isScrolledUp={isScrolledUp}
+            progress={scrollProgress}
+            open={islandOpen}
+            onOpen={() => setIslandOpen(true)}
+            onClose={() => setIslandOpen(false)}
+            onJump={jumpToPrompt}
+          />
+          <button
+            className={`cc-jump-bottom${isScrolledUp && userPrompts.length > 0 ? "" : " cc-jump-bottom--hidden"}`}
+            onClick={() => {
+              pinnedToBottom.current = true;
+              scrollToBottom();
+            }}
+            aria-label="Scroll to bottom"
+            title="Scroll to bottom"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 2V11M7 11L3 7M7 11L11 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
           </div>
           )}
 

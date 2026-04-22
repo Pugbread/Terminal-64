@@ -13,7 +13,6 @@ import { useKeybindings } from "./hooks/useKeybindings";
 import { useClaudeEvents } from "./hooks/useClaudeEvents";
 import { useDelegationOrchestrator } from "./hooks/useDelegationOrchestrator";
 import { usePartyMode } from "./hooks/usePartyMode";
-import { useVectorAutoIndex } from "./hooks/useVectorAutoIndex";
 import { useVoiceControl } from "./hooks/useVoiceControl";
 import { useVoiceStore } from "./stores/voiceStore";
 import { PartyEqualizer, PartyEdgeGlow } from "./components/party/PartyOverlay";
@@ -47,7 +46,6 @@ function App() {
   useClaudeEvents();
   useDelegationOrchestrator();
   usePartyMode();
-  useVectorAutoIndex();
   useVoiceControl();
 
   const [widgetDropOver, setWidgetDropOver] = useState(false);
