@@ -28,6 +28,9 @@
 //! Design intent mirrors research §4 option (A): one warm whisper model,
 //! deterministic output, no second ONNX stack to babysit.
 
+// With voice-dictation off (default), most of this file reads as dead code.
+#![cfg_attr(not(feature = "voice-dictation"), allow(dead_code, unused_imports, unused_variables))]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

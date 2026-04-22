@@ -9,6 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:voice": "tauri dev -- -- --features voice-dictation",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [],

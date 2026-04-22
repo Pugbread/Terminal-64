@@ -14,6 +14,10 @@
 //! compiles to a stub whose `flush` errors out and whose `start`/`push`
 //! are no-ops.
 
+// With voice-dictation off (default), most of this module is unreachable —
+// allow the whole file to read as dead code instead of gating every helper.
+#![cfg_attr(not(feature = "voice-dictation"), allow(dead_code, unused_imports, unused_variables))]
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

@@ -54,8 +54,15 @@ whisper-rs = { version = "0.13", default-features = false, optional = true }
 symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm"] }
 
 [features]
-default = ["voice-dictation"]
-# Enable whisper.cpp dictation (requires cmake at build time).
+# Voice dictation is OFF by default so fresh clones build without cmake +
+# LLVM/libclang (whisper-rs's bindgen step needs both). Enable on macOS/Linux
+# with `cargo build --features voice-dictation`; on Windows also set
+# `LIBCLANG_PATH` to your LLVM install (winget install LLVM.LLVM).
+default = []
+# Enable whisper.cpp dictation. Requires:
+#  - cmake (to compile whisper.cpp)
+#  - LLVM/libclang (bindgen reads whisper.h — without it every struct field
+#    collapses to `_address` and you get ~70 E0609 errors on build)
 voice-dictation = ["dep:whisper-rs"]
 # Experimental: grammar-constrained decoding for the command STT path. Off by default
 # because the grammar is still being tuned; referenced from voice/command_stt.rs.
