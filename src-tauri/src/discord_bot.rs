@@ -156,13 +156,10 @@ impl DiscordBot {
                                 // message immediately so the user sees SOMETHING before the
                                 // throttle kicks in.
                                 if state.current_msg_id.is_none() {
-                                    match typing_stops_for_queue.lock() {
-                                        Ok(mut stops) => {
-                                            if let Some(tx) = stops.remove(&channel_id) {
-                                                let _ = tx.send(true);
-                                            }
+                                    if let Ok(mut stops) = typing_stops_for_queue.lock() {
+                                        if let Some(tx) = stops.remove(&channel_id) {
+                                            let _ = tx.send(true);
                                         }
-                                        Err(_) => {}
                                     }
                                     state.flush_now(channel_id, &http_for_queue, &token_for_queue, false).await;
                                 }
@@ -194,13 +191,10 @@ impl DiscordBot {
                                     state.flush_now(channel_id, &http_for_queue, &token_for_queue, true).await;
                                 }
                                 streams.remove(&channel_id);
-                                match typing_stops_for_queue.lock() {
-                                    Ok(mut stops) => {
-                                        if let Some(tx) = stops.remove(&channel_id) {
-                                            let _ = tx.send(true);
-                                        }
+                                if let Ok(mut stops) = typing_stops_for_queue.lock() {
+                                    if let Some(tx) = stops.remove(&channel_id) {
+                                        let _ = tx.send(true);
                                     }
-                                    Err(_) => {}
                                 }
                                 for chunk in split_msg(&text, 1900) {
                                     let _ = send_discord_message(

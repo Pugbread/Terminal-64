@@ -109,6 +109,7 @@ struct ManifestState {
     manifest: PluginManifest,
     /// SHA-256 of the raw manifest bytes, used by the consent workflow
     /// (`~/.terminal64/widgets/{id}/.approved.json`).
+    #[allow(dead_code)] // Scaffolding for consent flow — wired up via load_manifest_with_hash.
     raw_hash: String,
 }
 
@@ -279,6 +280,7 @@ fn is_valid_widget_id(id: &str) -> bool {
 struct ParsedRequest {
     method: String,
     path: String,
+    #[allow(dead_code)] // Parsed for future auth/cookie routes; unused in current handlers.
     headers: HashMap<String, String>,
     body: Vec<u8>,
 }
@@ -672,6 +674,7 @@ impl WidgetServer {
 
     /// Install the plugin host bridge. Intended to be called once, after the
     /// `PluginHost` has been constructed in `lib.rs` setup.
+    #[allow(dead_code)] // Public API for plugin host wire-up; caller lands in a follow-up.
     pub fn set_plugin_host(&self, bridge: Arc<dyn PluginHostBridge>) {
         if let Ok(mut guard) = self.inner.bridge.lock() {
             *guard = Some(bridge);
@@ -680,6 +683,7 @@ impl WidgetServer {
 
     /// Load and cache a widget's manifest. Returns a fresh clone each call;
     /// the cache is invalidated when the `widget.json` mtime changes on disk.
+    #[allow(dead_code)] // Public API consumed by consent flow in follow-up PR.
     pub fn load_manifest(&self, widget_id: &str) -> Result<PluginManifest, String> {
         if !is_valid_widget_id(widget_id) {
             return Err("invalid widget id".to_string());
@@ -689,6 +693,7 @@ impl WidgetServer {
 
     /// Read the manifest and return `(manifest, raw_hash)`, used by the
     /// consent flow so the frontend can compare against `.approved.json`.
+    #[allow(dead_code)] // Public API consumed by consent flow in follow-up PR.
     pub fn load_manifest_with_hash(
         &self,
         widget_id: &str,

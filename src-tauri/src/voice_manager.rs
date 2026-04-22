@@ -122,12 +122,10 @@ fn split_address(text: &str, wake: &str) -> Option<(String, VoiceIntent, bool)> 
             flat.push(c.to_ascii_lowercase());
             flat_to_orig.push(i);
             prev_space = false;
-        } else if space || !ok {
-            if !prev_space {
-                flat.push(' ');
-                flat_to_orig.push(i);
-                prev_space = true;
-            }
+        } else if (space || !ok) && !prev_space {
+            flat.push(' ');
+            flat_to_orig.push(i);
+            prev_space = true;
         }
     }
     if flat.trim().is_empty() {
