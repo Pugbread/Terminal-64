@@ -379,7 +379,18 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const pinnedToBottom = useRef(true);
 
   const scrollToBottom = useCallback(() => {
-    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end" });
+    // `scrollToIndex({index: 'LAST', align: 'end'})` stops at the bottom of
+    // the last virtuoso item, but Virtuoso's Footer (StreamingBubble +
+    // pending questions + error bar) lives *below* the item list. Jumping to
+    // the last row therefore left the Footer — and a streaming response, or
+    // the latest assistant reply — hidden beneath the viewport fold. Scroll
+    // the raw container so we land past the Footer.
+    const el = chatBodyRef.current;
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end" });
+    }
   }, []);
 
   // Session switch → snap to bottom, close island.
