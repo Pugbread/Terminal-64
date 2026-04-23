@@ -434,9 +434,13 @@
      suppressed explicitly — without it, any message with a wide code block
      or table lets the whole list pan sideways. */
   overflow-x: hidden;
-  padding: 16px 14px 48px;
+  /* Top/bottom padding lives on the scroller; left/right padding moves to
+     `.cc-row` so every virtuoso item carries its own gutter. Virtuoso's
+     internal item-list container doesn't always honor the scroller's
+     horizontal padding, so pinning the gutter per-row is what keeps user
+     bubbles from kissing the viewport edge. */
+  padding: 16px 0 48px;
   min-height: 0;
-  /* Prevent rubber-band/overscroll at the top from masking streaming snaps. */
   overscroll-behavior-y: contain;
   scroll-behavior: auto;
   /* Shift the scrollbar inward so it doesn't sit under the FloatingTerminal's
@@ -453,16 +457,19 @@
    wide message stretches the row past the viewport and the whole list
    becomes horizontally clipped. `min-width: 0` lets descendants (e.g. a
    `<pre>` inside `.cc-bubble`) actually collapse instead of propagating
-   their intrinsic width back up. */
+   their intrinsic width back up.
+   Horizontal gutter lives here (not on `.cc-messages`) so virtuoso's
+   item-list — which sometimes ignores scroller padding — can't push
+   content past the viewport. `margin-bottom` (not `+ .cc-row`) because
+   virtuoso sticks its own item wrappers between siblings, so `+` never
+   matches. */
 .cc-row {
   width: 100%;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
-}
-
-.cc-row + .cc-row {
-  margin-top: 10px;
+  padding: 0 14px;
+  margin-bottom: 10px;
 }
 
 .cc-messages::-webkit-scrollbar {
