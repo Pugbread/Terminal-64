@@ -445,8 +445,22 @@
   margin-right: 8px;
 }
 
-/* Virtuoso renders each item wrapped in our own `.cc-row` div. The 10px
-   vertical rhythm the old flex `gap` provided lives on that wrapper. */
+/* Virtuoso renders each item wrapped in our own `.cc-row` div. The old
+   `.cc-messages { display: flex }` implicitly gave every child
+   `width: 100%` on the cross axis, so messages with long code blocks or
+   tool output were forced to shrink. Virtuoso's items are plain blocks,
+   so we need to pin the row to the scroller width ourselves — otherwise a
+   wide message stretches the row past the viewport and the whole list
+   becomes horizontally clipped. `min-width: 0` lets descendants (e.g. a
+   `<pre>` inside `.cc-bubble`) actually collapse instead of propagating
+   their intrinsic width back up. */
+.cc-row {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
 .cc-row + .cc-row {
   margin-top: 10px;
 }
