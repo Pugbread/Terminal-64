@@ -157,17 +157,127 @@ function RewindPromptDialog({ affectedFiles, toolSummary, onConfirm, onCancel }:
 }
 
 /** Isolated streaming text component — subscribes only to streamingText,
- *  so updates don't re-render the entire message list. */
+ *  so updates don't re-render the entire message list. Wrapped in `.cc-row`
+ *  so it picks up the same horizontal gutter as real messages (without it
+ *  the streaming bubble kissed the left edge of the chat viewport). */
 function StreamingBubble({ sessionId }: { sessionId: string }) {
   const text = useClaudeStore((s) => s.sessions[sessionId]?.streamingText);
   if (!text) return null;
   return (
-    <div className="cc-message cc-message--assistant">
-      <div className="cc-bubble cc-bubble--assistant cc-bubble--streaming">
-        {text}
-        <span className="cc-cursor" />
+    <div className="cc-row">
+      <div className="cc-message cc-message--assistant">
+        <div className="cc-bubble cc-bubble--assistant cc-bubble--streaming">
+          {text}
+          <span className="cc-cursor" />
+        </div>
       </div>
     </div>
+  );
+}
+
+/** Chat body footer. Lives below the last virtuoso item and renders the
+ *  streaming bubble + pending-question prompt + error bar + bottom spacer.
+ *  Extracted from ClaudeChat's render so its identity is stable across
+ *  parent re-renders (Virtuoso otherwise re-measures its footer on every
+ *  keystroke, which is the main source of scroll jitter during streaming).
+ *  Subscribes only to the fine-grained store slices it actually needs. */
+function ChatFooter({
+  sessionId,
+  effectiveCwd,
+  permissionMode,
+  model,
+  effort,
+}: {
+  sessionId: string;
+  effectiveCwd: string;
+  permissionMode: PermissionMode;
+  model: string;
+  effort: string;
+}) {
+  const pendingQuestions = useClaudeStore((s) => s.sessions[sessionId]?.pendingQuestions ?? null);
+  const error = useClaudeStore((s) => s.sessions[sessionId]?.error ?? null);
+  const current = pendingQuestions?.items[pendingQuestions.currentIndex];
+  const progress =
+    pendingQuestions && pendingQuestions.items.length > 1
+      ? `(${pendingQuestions.currentIndex + 1}/${pendingQuestions.items.length})`
+      : "";
+
+  const submitAnswer = (answer: string) => {
+    if (!pendingQuestions) return;
+    const store = useClaudeStore.getState();
+    store.answerQuestion(sessionId, answer);
+    const updated = useClaudeStore.getState().sessions[sessionId];
+    if (!updated?.pendingQuestions) {
+      const allAnswers = [...pendingQuestions.answers, answer];
+      const formatted = pendingQuestions.items
+        .map((item, idx) => `${item.header || item.question}: ${allAnswers[idx]}`)
+        .join("\n");
+      store.updateToolResult(sessionId, pendingQuestions.toolUseId, formatted, false);
+      store.addUserMessage(sessionId, `Answered questions:\n${formatted}`);
+      sendClaudePrompt(
+        {
+          session_id: sessionId,
+          cwd: effectiveCwd,
+          prompt: `Here are my answers to your questions:\n${formatted}\n\nProceed based on these choices. Do not ask the same questions again.`,
+          permission_mode: permissionMode,
+          model,
+          effort,
+          disallowed_tools: "AskUserQuestion",
+        },
+        useClaudeStore.getState().sessions[sessionId]?.skipOpenwolf,
+      )
+        .then(() => store.incrementPromptCount(sessionId))
+        .catch((err) => store.setError(sessionId, String(err)));
+    }
+  };
+
+  return (
+    <>
+      <StreamingBubble sessionId={sessionId} />
+      {current && pendingQuestions && (
+        <div className="cc-question">
+          <div className="cc-question-header">
+            {current.header && <span className="cc-question-badge">{current.header}</span>}
+            <span className="cc-question-progress">{progress}</span>
+          </div>
+          <div className="cc-question-text">{current.question}</div>
+          <div className="cc-question-options">
+            {current.options.map((opt, i) => (
+              <button
+                key={opt.label || i}
+                className="cc-question-btn"
+                onClick={() => submitAnswer(opt.label)}
+              >
+                <span className="cc-question-label">{opt.label}</span>
+                {opt.description && <span className="cc-question-desc">{opt.description}</span>}
+              </button>
+            ))}
+            <div className="cc-question-custom">
+              <input
+                className="cc-question-input"
+                placeholder="Or type a custom answer..."
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.target as HTMLInputElement).value.trim()) {
+                    submitAnswer((e.target as HTMLInputElement).value.trim());
+                    (e.target as HTMLInputElement).value = "";
+                  }
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+      {error && (
+        <div className="cc-message cc-message--error">
+          <div className="cc-error">{error}</div>
+        </div>
+      )}
+      {/* Bottom breathing room — Virtuoso doesn't respect its scroller's
+          own padding-bottom for measurement-based scroll targets, so we
+          reserve a fixed sentinel height below the footer content. Must
+          stay in sync with BOTTOM_TOLERANCE_PX. */}
+      <div className="cc-bottom-spacer" />
+    </>
   );
 }
 
@@ -372,10 +482,11 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   // (reveal-gates, jumpToPrompt) can branch on it, and we expose a few
   // imperative helpers that delegate to Virtuoso via `virtuosoRef`.
   //
-  // 32px tolerance (not 8): padding-bottom + scrollbar gutter + sub-pixel
-  // rounding can leave distFromBottom at 10-20px even when the user is
-  // visually at the end. Tighter values make re-pinning brittle.
-  const BOTTOM_TOLERANCE_PX = 32;
+  // 96px tolerance: the footer now holds a StreamingBubble + a 64px
+  // bottom-spacer, so the "is at bottom?" fold sits well above the scroll
+  // height. Anything less and Virtuoso's followOutput misdetects the
+  // user-is-at-bottom state at stream start and stops auto-scrolling.
+  const BOTTOM_TOLERANCE_PX = 96;
   const pinnedToBottom = useRef(true);
 
   const scrollToBottom = useCallback(() => {
@@ -1620,6 +1731,29 @@ Coordinate actively. If another agent is working on a file you need, mention it 
     [visualRows],
   );
 
+  // Inline `components={{ Footer: () => ... }}` was the main source of
+  // scroll jitter during streaming: Virtuoso reference-compares the
+  // `components` prop and re-measures the footer every time a new object
+  // literal arrives, which happened on every store update. Pull the footer
+  // out as its own component subscribing to just the slices it needs
+  // (pendingQuestions + error). Streaming text flows through StreamingBubble
+  // which has its own fine-grained subscription, so it doesn't cause the
+  // outer footer to re-render at all.
+  const virtuosoComponents = useMemo(
+    () => ({
+      Footer: () => (
+        <ChatFooter
+          sessionId={sessionId}
+          effectiveCwd={effectiveCwd}
+          permissionMode={permMode.id}
+          model={selectedModel}
+          effort={selectedEffort}
+        />
+      ),
+    }),
+    [sessionId, effectiveCwd, permMode.id, selectedModel, selectedEffort],
+  );
+
   if (!session) return <div className="cc-container cc-loading">Initializing...</div>;
 
   const hasMessages = session.messages.length > 0 || session.streamingText;
@@ -1945,109 +2079,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             atBottomThreshold={BOTTOM_TOLERANCE_PX}
             initialTopMostItemIndex={Math.max(0, visualRows.length - 1)}
             increaseViewportBy={{ top: 600, bottom: 600 }}
-            components={{
-              Footer: () => {
-                const pendingQuestionsBlock = session.pendingQuestions
-                  ? (() => {
-                      const pq = session.pendingQuestions;
-                      const current = pq!.items[pq!.currentIndex];
-                      if (!current) return null;
-                      const progress =
-                        pq!.items.length > 1 ? `(${pq!.currentIndex + 1}/${pq!.items.length})` : "";
-
-                      const submitAnswer = (answer: string) => {
-                        const store = useClaudeStore.getState();
-                        store.answerQuestion(sessionId, answer);
-                        const updated = useClaudeStore.getState().sessions[sessionId];
-                        if (!updated?.pendingQuestions) {
-                          const allAnswers = [...pq!.answers, answer];
-                          const formatted = pq!.items
-                            .map((item, idx) => `${item.header || item.question}: ${allAnswers[idx]}`)
-                            .join("\n");
-
-                          store.updateToolResult(sessionId, pq!.toolUseId, formatted, false);
-                          addUserMessage(sessionId, `Answered questions:\n${formatted}`);
-
-                          sendClaudePrompt(
-                            {
-                              session_id: sessionId,
-                              cwd: effectiveCwd,
-                              prompt: `Here are my answers to your questions:\n${formatted}\n\nProceed based on these choices. Do not ask the same questions again.`,
-                              permission_mode: permMode.id,
-                              model: selectedModel,
-                              effort: selectedEffort,
-                              disallowed_tools: "AskUserQuestion",
-                            },
-                            useClaudeStore.getState().sessions[sessionId]?.skipOpenwolf,
-                          )
-                            .then(() => incrementPromptCount(sessionId))
-                            .catch((err) => store.setError(sessionId, String(err)));
-                        }
-                      };
-
-                      return (
-                        <div className="cc-question">
-                          <div className="cc-question-header">
-                            {current.header && (
-                              <span className="cc-question-badge">{current.header}</span>
-                            )}
-                            <span className="cc-question-progress">{progress}</span>
-                          </div>
-                          <div className="cc-question-text">{current.question}</div>
-                          <div className="cc-question-options">
-                            {current.options.map((opt, i) => (
-                              <button
-                                key={opt.label || i}
-                                className="cc-question-btn"
-                                onClick={() => submitAnswer(opt.label)}
-                              >
-                                <span className="cc-question-label">{opt.label}</span>
-                                {opt.description && (
-                                  <span className="cc-question-desc">{opt.description}</span>
-                                )}
-                              </button>
-                            ))}
-                            <div className="cc-question-custom">
-                              <input
-                                className="cc-question-input"
-                                placeholder="Or type a custom answer..."
-                                onKeyDown={(e) => {
-                                  if (
-                                    e.key === "Enter" &&
-                                    (e.target as HTMLInputElement).value.trim()
-                                  ) {
-                                    submitAnswer((e.target as HTMLInputElement).value.trim());
-                                    (e.target as HTMLInputElement).value = "";
-                                  }
-                                }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()
-                  : null;
-
-                return (
-                  <>
-                    <StreamingBubble sessionId={sessionId} />
-                    {pendingQuestionsBlock}
-                    {session.error && (
-                      <div className="cc-message cc-message--error">
-                        <div className="cc-error">{session.error}</div>
-                      </div>
-                    )}
-                    {/* Bottom breathing room — Virtuoso's scroll container
-                        doesn't respect its own bottom padding for the list
-                        items, so the last message would otherwise hug the
-                        viewport edge. A fixed-height sentinel below the
-                        footer content keeps the gap consistent whether or
-                        not streaming / pending-questions are active. */}
-                    <div className="cc-bottom-spacer" />
-                  </>
-                );
-              },
-            }}
+            components={virtuosoComponents}
           />
           )}
           {/* Prompt island + jump-to-bottom live inside `.cc-scroll-frame`

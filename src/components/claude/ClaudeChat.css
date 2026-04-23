@@ -468,21 +468,17 @@
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  /* The 10px inter-row gap lives in padding-bottom (not margin) because
-     Virtuoso measures each item's height via getBoundingClientRect, which
-     excludes outer margins. With margin-bottom, Virtuoso's accumulated
-     list height came up 10px short per row — the discrepancy surfaced as
-     a settle-jitter when momentum scrolls hit the bottom and virtuoso
-     corrected scrollTop against the real scrollHeight. Padding is inside
-     the box, so measurement and reality agree. */
-  padding: 0 14px 10px;
+  padding: 0 14px;
+  margin-bottom: 10px;
 }
 
 /* Sentinel appended inside virtuoso's Footer so the last message doesn't
    hug the viewport bottom. Virtuoso doesn't respect the scroller's own
-   bottom padding for measurement-based scroll targets. */
+   bottom padding for measurement-based scroll targets. Must stay in sync
+   with BOTTOM_TOLERANCE_PX in ClaudeChat.tsx — the threshold needs to
+   cover at least this height or followOutput misdetects "at bottom". */
 .cc-bottom-spacer {
-  height: 24px;
+  height: 64px;
 }
 
 .cc-messages::-webkit-scrollbar {
