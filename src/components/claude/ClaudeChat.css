@@ -472,6 +472,13 @@
   margin-bottom: 10px;
 }
 
+/* Sentinel appended inside virtuoso's Footer so the last message doesn't
+   hug the viewport bottom. Virtuoso doesn't respect the scroller's own
+   bottom padding for measurement-based scroll targets. */
+.cc-bottom-spacer {
+  height: 24px;
+}
+
 .cc-messages::-webkit-scrollbar {
   width: 6px;
 }

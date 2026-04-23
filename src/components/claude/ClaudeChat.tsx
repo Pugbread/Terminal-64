@@ -2037,6 +2037,13 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                         <div className="cc-error">{session.error}</div>
                       </div>
                     )}
+                    {/* Bottom breathing room — Virtuoso's scroll container
+                        doesn't respect its own bottom padding for the list
+                        items, so the last message would otherwise hug the
+                        viewport edge. A fixed-height sentinel below the
+                        footer content keeps the gap consistent whether or
+                        not streaming / pending-questions are active. */}
+                    <div className="cc-bottom-spacer" />
                   </>
                 );
               },
