@@ -1933,36 +1933,46 @@ async fn shell_exec(command: String, cwd: Option<String>) -> Result<serde_json::
     // Validate command against blocklist of dangerous patterns
     validate_shell_command(&command)?;
 
-    let shell = if cfg!(windows) { "cmd" } else { "sh" };
-    let flag = if cfg!(windows) { "/C" } else { "-c" };
-    let mut cmd = std::process::Command::new(shell);
-    cmd.arg(flag)
-        .arg(&command)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .stdin(std::process::Stdio::null());
-    if let Some(ref dir) = cwd {
-        if !dir.is_empty() {
-            cmd.current_dir(dir);
+    // `std::process::Command::output()` blocks the calling thread. In a Tauri
+    // async command that runs on the Tokio runtime — blocking here starves the
+    // runtime's worker pool when several widgets each fire shell_exec on an
+    // interval (the git-status widget alone runs 6 calls every 3 seconds).
+    // Offload to the blocking-threadpool so the async workers stay free for
+    // IPC.
+    tokio::task::spawn_blocking(move || {
+        let shell = if cfg!(windows) { "cmd" } else { "sh" };
+        let flag = if cfg!(windows) { "/C" } else { "-c" };
+        let mut cmd = std::process::Command::new(shell);
+        cmd.arg(flag)
+            .arg(&command)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::null());
+        if let Some(ref dir) = cwd {
+            if !dir.is_empty() {
+                cmd.current_dir(dir);
+            }
         }
-    }
-    // Ensure common tools are on PATH for macOS GUI apps
-    if cfg!(target_os = "macos") {
-        if let Ok(path) = std::env::var("PATH") {
-            cmd.env("PATH", format!("/opt/homebrew/bin:/usr/local/bin:{}", path));
+        // Ensure common tools are on PATH for macOS GUI apps
+        if cfg!(target_os = "macos") {
+            if let Ok(path) = std::env::var("PATH") {
+                cmd.env("PATH", format!("/opt/homebrew/bin:/usr/local/bin:{}", path));
+            }
         }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    let output = cmd.output().map_err(|e| format!("exec failed: {}", e))?;
-    Ok(serde_json::json!({
-        "stdout": String::from_utf8_lossy(&output.stdout),
-        "stderr": String::from_utf8_lossy(&output.stderr),
-        "code": output.status.code().unwrap_or(-1),
-    }))
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let output = cmd.output().map_err(|e| format!("exec failed: {}", e))?;
+        Ok(serde_json::json!({
+            "stdout": String::from_utf8_lossy(&output.stdout),
+            "stderr": String::from_utf8_lossy(&output.stderr),
+            "code": output.status.code().unwrap_or(-1),
+        }))
+    })
+    .await
+    .map_err(|e| format!("join error: {}", e))?
 }
 
 #[tauri::command]
