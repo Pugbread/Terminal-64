@@ -516,6 +516,29 @@ fn build_command(
     cmd
 }
 
+/// Resolve a session UUID up-front: use the caller-provided value if it
+/// looks non-empty, otherwise mint a fresh `uuid::Uuid::new_v4()`. Doing
+/// this before spawn means the JSONL path is known the instant
+/// `create_session` returns — no TOCTOU window waiting on the CLI's first
+/// `system/init` event.
+fn resolve_session_id(provided: &str) -> String {
+    let trimmed = provided.trim();
+    if trimmed.is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Stderr pattern that a strict CLI uses when it doesn't recognize
+/// `--session-id`. Checked against the buffered stderr so we can surface a
+/// meaningful error instead of the opaque "exited without output".
+fn stderr_rejects_session_id_flag(stderr: &str) -> bool {
+    let lower = stderr.to_lowercase();
+    (lower.contains("unrecognized") || lower.contains("unknown argument"))
+        && lower.contains("session-id")
+}
+
 fn spawn_and_stream(
     instances: &Arc<Mutex<HashMap<String, ClaudeInstance>>>,
     app_handle: &AppHandle,
@@ -633,6 +656,15 @@ fn spawn_and_stream(
             let stderr_msg = stderr_buf.lock().map(|s| s.clone()).unwrap_or_default();
             let error_msg = if stderr_msg.is_empty() {
                 "Claude process exited without output. The session may not exist or the CLI may not be installed.".to_string()
+            } else if stderr_rejects_session_id_flag(&stderr_msg) {
+                // A stricter/older CLI rejected the pre-generated `--session-id`
+                // flag. Frontends can fall back to the existing capture-from-
+                // `system/init` path by re-spawning without it; surface a
+                // typed error string so they can detect the condition.
+                format!(
+                    "claude_cli_rejects_session_id: {}. Update the claude CLI or remove `--session-id` from build_command().",
+                    stderr_msg.trim()
+                )
             } else {
                 stderr_msg
             };
@@ -713,16 +745,28 @@ impl ClaudeManager {
         settings_path: Option<String>,
         approver_mcp_config: Option<String>,
         channel_server: Option<String>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
+        // Pre-generate the session UUID before spawning Claude CLI. The
+        // frontend normally supplies one (crypto-grade via `uuid` crate in
+        // the browser); if it didn't, mint one locally so the JSONL path
+        // and `--session-id` flag agree from the first byte. Returning the
+        // resolved UUID lets callers avoid waiting on the first
+        // `system/init` event to learn what session they got.
+        let resolved_id = resolve_session_id(&req.session_id);
         safe_eprintln!(
-            "[claude] Creating session id={} cwd={} mcp_config={:?}",
-            req.session_id,
+            "[claude] Creating session id={} (provided={:?}) cwd={} mcp_config={:?}",
+            resolved_id,
+            if req.session_id == resolved_id {
+                "as-is"
+            } else {
+                "regenerated"
+            },
             req.cwd,
             req.mcp_config.as_deref().map(|s| &s[..s.len().min(80)])
         );
         let cmd = build_command(
             "--session-id",
-            &req.session_id,
+            &resolved_id,
             &req.prompt,
             &req.permission_mode,
             &req.model,
@@ -739,14 +783,17 @@ impl ClaudeManager {
             &req.no_session_persistence,
             &None,
         );
+        let cwd = req.cwd.clone();
+        let prompt = req.prompt.clone();
         spawn_and_stream(
             &self.instances,
             app_handle,
-            req.session_id,
-            &req.cwd,
+            resolved_id.clone(),
+            &cwd,
             cmd,
-            &req.prompt,
-        )
+            &prompt,
+        )?;
+        Ok(resolved_id)
     }
 
     pub fn send_prompt(

@@ -21,7 +21,7 @@ import { useThemeStore } from "./stores/themeStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { registerCommand } from "./lib/commands";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { closeTerminal, closeClaudeSession, linkSessionToDiscord, unlinkSessionFromDiscord, renameDiscordSession, startDiscordBot, discordCleanupOrphaned, loadSessionHistory, mapHistoryMessages, setAllBrowsersVisible, ensureSkillsPlugin, installWidgetZip, openwolfDaemonSwitch, openwolfProjectCwd, installBundledWidget } from "./lib/tauriApi";
+import { closeTerminal, closeClaudeSession, linkSessionToDiscord, unlinkSessionFromDiscord, renameDiscordSession, startDiscordBot, discordCleanupOrphaned, setAllBrowsersVisible, ensureSkillsPlugin, installWidgetZip, openwolfDaemonSwitch, openwolfProjectCwd, installBundledWidget } from "./lib/tauriApi";
 import { type Toast, subscribeToasts, dismissToast, pushToast } from "./lib/notifications";
 import { useDelegationStore } from "./stores/delegationStore";
 import { useClaudeStore, flushSave as flushClaudeSave, STORAGE_KEY } from "./stores/claudeStore";
@@ -462,32 +462,24 @@ function App() {
           }
         }}
         onReopen={(sessionId, dialogCwd) => {
+          // Pull the cached name + cwd metadata out of localStorage so we can
+          // spawn the panel with the right label + working dir. Messages no
+          // longer live here — claudeStore.createSession loads them from JSONL.
           let name: string | undefined;
           let savedCwd = "";
-          let hasMessages = false;
           try {
             const raw = localStorage.getItem(STORAGE_KEY);
             if (raw) {
               const d = JSON.parse(raw);
               name = d[sessionId]?.name;
               savedCwd = d[sessionId]?.cwd || "";
-              hasMessages = (d[sessionId]?.messages?.length || 0) > 0;
             }
           } catch (e) {
-            console.warn("[session] Failed to read session data from localStorage:", e);
+            console.warn("[session] Failed to read session metadata from localStorage:", e);
           }
           const effectiveCwd = savedCwd || dialogCwd || ".";
           useCanvasStore.getState().addClaudeTerminal(effectiveCwd, false, name || undefined, sessionId);
           if (name) linkSessionToDiscord(sessionId, name, effectiveCwd).catch(() => {});
-
-          // Load message history from disk JSONL if localStorage doesn't have it
-          if (!hasMessages) {
-            loadSessionHistory(sessionId, effectiveCwd).then((history) => {
-              if (history.length > 0) {
-                useClaudeStore.getState().loadFromDisk(sessionId, mapHistoryMessages(history));
-              }
-            }).catch((err) => console.warn("[session] Failed to load history from disk:", err));
-          }
         }}
       />
       <WidgetDialog

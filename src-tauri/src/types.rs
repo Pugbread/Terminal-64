@@ -141,6 +141,27 @@ pub struct HistoryMessage {
     pub tool_calls: Option<Vec<HistoryToolCall>>,
 }
 
+/// Lightweight stat for a session JSONL. Used by the frontend hydration cache
+/// to skip reparsing when mtime+size are unchanged.
+#[derive(Serialize)]
+pub struct SessionJsonlStat {
+    pub mtime_ms: i64,
+    pub size: u64,
+}
+
+/// Lightweight session summary derived from JSONL without loading every message.
+/// Used by the session browser so the frontend doesn't need a localStorage cache
+/// to render a "recent sessions" list.
+#[derive(Serialize, Default)]
+pub struct SessionMetadata {
+    pub session_id: String,
+    pub exists: bool,
+    pub msg_count: usize,
+    pub last_timestamp: f64,
+    pub first_user_prompt: String,
+    pub last_assistant_preview: String,
+}
+
 // Skill resolution type (used by resolve_skill_prompt command)
 
 #[derive(Serialize)]

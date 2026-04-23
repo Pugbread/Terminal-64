@@ -338,9 +338,12 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const permMode = PERMISSION_MODES[permModeIdx] ?? PERMISSION_MODES[0]!;
 
   useEffect(() => {
-    createSession(sessionId);
-    if (cwd && cwd !== ".") {
-      useClaudeStore.getState().setCwd(sessionId, cwd);
+    // Passing cwd to createSession lets the store kick off JSONL hydration
+    // immediately instead of waiting for a later setCwd call.
+    const effectiveInitCwd = cwd && cwd !== "." ? cwd : undefined;
+    createSession(sessionId, undefined, false, undefined, effectiveInitCwd);
+    if (effectiveInitCwd) {
+      useClaudeStore.getState().setCwd(sessionId, effectiveInitCwd);
     }
   }, [sessionId, createSession, cwd]);
   const t64Commands = useRef<SlashCommand[]>([
@@ -1276,18 +1279,22 @@ Rules:
       store.setStreaming(sessionId, false);
       store.setError(sessionId, null);
       store.clearStreamingText(sessionId);
-      store.truncateFromMessage(sessionId, messageId);
-      const updatedSess = useClaudeStore.getState().sessions[sessionId];
-      const rewindCwd = updatedSess?.cwd || effectiveCwd;
-      const keepMessages = updatedSess ? updatedSess.messages.length : 0;
-      const uuid = await findRewindUuid(sessionId, rewindCwd, keepMessages);
-      useClaudeStore.getState().setResumeAtUuid(sessionId, uuid);
+      const rewindCwd = preSess?.cwd || effectiveCwd;
+      const keepMessages = targetIdx;
+      // Disk truncate BEFORE touching the store — if the rewrite fails (disk full,
+      // permission error, etc.) we surface the error and leave the UI state intact
+      // so the user hasn't "lost" their conversation on a failed rewind.
       try {
         const result = await truncateSessionJsonlByMessages(sessionId, rewindCwd, keepMessages);
         console.log("[rewind] Undo-send JSONL truncated:", result);
       } catch (err) {
         console.error("[rewind] Undo-send JSONL truncation failed:", err);
+        useClaudeStore.getState().setError(sessionId, `Rewind failed: ${err}`);
+        return;
       }
+      const uuid = await findRewindUuid(sessionId, rewindCwd, keepMessages);
+      useClaudeStore.getState().setResumeAtUuid(sessionId, uuid);
+      useClaudeStore.getState().truncateFromMessage(sessionId, messageId);
       setRewindText(targetMsg!.content);
       console.log("[rewind] === UNDO-SEND COMPLETE ===", { prefill: targetMsg!.content.slice(0, 80) });
       return;
@@ -1314,36 +1321,38 @@ Rules:
     store.setError(sessionId, null);
     store.clearStreamingText(sessionId);
 
-    const preTruncateCount = store.sessions[sessionId]?.messages.length ?? 0;
-    store.truncateFromMessage(sessionId, messageId);
+    // Compute all post-rewind values from the pre-truncate snapshot so we can
+    // do the on-disk truncate BEFORE mutating the store. On disk failure the UI
+    // state is left intact and the user sees an error — rather than a half-done
+    // rewind where the conversation view is ahead of the JSONL.
+    const preTruncateCount = preMsgs.length;
+    const trailingUser = targetIdx > 0 && preMsgs[targetIdx - 1]?.role === "user"
+      ? preMsgs[targetIdx - 1]!
+      : null;
+    const keepMessages = trailingUser ? targetIdx - 1 : targetIdx;
+    const keptSlice = preMsgs.slice(0, keepMessages);
+    const keepTurns = keptSlice.filter((m) => m.role === "user").length;
+    const rewindContent = trailingUser ? trailingUser.content : content;
+    const rewindCwd = preSess?.cwd || effectiveCwd;
 
-    const sess = useClaudeStore.getState().sessions[sessionId];
-    console.log("[rewind] Store truncated:", { preTruncateCount, postTruncateCount: sess?.messages.length });
+    console.log("[rewind] JSONL truncation params:", {
+      sessionId, rewindCwd, keepMessages, keepTurns, preTruncateCount,
+      sessionCwd: preSess?.cwd, effectiveCwd,
+      lastKeptMsg: keptSlice[keptSlice.length - 1]?.content?.slice(0, 80),
+    });
 
-    if (sess) {
-      let rewindContent = content;
-      const lastMsg = sess.messages[sess.messages.length - 1];
-
-      // If the last remaining message is an unpaired user message (we removed its assistant response),
-      // also remove it — the user gets its content prefilled so they can resend.
-      if (lastMsg?.role === "user") {
-        rewindContent = lastMsg.content;
-        store.truncateFromMessage(sessionId, lastMsg.id);
-        console.log("[rewind] Removed trailing user message, prefilling:", rewindContent.slice(0, 80));
+    if (preSess) {
+      // Disk truncate first. If this fails we bail out without touching the
+      // store — the user keeps their conversation view and sees an error toast
+      // rather than a ghost conversation with a stale JSONL on disk.
+      try {
+        const result = await truncateSessionJsonlByMessages(sessionId, rewindCwd, keepMessages);
+        console.log("[rewind] JSONL truncated:", result);
+      } catch (err) {
+        console.error("[rewind] JSONL truncation failed:", err);
+        useClaudeStore.getState().setError(sessionId, `Rewind failed: ${err}`);
+        return;
       }
-
-      const updatedSess = useClaudeStore.getState().sessions[sessionId];
-      const keepMessages = updatedSess ? updatedSess.messages.length : 0;
-      const keepTurns = updatedSess ? updatedSess.messages.filter(m => m.role === "user").length : 0;
-
-      // Resolve CWD for JSONL path — prefer session's stored CWD, fall back to effectiveCwd
-      const rewindCwd = updatedSess?.cwd || effectiveCwd;
-
-      console.log("[rewind] JSONL truncation params:", {
-        sessionId, rewindCwd, keepMessages, keepTurns,
-        sessionCwd: updatedSess?.cwd, effectiveCwd,
-        lastKeptMsg: updatedSess?.messages[updatedSess.messages.length - 1]?.content?.slice(0, 80),
-      });
 
       // Find the UUID of the last message we want to keep.  The next --resume
       // will pass --resume-session-at <uuid> so Claude CLI slices its own
@@ -1353,12 +1362,13 @@ Rules:
       console.log("[rewind] Found rewind UUID:", uuid, "for keepMessages:", keepMessages);
       useClaudeStore.getState().setResumeAtUuid(sessionId, uuid);
 
-      try {
-        const result = await truncateSessionJsonlByMessages(sessionId, rewindCwd, keepMessages);
-        console.log("[rewind] JSONL truncated:", result);
-      } catch (err) {
-        console.error("[rewind] JSONL truncation failed:", err);
+      // Disk is now authoritative — mirror the truncation into the store.
+      store.truncateFromMessage(sessionId, messageId);
+      if (trailingUser) {
+        store.truncateFromMessage(sessionId, trailingUser.id);
+        console.log("[rewind] Removed trailing user message, prefilling:", rewindContent.slice(0, 80));
       }
+      const sess = preSess;
 
       // Force-cancel any active delegation group AND collect modifiedFiles from
       // ALL groups ever spawned by this parent — parentToGroup only tracks the

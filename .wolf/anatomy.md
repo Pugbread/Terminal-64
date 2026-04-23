@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-22T22:00:00.782Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-23T16:00:00.266Z
 > Files: 518 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ./
@@ -13,7 +13,7 @@
 - `index.html` — Terminal 64 (~139 tok)
 - `LICENSE` — Project license (~286 tok)
 - `package-lock.json` — npm lock file (~12902 tok)
-- `package.json` — Node.js package manifest (~278 tok)
+- `package.json` — Node.js package manifest (~296 tok)
 - `README.md` — Project documentation (~1173 tok)
 - `SECURITY.md` — Security Policy (~445 tok)
 - `tsconfig.json` — TypeScript configuration (~216 tok)

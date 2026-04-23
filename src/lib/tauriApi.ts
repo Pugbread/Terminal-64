@@ -13,6 +13,8 @@ import type {
   McpServer,
   DiskSession,
   HistoryMessage,
+  SessionMetadata,
+  SessionJsonlStat,
   DelegationMsg,
   WidgetInfo,
   SkillInfo,
@@ -74,9 +76,14 @@ function resolveOpenwolf(skipOpenwolf?: boolean) {
   return skipOpenwolf ? OW_DISABLED : getOpenwolfSettings();
 }
 
-export async function createClaudeSession(req: CreateClaudeRequest, skipOpenwolf?: boolean): Promise<void> {
+/// Returns the backend-resolved session UUID. When the caller supplies a
+/// non-empty `req.session_id`, that same value is echoed back; when it's
+/// empty, the backend mints a fresh uuid before spawning the CLI so the
+/// JSONL path is known immediately — no wait on the first `system/init`
+/// stream event.
+export async function createClaudeSession(req: CreateClaudeRequest, skipOpenwolf?: boolean): Promise<string> {
   const ow = resolveOpenwolf(skipOpenwolf);
-  return invoke("create_claude_session", {
+  return invoke<string>("create_claude_session", {
     req,
     openwolfEnabled: ow.enabled,
     openwolfAutoInit: ow.autoInit,
@@ -136,9 +143,30 @@ export async function loadSessionHistoryTail(sessionId: string, cwd: string, lim
   return invoke("load_session_history_tail", { sessionId, cwd, limit });
 }
 
-/** Map Rust HistoryMessage[] (snake_case) to frontend ChatMessage format (camelCase) */
+/** Cheap stat so the hydration cache can skip re-parsing when mtime+size haven't
+ *  changed. Returns null if the JSONL hasn't been written yet. */
+export async function statSessionJsonl(
+  sessionId: string,
+  cwd: string,
+): Promise<SessionJsonlStat | null> {
+  return invoke("stat_session_jsonl", { sessionId, cwd });
+}
+
+/** Stream-parse the JSONL and return only the metadata the session browser needs
+ *  (count, first user prompt, last assistant preview, last timestamp). The primitive
+ *  used to render a session list without touching the localStorage cache. */
+export async function loadSessionMetadata(sessionId: string, cwd: string): Promise<SessionMetadata> {
+  return invoke("load_session_metadata", { sessionId, cwd });
+}
+
+/** Map Rust HistoryMessage[] (snake_case) to frontend ChatMessage format (camelCase).
+ *  Deduplicates by message id, last-write wins: rewinds/forks can legitimately
+ *  rewrite a message under the same uuid, and the latest on-disk version is the
+ *  authoritative one. Using a Map keeps the FIRST occurrence's insertion order
+ *  while the VALUE is overwritten by subsequent occurrences. */
 export function mapHistoryMessages(history: HistoryMessage[]): ChatMessage[] {
-  return history.map((m) => {
+  const byId = new Map<string, ChatMessage>();
+  for (const m of history) {
     const toolCalls: ToolCall[] | undefined = m.tool_calls?.map((tc) => ({
       id: tc.id,
       name: tc.name,
@@ -146,14 +174,16 @@ export function mapHistoryMessages(history: HistoryMessage[]): ChatMessage[] {
       ...(tc.result !== undefined && { result: tc.result }),
       ...(tc.is_error !== undefined && { isError: tc.is_error }),
     }));
-    return {
+    const msg: ChatMessage = {
       id: m.id,
       role: m.role as "user" | "assistant",
       content: m.content,
       timestamp: m.timestamp,
       ...(toolCalls !== undefined && { toolCalls }),
     };
-  });
+    byId.set(m.id, msg);
+  }
+  return Array.from(byId.values());
 }
 
 export async function findRewindUuid(sessionId: string, cwd: string, keepMessages: number): Promise<string> {

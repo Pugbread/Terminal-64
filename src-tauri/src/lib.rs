@@ -124,6 +124,84 @@ fn session_jsonl_path(cwd: &str, session_id: &str) -> Result<std::path::PathBuf,
     Ok(session_project_dir(cwd)?.join(format!("{}.jsonl", session_id)))
 }
 
+/// Atomic write: stage to a sibling tmp file then rename onto the target. Prevents
+/// partially-written JSONL when truncate/fork is interrupted (crash, kill, OOM).
+/// `rename` is atomic on the same filesystem on macOS/Linux, and on Windows when
+/// the target exists (`MoveFileExW` with REPLACE_EXISTING — std uses this internally).
+fn atomic_write_jsonl(path: &std::path::Path, contents: &str) -> Result<(), String> {
+    let parent = path.parent().ok_or("jsonl path has no parent")?;
+    if !parent.exists() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+    }
+    // Per-pid + per-call suffix avoids collisions if two truncates race.
+    let suffix = format!(
+        ".tmp.{}.{}",
+        std::process::id(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let tmp = path.with_extension(format!(
+        "{}{}",
+        path.extension().and_then(|e| e.to_str()).unwrap_or("jsonl"),
+        suffix
+    ));
+    {
+        use std::io::Write;
+        let mut f =
+            std::fs::File::create(&tmp).map_err(|e| format!("create {}: {}", tmp.display(), e))?;
+        f.write_all(contents.as_bytes())
+            .map_err(|e| format!("write {}: {}", tmp.display(), e))?;
+        // Best-effort fsync — on some filesystems (notably macOS), data may sit in
+        // the buffer cache after rename. Don't error if fsync isn't supported.
+        if let Err(e) = f.sync_all() {
+            safe_eprintln!("[atomic_write] sync_all {}: {}", tmp.display(), e);
+        }
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        // Try to clean the tmp file so we don't leave litter on failure.
+        let _ = std::fs::remove_file(&tmp);
+        format!("rename {} -> {}: {}", tmp.display(), path.display(), e)
+    })?;
+    // Best-effort parent-dir fsync so the rename itself survives a crash on Unix.
+    // On macOS/Linux this is required for durability of the directory entry change.
+    #[cfg(unix)]
+    {
+        if let Err(e) = std::fs::File::open(parent).and_then(|d| d.sync_all()) {
+            safe_eprintln!("[atomic_write] parent sync_all {}: {}", parent.display(), e);
+        }
+    }
+    Ok(())
+}
+
+/// Hard upper bound for rewriting operations (truncate / fork). Sessions
+/// beyond this size stall the UI when loaded into a `String` and risk OOM on
+/// small laptops, so we refuse the rewrite rather than try. 100 MiB is well
+/// above any realistic conversation and still safe on 8 GB machines.
+const MAX_REWRITE_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Stat a JSONL path and reject it if it exceeds `MAX_REWRITE_BYTES`. Returns
+/// the size on success. Missing files fall through (caller decides whether
+/// absence is an error). Used to guard truncate/fork against pathological
+/// inputs before we pull the whole file into memory.
+fn check_rewrite_size_limit(path: &std::path::Path) -> Result<Option<u64>, String> {
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            let size = meta.len();
+            if size > MAX_REWRITE_BYTES {
+                return Err(format!(
+                    "jsonl_too_large: {} is {} bytes, exceeds {}-byte rewrite cap (refusing to load entire file into memory for truncate/fork)",
+                    path.display(),
+                    size,
+                    MAX_REWRITE_BYTES
+                ));
+            }
+            Ok(Some(size))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("stat {}: {}", path.display(), e)),
+    }
+}
+
 struct AppState {
     pty_manager: PtyManager,
     claude_manager: Arc<ClaudeManager>,
@@ -223,7 +301,7 @@ fn create_claude_session(
     openwolf_enabled: Option<bool>,
     openwolf_auto_init: Option<bool>,
     openwolf_design_qc: Option<bool>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let cli_mode = cli_permission_mode(&req.permission_mode);
     let registration = state
         .permission_server
@@ -243,6 +321,9 @@ fn create_claude_session(
         openwolf_design_qc.unwrap_or(false),
     );
     let channel = req.channel_server.clone();
+    // Returns the resolved session UUID so the frontend can adopt the
+    // backend-generated id (when it sent an empty one) without waiting for
+    // the first `system/init` stream event.
     state
         .claude_manager
         .create_session(&app_handle, req, settings_path, approver_path, channel)
@@ -815,6 +896,13 @@ fn strip_system_reminders(s: &str) -> String {
     out.trim().to_string()
 }
 
+/// Strip a leading UTF-8 BOM (U+FEFF, bytes EF BB BF) from a string slice.
+/// Some tools/editors prepend a BOM to text files; with it attached the first
+/// JSONL record fails `serde_json::from_str` and the record is silently dropped.
+fn strip_bom(s: &str) -> &str {
+    s.strip_prefix('\u{FEFF}').unwrap_or(s)
+}
+
 #[tauri::command]
 fn load_session_history(session_id: String, cwd: String) -> Result<Vec<HistoryMessage>, String> {
     let path = session_jsonl_path(&cwd, &session_id)?;
@@ -823,13 +911,31 @@ fn load_session_history(session_id: String, cwd: String) -> Result<Vec<HistoryMe
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
         Err(e) => return Err(format!("read: {}", e)),
     };
+    Ok(parse_session_history_lines(content.lines()))
+}
+
+/// Shared JSONL → HistoryMessage pipeline used by both the full loader and
+/// the reverse-tail loader. Scans lines in order, merging tool_result blocks
+/// back into their originating assistant message via tool_use_id. Strips a
+/// UTF-8 BOM from the very first line if present (harmless if already
+/// stripped by the caller — the prefix simply won't match).
+fn parse_session_history_lines<'a>(
+    lines: impl IntoIterator<Item = &'a str>,
+) -> Vec<HistoryMessage> {
     let mut messages: Vec<HistoryMessage> = Vec::new();
     // Track tool_use_id → index in messages vec + index in tool_calls vec for result merging
     let mut tool_index: std::collections::HashMap<String, (usize, usize)> =
         std::collections::HashMap::new();
 
-    for line in content.lines() {
-        let val: serde_json::Value = match serde_json::from_str(line) {
+    let mut first_line = true;
+    for line in lines {
+        let parse_line = if first_line {
+            first_line = false;
+            strip_bom(line)
+        } else {
+            line
+        };
+        let val: serde_json::Value = match serde_json::from_str(parse_line) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -962,25 +1068,166 @@ fn load_session_history(session_id: String, cwd: String) -> Result<Vec<HistoryMe
         }
         // Skip queue-operation, last-prompt, etc.
     }
-    Ok(messages)
+    messages
 }
 
-/// Tail variant: parses the full JSONL but returns only the last `limit`
-/// messages. Used by the refresh button to re-sync recent messages without
-/// pumping thousands of older ones over IPC. The frontend merges the tail
-/// into the store by message id, so older already-loaded messages survive.
+/// Read up to `limit` complete trailing lines from `path` without parsing the
+/// whole file. Seeks to EOF and reads backward in 64 KiB chunks until we
+/// either collect `limit` complete lines (separated by `\n`) or reach byte 0.
+/// Returns lines in file-order. The final line of a file that is NOT
+/// newline-terminated is considered truncated and is dropped. If we reach
+/// byte 0, a leading UTF-8 BOM is stripped so the first JSON line parses
+/// cleanly — matching the full-file loader's behavior.
+fn read_jsonl_tail_lines(path: &std::path::Path, limit: usize) -> Result<Vec<String>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Match `load_session_history`: a missing JSONL is not an error —
+            // the session may not have persisted to disk yet. Return empty.
+            return Ok(Vec::new());
+        }
+        Err(e) => return Err(format!("open {}: {}", path.display(), e)),
+    };
+    let size = f
+        .metadata()
+        .map_err(|e| format!("stat {}: {}", path.display(), e))?
+        .len();
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+
+    const CHUNK: u64 = 64 * 1024;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut pos: u64 = size;
+    let mut reached_start = false;
+
+    // Read backwards in 64 KiB chunks, prepending each to `buf`, until we
+    // have enough complete line terminators in the usable portion (i.e.
+    // after the earliest '\n' in the buffer — everything before the first
+    // '\n' is a partial head of a line whose full content lives further
+    // back in the file).
+    loop {
+        let read_size = CHUNK.min(pos);
+        let new_pos = pos - read_size;
+        f.seek(SeekFrom::Start(new_pos))
+            .map_err(|e| format!("seek: {}", e))?;
+        let mut chunk = vec![0u8; read_size as usize];
+        f.read_exact(&mut chunk)
+            .map_err(|e| format!("read chunk: {}", e))?;
+        chunk.extend_from_slice(&buf);
+        buf = chunk;
+        pos = new_pos;
+        if pos == 0 {
+            reached_start = true;
+        }
+
+        // Lines fully contained in the buffer = '\n's that appear AFTER
+        // the earliest '\n' boundary (or the whole buffer if we're at SOF).
+        let usable_start = if reached_start {
+            0
+        } else {
+            match buf.iter().position(|&b| b == b'\n') {
+                Some(p) => p + 1,
+                None => {
+                    // No newline anywhere in buffer yet — keep reading back.
+                    if reached_start {
+                        break;
+                    }
+                    continue;
+                }
+            }
+        };
+        let complete = buf[usable_start..].iter().filter(|&&b| b == b'\n').count();
+        if complete >= limit || reached_start {
+            break;
+        }
+    }
+
+    // Slice off the partial-head byte range, then handle BOM if we reached
+    // byte 0 of the file.
+    let mut start: usize = 0;
+    if !reached_start {
+        match buf.iter().position(|&b| b == b'\n') {
+            Some(p) => start = p + 1,
+            None => return Ok(Vec::new()),
+        }
+    } else if buf.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        start = 3;
+    }
+
+    let slice = &buf[start..];
+    // JSONL is always UTF-8, but a chunk boundary can land mid-codepoint.
+    // `from_utf8_lossy` substitutes U+FFFD for any invalid byte; the caller
+    // parses JSON per-line so a corrupted line just fails parse and is
+    // skipped — no worse than the full-file loader handles today.
+    let decoded = String::from_utf8_lossy(slice);
+
+    // `split('\n')` on UTF-8 text: the final element is either "" (file
+    // ended with '\n') or a trailing fragment (file did not). Either way we
+    // drop it — an unterminated tail line is, by definition, truncated.
+    let mut parts: Vec<&str> = decoded.split('\n').collect();
+    parts.pop();
+
+    let start_idx = parts.len().saturating_sub(limit);
+    Ok(parts[start_idx..]
+        .iter()
+        .map(|l| (*l).to_string())
+        .collect())
+}
+
+/// Tail variant: returns up to `limit` trailing visible messages without
+/// parsing the entire JSONL. Reads the file tail in 64 KiB reverse chunks
+/// until we have `limit` complete lines, then runs those lines through the
+/// same parsing pipeline as `load_session_history`. The frontend merges the
+/// tail into the store by message id, so older already-loaded messages
+/// survive.
 #[tauri::command]
 fn load_session_history_tail(
     session_id: String,
     cwd: String,
     limit: usize,
 ) -> Result<Vec<HistoryMessage>, String> {
-    let mut messages = load_session_history(session_id, cwd)?;
-    if limit == 0 || messages.len() <= limit {
-        return Ok(messages);
+    if limit == 0 {
+        return Ok(Vec::new());
     }
-    let start = messages.len() - limit;
-    Ok(messages.split_off(start))
+    let path = session_jsonl_path(&cwd, &session_id)?;
+    let tail_lines = read_jsonl_tail_lines(&path, limit)?;
+    let mut messages = parse_session_history_lines(tail_lines.iter().map(|s| s.as_str()));
+    // Tool-result merges only land if both ends of the pair fell inside the
+    // tail window. That's the same trade the old split_off tail made — and
+    // the frontend's merge-by-id logic is fine with partial records.
+    if messages.len() > limit {
+        let start = messages.len() - limit;
+        messages = messages.split_off(start);
+    }
+    Ok(messages)
+}
+
+/// Lightweight stat for the session JSONL so the frontend can reuse a cached
+/// hydration when mtime+size haven't changed. Returns `None` if the file is
+/// missing (fresh session or never persisted).
+#[tauri::command]
+fn stat_session_jsonl(session_id: String, cwd: String) -> Result<Option<SessionJsonlStat>, String> {
+    let path = session_jsonl_path(&cwd, &session_id)?;
+    let meta = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("stat {}: {}", path.display(), e)),
+    };
+    let mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    Ok(Some(SessionJsonlStat {
+        mtime_ms,
+        size: meta.len(),
+    }))
 }
 
 /// Collect JSONL lines up to `keep_turns` user messages (actual user prompts, not tool_result-only messages).
@@ -1036,10 +1283,21 @@ fn truncate_session_jsonl(
     keep_turns: usize,
 ) -> Result<(), String> {
     let path = session_jsonl_path(&cwd, &session_id)?;
-    let content = std::fs::read_to_string(&path).map_err(|e| format!("read: {}", e))?;
+    check_rewrite_size_limit(&path)?;
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            safe_eprintln!(
+                "[rewind] truncate skipped: JSONL does not exist at {}",
+                path.display()
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(format!("read {}: {}", path.display(), e)),
+    };
     let kept = collect_jsonl_lines_up_to_turns(&content, keep_turns);
     let truncated = kept.join("\n") + "\n";
-    std::fs::write(&path, truncated).map_err(|e| format!("write: {}", e))?;
+    atomic_write_jsonl(&path, &truncated)?;
     safe_eprintln!(
         "[rewind] Truncated JSONL to {} turns (was {} lines, now {} lines)",
         keep_turns,
@@ -1063,8 +1321,26 @@ fn truncate_session_jsonl_by_messages(
         path.display(),
         keep_messages
     );
-    let content =
-        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    check_rewrite_size_limit(&path)?;
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Match `truncate_session_jsonl`: a missing JSONL means the session
+            // never persisted to disk, so there's nothing to truncate. Treat as
+            // a no-op rather than erroring — the UI may optimistically call
+            // rewind on a freshly-created session before its first write.
+            safe_eprintln!(
+                "[rewind] truncate_by_messages skipped: JSONL does not exist at {}",
+                path.display()
+            );
+            return Ok(serde_json::json!({
+                "status": "skipped",
+                "reason": "jsonl_not_found",
+                "path": path.display().to_string(),
+            }));
+        }
+        Err(e) => return Err(format!("read {}: {}", path.display(), e)),
+    };
     let original_lines = content.lines().count();
     let original_bytes = content.len();
 
@@ -1195,7 +1471,7 @@ fn truncate_session_jsonl_by_messages(
 
     let truncated = kept.join("\n") + "\n";
     let new_bytes = truncated.len();
-    std::fs::write(&path, &truncated).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    atomic_write_jsonl(&path, &truncated)?;
 
     // Verification: re-read and count
     let verify = std::fs::read_to_string(&path)
@@ -1256,28 +1532,47 @@ fn fork_session_jsonl(
 ) -> Result<String, String> {
     let src = session_jsonl_path(&cwd, &parent_session_id)?;
     let dest = session_jsonl_path(&cwd, &new_session_id)?;
-    // Copy the full JSONL so chain-walking can resolve the fork UUID
-    std::fs::copy(&src, &dest).map_err(|e| format!("copy: {}", e))?;
+    check_rewrite_size_limit(&src)?;
+    // Stage the copy through atomic_write so a crash mid-copy can't leave a
+    // half-written sibling JSONL that future loads would try to parse.
+    let src_content = match std::fs::read_to_string(&src) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "fork source JSONL not found: {} (parent session never wrote to disk?)",
+                src.display()
+            ));
+        }
+        Err(e) => return Err(format!("read {}: {}", src.display(), e)),
+    };
+    atomic_write_jsonl(&dest, &src_content)?;
     // Reuse find_rewind_uuid (chain-walking) to locate the fork point UUID
     let uuid = find_rewind_uuid(new_session_id.clone(), cwd.clone(), keep_messages)?;
     // Truncate the copy so reloads from JSONL show only the pre-fork messages.
     // Without this, the fork appears with the full parent history until a new
     // prompt is sent with --resume-session-at.
-    let truncate_status =
-        match truncate_session_jsonl_by_messages(new_session_id.clone(), cwd, keep_messages) {
-            Ok(_) => "ok",
-            Err(e) => {
-                safe_eprintln!("[fork] truncate failed: {}", e);
-                "err"
-            }
-        };
+    // If truncate fails AFTER the atomic copy succeeded, the dest file is a
+    // full clone of the parent — a misleading "ghost fork" that would surface
+    // in the session browser with the entire parent transcript and likely
+    // cause resume-at to reference a parent UUID that's not at the fork point.
+    // Roll back by removing dest (best-effort; log if cleanup itself fails)
+    // and bubble up the truncate error so the caller can surface or retry.
+    if let Err(e) = truncate_session_jsonl_by_messages(new_session_id.clone(), cwd, keep_messages) {
+        if let Err(rm_err) = std::fs::remove_file(&dest) {
+            safe_eprintln!(
+                "[fork] rollback: failed to remove dest {} after truncate error: {}",
+                dest.display(),
+                rm_err
+            );
+        }
+        return Err(format!("fork truncate failed: {}", e));
+    }
     safe_eprintln!(
-        "[fork] Copied + truncated JSONL {} -> {} (fork at msg {}, uuid={}, truncate={})",
+        "[fork] Copied + truncated JSONL {} -> {} (fork at msg {}, uuid={})",
         parent_session_id,
         new_session_id,
         keep_messages,
         &uuid,
-        truncate_status,
     );
     Ok(uuid)
 }
@@ -1294,18 +1589,33 @@ fn find_rewind_uuid(
     use std::collections::{HashMap, HashSet};
 
     let path = session_jsonl_path(&cwd, &session_id)?;
-    let content =
-        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "JSONL not found at {} — cannot rewind a session that hasn't persisted to disk",
+                path.display()
+            ));
+        }
+        Err(e) => return Err(format!("read {}: {}", path.display(), e)),
+    };
 
     let mut records: HashMap<String, serde_json::Value> = HashMap::new();
     let mut all_uuids: Vec<String> = Vec::new();
     let mut children: HashSet<String> = HashSet::new();
 
+    let mut first_line = true;
     for line in content.lines() {
         if line.trim().is_empty() {
             continue;
         }
-        let val: serde_json::Value = match serde_json::from_str(line) {
+        let parse_line = if first_line {
+            first_line = false;
+            strip_bom(line)
+        } else {
+            line
+        };
+        let val: serde_json::Value = match serde_json::from_str(parse_line) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -1406,6 +1716,147 @@ fn find_rewind_uuid(
         records.len()
     );
     Ok(last_uuid)
+}
+
+/// Stream-parse the JSONL line-by-line and return only the metadata the session
+/// browser needs (count, first user prompt, last assistant preview, last timestamp).
+/// Cheap enough to call for every session in a project dir — does not allocate
+/// the full `Vec<HistoryMessage>`. Malformed lines are skipped with a warning.
+/// Returns `exists=false, msg_count=0` instead of an error when the JSONL is missing,
+/// so callers can treat "not yet persisted" the same as "empty session".
+#[tauri::command]
+fn load_session_metadata(session_id: String, cwd: String) -> Result<SessionMetadata, String> {
+    use std::io::BufRead;
+    let path = session_jsonl_path(&cwd, &session_id)?;
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SessionMetadata {
+                session_id,
+                exists: false,
+                ..Default::default()
+            });
+        }
+        Err(e) => return Err(format!("open {}: {}", path.display(), e)),
+    };
+    let reader = std::io::BufReader::new(file);
+
+    const PREVIEW_CHARS: usize = 240;
+    let mut meta = SessionMetadata {
+        session_id,
+        exists: true,
+        ..Default::default()
+    };
+    let mut malformed = 0usize;
+    let mut first_line = true;
+
+    for line_result in reader.lines() {
+        let line = match line_result {
+            Ok(l) => l,
+            Err(_) => {
+                // I/O error mid-read (e.g. CLI mid-write). Stop scanning but keep
+                // whatever metadata we collected — never return Err that would erase
+                // an existing chat from the UI.
+                safe_eprintln!(
+                    "[metadata] read interrupted; returning partial metadata for {}",
+                    meta.session_id
+                );
+                break;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let parse_line = if first_line {
+            first_line = false;
+            strip_bom(&line)
+        } else {
+            line.as_str()
+        };
+        let val: serde_json::Value = match serde_json::from_str(parse_line) {
+            Ok(v) => v,
+            Err(_) => {
+                malformed += 1;
+                continue;
+            }
+        };
+        let rec_type = val["type"].as_str().unwrap_or("");
+        let ts = parse_timestamp(val["timestamp"].as_str().unwrap_or(""));
+        if ts > meta.last_timestamp {
+            meta.last_timestamp = ts;
+        }
+
+        if rec_type == "user" && is_real_user_message(&val) {
+            meta.msg_count += 1;
+            if meta.first_user_prompt.is_empty() {
+                let raw = extract_user_text(&val);
+                let cleaned = strip_system_reminders(&raw);
+                if !cleaned.is_empty() {
+                    meta.first_user_prompt = cleaned.chars().take(PREVIEW_CHARS).collect();
+                }
+            }
+        } else if rec_type == "assistant" {
+            if let Some(content_arr) = val["message"]["content"].as_array() {
+                let text: String = content_arr
+                    .iter()
+                    .filter_map(|b| {
+                        if b["type"].as_str() == Some("text") {
+                            b["text"].as_str().map(str::to_string)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let has_text = !text.trim().is_empty();
+                let has_tools = content_arr
+                    .iter()
+                    .any(|b| b["type"].as_str() == Some("tool_use"));
+                if has_text || has_tools {
+                    meta.msg_count += 1;
+                    if has_text {
+                        meta.last_assistant_preview =
+                            text.trim().chars().take(PREVIEW_CHARS).collect();
+                    } else if meta.last_assistant_preview.is_empty() {
+                        meta.last_assistant_preview = "[tool calls]".to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    if malformed > 0 {
+        safe_eprintln!(
+            "[metadata] {} skipped {} malformed line(s)",
+            meta.session_id,
+            malformed
+        );
+    }
+    Ok(meta)
+}
+
+/// Pull the user's text out of a JSONL `user` record, handling both the
+/// string-content and array-content shapes the CLI emits.
+fn extract_user_text(val: &serde_json::Value) -> String {
+    let content = &val["message"]["content"];
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    if let Some(arr) = content.as_array() {
+        let mut out = String::new();
+        for block in arr {
+            if block["type"].as_str() == Some("text") {
+                if let Some(t) = block["text"].as_str() {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(t);
+                }
+            }
+        }
+        return out;
+    }
+    String::new()
 }
 
 fn parse_timestamp(ts: &str) -> f64 {
@@ -4518,6 +4969,8 @@ pub fn run() {
             list_disk_sessions,
             load_session_history,
             load_session_history_tail,
+            stat_session_jsonl,
+            load_session_metadata,
             truncate_session_jsonl,
             truncate_session_jsonl_by_messages,
             find_rewind_uuid,

@@ -237,6 +237,26 @@ export interface HistoryMessage {
   tool_calls?: HistoryToolCall[];
 }
 
+/** Lightweight session summary derived from JSONL on disk without loading every
+ *  message. Used by the session browser to populate previews without relying on
+ *  the localStorage cache. `exists=false` means the JSONL hasn't been written yet
+ *  (e.g. session created but no prompt sent), in which case all numeric fields are 0. */
+export interface SessionMetadata {
+  session_id: string;
+  exists: boolean;
+  msg_count: number;
+  last_timestamp: number;
+  first_user_prompt: string;
+  last_assistant_preview: string;
+}
+
+/** Lightweight stat for a session JSONL. Used by the hydration cache to decide
+ *  whether a re-parse is needed, or the cached messages can be reused. */
+export interface SessionJsonlStat {
+  mtime_ms: number;
+  size: number;
+}
+
 // Delegation message type (snake_case — matches Rust serialization)
 
 export interface DelegationMsg {

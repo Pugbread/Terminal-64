@@ -91,3 +91,4 @@
 | 21:36 | fix rewind/fork JSONL persistence | ClaudeChat.tsx, lib.rs, tauriApi.ts | added truncateSessionJsonlByMessages call in both rewind paths + truncation after fork copy | ~900 |
 | 22:10 | fix silent deny on bypass mode | permission_server.rs | bypass short-circuits before session lookup so unknown-token races allow | ~800 |
 | 22:40 | sensitive-file approval flow | ClaudeChat.tsx, useClaudeEvents.ts, claudeStore.ts | detect CLI classifier reject, show approval card, apply edit locally | ~2500 |
+| 01:24 | verification pass | .wolf/jsonl-refactor/verification.md | PASS — tsc/cargo/clippy clean, 6 scenarios verified | ~4k |
