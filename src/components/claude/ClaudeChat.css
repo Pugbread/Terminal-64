@@ -438,8 +438,10 @@
      `.cc-row` so every virtuoso item carries its own gutter. Virtuoso's
      internal item-list container doesn't always honor the scroller's
      horizontal padding, so pinning the gutter per-row is what keeps user
-     bubbles from kissing the viewport edge. */
-  padding: 16px 0 48px;
+     bubbles from kissing the viewport edge. Top padding mirrors the 64px
+     footer spacer so the first message gets the same breathing room as
+     the last. */
+  padding: 64px 0 48px;
   min-height: 0;
   overscroll-behavior-y: contain;
   scroll-behavior: auto;
