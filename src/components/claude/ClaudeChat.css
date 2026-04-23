@@ -558,6 +558,15 @@
 .cc-message {
   display: flex;
   flex-direction: column;
+  /* The old `.cc-messages { display: flex }` gave every `.cc-message` a
+     stretched cross-axis width — which is what `.cc-bubble { max-width: 88% }`
+     resolves against. Virtuoso rows are plain blocks, so without pinning the
+     message to full row width the flex-column sizes to its content and the
+     user bubble (align-items: flex-end) ends up right-aligned *past* the
+     viewport for long prompts. */
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .cc-message--user {
