@@ -87,6 +87,11 @@ export default function Canvas() {
         canvas.style.backgroundImage = "none";
       }
       content.style.transform = `translate(${panX}px, ${panY}px) scale(${z})`;
+      // Exposed for descendants that need to neutralize the canvas scale.
+      // XTerminal uses it to counter-scale itself so xterm's selection math
+      // (which mixes visual clientX with layout cellWidth) stays correct at
+      // any zoom.
+      content.style.setProperty("--canvas-zoom", String(z));
     };
     // Apply initial state
     const { panX, panY, zoom: z } = useCanvasStore.getState();

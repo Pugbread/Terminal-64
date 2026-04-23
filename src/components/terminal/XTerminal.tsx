@@ -54,8 +54,12 @@ export default function XTerminal({
   const theme = useThemeStore((s) => s.currentTheme);
   const bgAlpha = useThemeStore((s) => s.bgAlpha);
 
-  const focus = useCallback(() => {
-    termRef.current?.focus();
+  // The onMouseDown={focus} wrapper handler was racing xterm's own selection
+  // drag — a mousedown from the user starting a selection would trip a
+  // setActive() cascade that re-rendered ancestors mid-drag. xterm's internal
+  // handler already focuses the helper textarea on mousedown; our only job is
+  // to notify the parent canvas on focus-change.
+  const notifyFocus = useCallback(() => {
     onFocus?.(terminalId);
   }, [terminalId, onFocus]);
 
@@ -201,17 +205,6 @@ export default function XTerminal({
       onTitleChange?.(terminalId, title);
     });
 
-    // Kill xterm's native paste on its hidden textarea.
-    // stopImmediatePropagation prevents xterm's own paste listener from firing.
-    const xtermTA = containerRef.current.querySelector(
-      "textarea.xterm-helper-textarea"
-    ) as HTMLTextAreaElement | null;
-    const killPaste = (e: Event) => {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-    };
-    xtermTA?.addEventListener("paste", killPaste, true);
-
     const mod = (e: KeyboardEvent) => (IS_MAC ? e.metaKey : e.ctrlKey);
 
     term.attachCustomKeyEventHandler((event) => {
@@ -222,18 +215,30 @@ export default function XTerminal({
 
       if (event.type !== "keydown") return true;
 
-      // Ctrl/Cmd+V: paste from clipboard
+      // Ctrl/Cmd+V: route through xterm's own paste pipeline. term.paste()
+      // handles bracketed-paste wrapping, \r\n → \r normalization, and the
+      // onData dispatch so the PTY receives exactly what xterm would have
+      // received from a native paste event. Fire-and-forget: the async
+      // readText() failure path is caught so a denied clipboard permission
+      // doesn't unhandled-reject.
       if (mod(event) && event.key === "v") {
-        navigator.clipboard.readText().then((text) => {
-          if (text) writeTerminal(terminalId, text).catch(() => {});
-        });
+        navigator.clipboard
+          .readText()
+          .then((text) => { if (text) term.paste(text); })
+          .catch((err) => { console.warn("[xterm] clipboard.readText failed:", err); });
         return false;
       }
 
-      // Ctrl/Cmd+C: copy selection OR send interrupt
+      // Ctrl/Cmd+C: copy selection OR send interrupt. Skip clipboard write
+      // for whitespace-only selections so Cmd+C doesn't silently overwrite
+      // the clipboard when the user chord-fires it after selecting an empty
+      // cell by mistake.
       if (mod(event) && event.key === "c") {
         if (term.hasSelection()) {
-          navigator.clipboard.writeText(term.getSelection());
+          const sel = term.getSelection();
+          if (sel.trim().length > 0) {
+            navigator.clipboard.writeText(sel).catch(() => {});
+          }
           term.clearSelection();
           return false;
         }
@@ -264,6 +269,7 @@ export default function XTerminal({
     let unlistenOutput: (() => void) | null = null;
     let unlistenExit: (() => void) | null = null;
     let disposed = false;
+    let autoCommandTimer: ReturnType<typeof setTimeout> | null = null;
 
     (async () => {
       unlistenOutput = await onTerminalOutput((payload) => {
@@ -292,9 +298,11 @@ export default function XTerminal({
         lastSizeRef.current = { cols, rows };
         await createTerminal({ id: terminalId, cols, rows, ...(cwd ? { cwd } : {}) });
         await resizeTerminal(terminalId, cols, rows);
-        // Auto-run command after shell starts (e.g. launching claude)
+        // Auto-run command after shell starts (e.g. launching claude). Timer
+        // captured in `autoCommandTimer` so unmount before the 2s delay can
+        // cancel it instead of writing into a dead PTY.
         if (autoCommand) {
-          setTimeout(() => {
+          autoCommandTimer = setTimeout(() => {
             writeTerminal(terminalId, autoCommand + "\r").catch(() => {});
           }, 2000);
         }
@@ -334,13 +342,13 @@ export default function XTerminal({
     return () => {
       disposed = true;
       clearTimeout(focusTimer);
+      if (autoCommandTimer) clearTimeout(autoCommandTimer);
       initializedRef.current = false;
       // Disconnect observer BEFORE clearing refs to prevent race condition
       observer.disconnect();
       clearTimeout(resizeTimeout);
       unlistenOutput?.();
       unlistenExit?.();
-      xtermTA?.removeEventListener("paste", killPaste, true);
       if (webglRef.current) {
         webglRef.current.dispose();
         webglRef.current = null;
@@ -356,7 +364,7 @@ export default function XTerminal({
     <div
       ref={containerRef}
       className={`xterminal ${isActive ? "xterminal--active" : ""}`}
-      onMouseDown={focus}
+      onFocus={notifyFocus}
     />
   );
 }

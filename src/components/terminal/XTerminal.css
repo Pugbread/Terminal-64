@@ -1,6 +1,19 @@
 .xterminal {
-  width: 100%;
-  height: 100%;
+  /* Counter-scale: the canvas applies transform: scale(var(--canvas-zoom))
+     to an ancestor. xterm's SelectionService hit-tests by mixing visual
+     clientX (post-transform) with layout cellWidth (pre-transform) — at
+     zoom != 1 that math is off by the zoom factor and drags land on the
+     wrong cells. Growing our layout size by `canvas-zoom` and
+     counter-scaling by `1 / canvas-zoom` puts the terminal at a net CSS
+     transform of 1, so both sides of xterm's math agree. The trade-off
+     is that cols reflow when the user zooms (layout size changes) — the
+     terminal doesn't visually grow with canvas zoom, but it pans with
+     it, and selection works at any zoom. For pixel-perfect copy/paste
+     work, use the pop-out window.  */
+  width: calc(100% * var(--canvas-zoom, 1));
+  height: calc(100% * var(--canvas-zoom, 1));
+  transform: scale(calc(1 / var(--canvas-zoom, 1)));
+  transform-origin: top left;
   overflow: hidden;
   padding: 0;
   box-sizing: border-box;
