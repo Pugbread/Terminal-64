@@ -257,11 +257,12 @@ function saveToStorage(sessions: Record<string, ClaudeSession>) {
     // readPersistedMeta may have flipped the lock on a newer-schema read.
     if (downgradeLockActive) return;
 
-    // Clean up delegation children that have left memory. Named non-ephemeral
-    // sessions are kept so they can be reopened by the dialog later.
+    // Delegation children must never persist — they are spawned ephemeral,
+    // but this also scrubs any `[D] ` entries left over from older builds
+    // or races that wrote them before the ephemeral flag was set.
     for (const id of Object.keys(existing)) {
       const row = existing[id];
-      if (!sessions[id] && row?.name?.startsWith("[D] ")) {
+      if (row?.name?.startsWith("[D] ")) {
         delete existing[id];
       }
     }

@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useClaudeStore } from "../stores/claudeStore";
 import { useDelegationStore } from "../stores/delegationStore";
 import { useCanvasStore } from "../stores/canvasStore";
-import { cancelClaude, sendClaudePrompt, cleanupDelegationGroup, clearT64DelegationEnv } from "../lib/tauriApi";
+import { cancelClaude, sendClaudePrompt, cleanupDelegationGroup, clearT64DelegationEnv, deleteSessionJsonl, closeClaudeSession } from "../lib/tauriApi";
 import type { ChatMessage, ToolCall, HookEventPayload } from "../lib/types";
 
 const FORWARDING_PREFIX = "[Update from";
@@ -29,6 +29,41 @@ function closeSharedChatPanel(groupId: string) {
   const panel = canvas.terminals.find((t) => t.terminalId === panelId);
   if (panel) {
     canvas.removeTerminal(panel.id);
+  }
+}
+
+/**
+ * Tear down every child session for a delegation group. Delegation children
+ * are ephemeral by contract — they must leave no trace in localStorage, in
+ * memory, or in ~/.claude/projects/... JSONL. Called on both successful merge
+ * and on cancel.
+ */
+function purgeDelegationChildren(groupId: string) {
+  const delStore = useDelegationStore.getState();
+  const group = delStore.groups[groupId];
+  if (!group) return;
+
+  const claudeStore = useClaudeStore.getState();
+  const parentSession = claudeStore.sessions[group.parentSessionId];
+  const parentCwd = parentSession?.cwd || "";
+
+  for (const task of group.tasks) {
+    const childId = task.sessionId;
+    if (!childId) continue;
+    clearIdleTimer(childId);
+    // Kill the CLI subprocess if still alive
+    cancelClaude(childId).catch(() => {});
+    closeClaudeSession(childId).catch(() => {});
+    // Drop from the store (ephemeral sessions are already skipped by
+    // saveToStorage — this just frees memory and removes the canvas-less entry)
+    claudeStore.removeSession(childId);
+    // Delete the JSONL from disk. The CLI is spawned with
+    // --no-session-persistence so usually nothing is written; when it IS
+    // written (older CLI, interrupted flag parsing, etc.) we still want a
+    // clean slate.
+    if (parentCwd) {
+      deleteSessionJsonl(childId, parentCwd).catch(() => {});
+    }
   }
 }
 
@@ -296,6 +331,7 @@ export async function performMerge(groupId: string) {
     closeSharedChatPanel(groupId);
     cleanupDelegationGroup(groupId).catch(() => {});
     if (parentSession?.cwd) clearT64DelegationEnv(parentSession.cwd);
+    purgeDelegationChildren(groupId);
   }
 }
 
@@ -308,22 +344,15 @@ export function endDelegation(groupId: string, forceCancel = false) {
   const group = delStore.groups[groupId];
   if (!group) return;
 
-  // Cancel all running children and clean up idle tracking
+  // Mark running/pending tasks as cancelled so the merge path skips them
   for (const task of group.tasks) {
-    if (task.sessionId) {
-      clearIdleTimer(task.sessionId);
-    }
     if (task.status === "running" || task.status === "pending") {
       delStore.updateTaskStatus(groupId, task.id, "cancelled");
-      if (task.sessionId) {
-        cancelClaude(task.sessionId).catch(() => {});
-        // Clean up ephemeral session
-        useClaudeStore.getState().removeSession(task.sessionId);
-      }
     }
   }
 
-  // If any completed and we're not force-cancelling, merge results first
+  // If any completed and we're not force-cancelling, merge results first.
+  // performMerge calls purgeDelegationChildren itself on success.
   const hasResults = !forceCancel && group.tasks.some((t) => t.status === "completed" && t.result);
   if (hasResults) {
     performMerge(groupId);
@@ -333,5 +362,6 @@ export function endDelegation(groupId: string, forceCancel = false) {
     cleanupDelegationGroup(groupId).catch(() => {});
     const parentSession = useClaudeStore.getState().sessions[group.parentSessionId];
     if (parentSession?.cwd) clearT64DelegationEnv(parentSession.cwd);
+    purgeDelegationChildren(groupId);
   }
 }

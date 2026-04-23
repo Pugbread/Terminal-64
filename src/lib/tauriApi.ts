@@ -198,6 +198,12 @@ export async function forkSessionJsonl(parentSessionId: string, newSessionId: st
   return invoke("fork_session_jsonl", { parentSessionId, newSessionId, cwd, keepMessages });
 }
 
+/** Delete a session's JSONL file from disk. Delegation cleanup uses this so
+ *  ephemeral children leave no trace; missing files are a no-op. */
+export async function deleteSessionJsonl(sessionId: string, cwd: string): Promise<void> {
+  return invoke("delete_session_jsonl", { sessionId, cwd });
+}
+
 // Discord bot commands
 
 export async function startDiscordBot(token: string, guildId: string): Promise<void> {

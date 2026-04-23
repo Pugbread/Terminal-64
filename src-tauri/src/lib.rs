@@ -1577,6 +1577,24 @@ fn fork_session_jsonl(
     Ok(uuid)
 }
 
+/// Delete a session's JSONL file from disk. Used by delegation cleanup: child
+/// sessions are ephemeral by contract and must leave no trace on disk once the
+/// group is merged or cancelled. A missing file is treated as success — the
+/// caller doesn't need to know whether --no-session-persistence suppressed the
+/// write in the first place.
+#[tauri::command]
+fn delete_session_jsonl(session_id: String, cwd: String) -> Result<(), String> {
+    let path = session_jsonl_path(&cwd, &session_id)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => {
+            safe_eprintln!("[delegation] Deleted session JSONL {}", path.display());
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("remove {}: {}", path.display(), e)),
+    }
+}
+
 /// Walk the parentUuid chain in a session JSONL (matching how Claude CLI's
 /// buildConversationChain works) and return the UUID of the Nth visible message.
 /// Correct even after prior rewinds leave orphaned branches in append-only JSONL.
@@ -4975,6 +4993,7 @@ pub fn run() {
             truncate_session_jsonl_by_messages,
             find_rewind_uuid,
             fork_session_jsonl,
+            delete_session_jsonl,
             read_file,
             write_file,
             list_mcp_servers,

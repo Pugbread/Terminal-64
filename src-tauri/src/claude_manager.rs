@@ -437,11 +437,22 @@ fn build_command(
             cmd.arg("--effort").arg(e);
         }
     }
-    if let Some(dt) = disallowed_tools {
-        if !dt.is_empty() {
-            cmd.arg("--disallowed-tools").arg(dt);
+    // ScheduleWakeup is globally disabled: the scheduler pathway doesn't work
+    // for either normal chats or delegated agents, and leaving it enabled lets
+    // the model schedule no-op wakeups. Always append it to the disallow list,
+    // regardless of what the caller passed in.
+    const ALWAYS_DISALLOWED: &str = "ScheduleWakeup";
+    let merged_disallow: String = match disallowed_tools {
+        Some(dt) if !dt.is_empty() => {
+            if dt.split(',').any(|t| t.trim() == ALWAYS_DISALLOWED) {
+                dt.clone()
+            } else {
+                format!("{},{}", dt, ALWAYS_DISALLOWED)
+            }
         }
-    }
+        _ => ALWAYS_DISALLOWED.to_string(),
+    };
+    cmd.arg("--disallowed-tools").arg(&merged_disallow);
     if let Some(sp) = settings_path {
         if !sp.is_empty() {
             cmd.arg("--settings").arg(sp);
