@@ -468,8 +468,14 @@
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  padding: 0 14px;
-  margin-bottom: 10px;
+  /* The 10px inter-row gap lives in padding-bottom (not margin) because
+     Virtuoso measures each item's height via getBoundingClientRect, which
+     excludes outer margins. With margin-bottom, Virtuoso's accumulated
+     list height came up 10px short per row — the discrepancy surfaced as
+     a settle-jitter when momentum scrolls hit the bottom and virtuoso
+     corrected scrollTop against the real scrollHeight. Padding is inside
+     the box, so measurement and reality agree. */
+  padding: 0 14px 10px;
 }
 
 /* Sentinel appended inside virtuoso's Footer so the last message doesn't
