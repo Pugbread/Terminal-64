@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useClaudeStore } from "../../stores/claudeStore";
+import { useShallow } from "zustand/react/shallow";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useThemeStore } from "../../stores/themeStore";
 import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, listSlashCommands, resolvePermission, readFile, readFileBase64, writeFile, loadSessionHistoryTail, mapHistoryMessages, findRewindUuid, truncateSessionJsonlByMessages, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, deleteFiles, shellExec, filterUntrackedFiles, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile, savePastedImage, resolveSkillPrompt } from "../../lib/tauriApi";
@@ -354,7 +355,24 @@ function CompactDivider({ status, startedAt }: { status: "compacting" | "done"; 
 type McpDisplayServer = McpServerStatus | McpServer;
 
 export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }: ClaudeChatProps) {
-  const session = useClaudeStore((s) => s.sessions[sessionId]);
+  // Shallow-compare selector that EXCLUDES streamingText — the streaming
+  // bubble has its own fine-grained subscription, so we don't need to
+  // re-render the whole ClaudeChat tree (ChatInput, toolbar, Virtuoso props)
+  // on every streamed token. With streamingText excluded, ClaudeChat only
+  // re-renders when the session gets a *new* message, changes status,
+  // pending-questions, error, draftPrompt, etc — not on per-token ticks.
+  const session = useClaudeStore(
+    useShallow((s) => {
+      const sess = s.sessions[sessionId];
+      if (!sess) return undefined;
+      const { streamingText: _ignored, ...rest } = sess;
+      return rest;
+    }),
+  );
+  // Boolean-only streaming flag: flips once at start and once at end of a
+  // stream, not per token. Used by visualRows to decide whether to append
+  // a streaming row without re-building on every character.
+  const hasStreamingText = useClaudeStore((s) => Boolean(s.sessions[sessionId]?.streamingText));
   const createSession = useClaudeStore((s) => s.createSession);
   const addUserMessage = useClaudeStore((s) => s.addUserMessage);
   const incrementPromptCount = useClaudeStore((s) => s.incrementPromptCount);
@@ -502,7 +520,13 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   // (reveal-gates, jumpToPrompt) can branch on it, and we expose a few
   // imperative helpers that delegate to Virtuoso via `virtuosoRef`.
   //
-  const BOTTOM_TOLERANCE_PX = 24;
+  // 80px tolerance — use-stick-to-bottom uses 100, vercel/ai-chatbot
+  // uses 70, Virtuoso's message-list example uses 96. 24 was too tight
+  // and made the final pixels feel unreachable during streaming.
+  const BOTTOM_TOLERANCE_PX = 80;
+  // Mirror of !isScrolledUp read by the streaming-subscribe effect below
+  // without causing re-renders when it flips.
+  const atBottomRef = useRef(true);
 
   const scrollToBottom = useCallback(() => {
     // Go through Virtuoso so it stays in sync with its internal scroll state.
@@ -513,9 +537,38 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   // Session switch → snap to bottom, close island.
   useEffect(() => {
     setIslandOpen(false);
+    atBottomRef.current = true;
     // Defer one frame so Virtuoso has the new data.
     requestAnimationFrame(() => scrollToBottom());
   }, [sessionId, scrollToBottom]);
+
+  // Same-item streaming growth: Virtuoso's followOutput only fires on data
+  // changes (new/removed items), not when a single item's content grows.
+  // Because visualRows keys streaming on `hasStreamingText` (boolean) —
+  // stable across tokens — we need a separate pump that snaps to bottom on
+  // each token IFF the user is already at bottom. Subscribe directly to the
+  // store (no hook subscription → no re-render) and throttle via rAF.
+  useEffect(() => {
+    let lastText = useClaudeStore.getState().sessions[sessionId]?.streamingText ?? "";
+    let scheduled = false;
+    return useClaudeStore.subscribe((state) => {
+      const curr = state.sessions[sessionId]?.streamingText ?? "";
+      if (curr === lastText) return;
+      lastText = curr;
+      if (!atBottomRef.current) return;
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        if (!atBottomRef.current) return;
+        virtuosoRef.current?.scrollToIndex({
+          index: "LAST",
+          align: "end",
+          behavior: "auto",
+        });
+      });
+    });
+  }, [sessionId]);
 
   // Auto-close the island picker whenever an overlay takes over the chat
   // body. Without this, islandOpen can survive an overlay round-trip and
@@ -1634,7 +1687,10 @@ Coordinate actively. If another agent is working on a file you need, mention it 
     // keep the last item pinned — which is exactly the "snap up on every
     // token" jitter users see. As a regular list item, Virtuoso treats its
     // growth like normal list growth and stops fighting our auto-follow.
-    if (session.streamingText) {
+    // Keyed on `hasStreamingText` (boolean) rather than the live streamingText
+    // string so visualRows doesn't reallocate per token — StreamingBubbleBody
+    // subscribes to the text itself.
+    if (hasStreamingText) {
       rows.push({ kind: "streaming", key: "__streaming__" });
     }
     return rows;
@@ -1643,7 +1699,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
     session?.autoCompactStatus,
     session?.autoCompactStartedAt,
     session?.isStreaming,
-    session?.streamingText,
+    hasStreamingText,
   ]);
 
   const renderRow = useCallback(
@@ -1777,7 +1833,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
 
   if (!session) return <div className="cc-container cc-loading">Initializing...</div>;
 
-  const hasMessages = session.messages.length > 0 || session.streamingText;
+  const hasMessages = session.messages.length > 0 || hasStreamingText;
   const currentModel = MODELS.find((m) => m.id === selectedModel) || MODELS[0]!;
   const currentEffort = EFFORTS.find((e) => e.id === selectedEffort) || EFFORTS[2]!;
 
@@ -2100,7 +2156,10 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             // fought Virtuoso's own logic and produced the "can't reach the
             // bottom" jitter. Let Virtuoso handle it.
             followOutput="auto"
-            atBottomStateChange={(atBottom) => setIsScrolledUp(!atBottom)}
+            atBottomStateChange={(atBottom) => {
+              atBottomRef.current = atBottom;
+              setIsScrolledUp(!atBottom);
+            }}
             atBottomThreshold={BOTTOM_TOLERANCE_PX}
             initialTopMostItemIndex={Math.max(0, visualRows.length - 1)}
             components={virtuosoComponents}

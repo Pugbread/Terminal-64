@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import type { SlashCommand } from "../../lib/types";
 import { searchFiles, readFileBase64 } from "../../lib/tauriApi";
 import { formatDuration } from "../../lib/constants";
@@ -67,7 +67,7 @@ interface ChatInputProps {
   sessionId?: string;
 }
 
-export default function ChatInput({ onSend, onCancel, onAttach, onRewrite, isRewriting, isStreaming, accentColor, streamingStartedAt, disabled, slashCommands, initialText, onInitialTextConsumed, permLabel, permColor, onCyclePerm, sessionName, cwd, queueCount, draftPrompt, onDraftChange, onPasteImage, contextPct, autoCompactAt, onRegisterVoiceActions, sessionId }: ChatInputProps) {
+function ChatInputImpl({ onSend, onCancel, onAttach, onRewrite, isRewriting, isStreaming, accentColor, streamingStartedAt, disabled, slashCommands, initialText, onInitialTextConsumed, permLabel, permColor, onCyclePerm, sessionName, cwd, queueCount, draftPrompt, onDraftChange, onPasteImage, contextPct, autoCompactAt, onRegisterVoiceActions, sessionId }: ChatInputProps) {
   const [text, setText] = useState(draftPrompt || "");
   const [elapsed, setElapsed] = useState("");
   const [inlineFiles, setInlineFiles] = useState<Set<string>>(new Set());
@@ -939,3 +939,10 @@ export default function ChatInput({ onSend, onCancel, onAttach, onRewrite, isRew
     </div>
   );
 }
+
+// React.memo: ChatInput is 900+ lines and was re-rendering on every
+// streaming token because the parent ClaudeChat used to subscribe to the
+// whole session object. With the parent's selector now fine-grained, memo
+// gives us the remaining win — only re-render when a prop actually changes.
+const ChatInput = memo(ChatInputImpl);
+export default ChatInput;

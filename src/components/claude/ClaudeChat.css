@@ -435,26 +435,28 @@
      or table lets the whole list pan sideways. */
   overflow-x: hidden;
   /* Top/bottom padding lives on the scroller; left/right padding moves to
-     `.cc-row` so every virtuoso item carries its own gutter. Virtuoso's
-     internal item-list container doesn't always honor the scroller's
-     horizontal padding, so pinning the gutter per-row is what keeps user
-     bubbles from kissing the viewport edge. Top padding mirrors the 64px
-     footer spacer so the first message gets the same breathing room as
-     the last. */
+     `.cc-row` so every virtuoso item carries its own gutter. */
   padding: 64px 0 48px;
   min-height: 0;
   /* `contain` only blocks scroll-chain to the parent; macOS trackpad
-     momentum still rubber-bands past the edge, which makes the browser
-     keep dispatching scroll-past events on overshoot. Those flicker
-     Virtuoso's atBottomStateChange mid-stream and cause the "jitter
-     when I panned and overshot" behavior. `none` kills the bounce
-     entirely. */
+     momentum still rubber-bands past the edge. `none` kills the bounce
+     entirely so overshoot events don't flicker atBottomStateChange. */
   overscroll-behavior-y: none;
   scroll-behavior: auto;
-  /* Shift the scrollbar inward so it doesn't sit under the FloatingTerminal's
-     east resize handle (8px wide at the panel edge). Without this, clicking
-     the scrollbar triggers a resize instead of scrolling. */
-  margin-right: 8px;
+  /* Reserve the scrollbar gutter on both sides so appearance of the
+     scrollbar mid-stream doesn't reflow the content width. */
+  scrollbar-gutter: stable both-edges;
+  /* Promote the scroller to its own compositing layer. The canvas
+     ancestor has `transform: scale(z)`; without these hints the chat
+     would repaint on the shared panel layer, rasterized under a
+     fractional scale — every streamed token would force a sub-pixel
+     glyph AA re-alignment (the visible "jitter during streaming"). A
+     dedicated layer isolates paint and lets the GPU upscale cheaply. */
+  contain: layout paint;
+  will-change: transform;
+  transform: translateZ(0);
+  isolation: isolate;
+  margin-right: 0;
 }
 
 /* Virtuoso renders each item wrapped in our own `.cc-row` div. The old
