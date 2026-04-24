@@ -79,4 +79,8 @@ export const DEFAULT_KEYBINDINGS: Keybinding[] = [
     combo: { key: "v", ctrl: true, shift: true },
     command: "voice.toggle",
   },
+  {
+    combo: { key: ",", ctrl: true },
+    command: "settings.toggle",
+  },
 ];

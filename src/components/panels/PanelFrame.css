@@ -1,0 +1,80 @@
+/* Frame wraps a panel pane: border + subtle header slot. */
+.pf-frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-secondary, rgba(24, 24, 28, 0.7));
+  border: 1px solid var(--ft-border, #cba6f7);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.pf-frame__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color, rgba(203, 166, 247, 0.2));
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-secondary, #a6adc8);
+  user-select: none;
+}
+
+.pf-frame__title {
+  font-weight: 600;
+}
+
+.pf-frame__actions {
+  display: flex;
+  gap: 4px;
+}
+
+.pf-frame__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Resize handle — 3px bar highlights to --ft-border on hover/drag.
+   Targets react-resizable-panels Separator (data-separator attribute). */
+.pf-handle {
+  position: relative;
+  width: 3px;
+  margin: 0 1px;
+  background: transparent;
+  cursor: col-resize;
+  transition: background 0.12s ease;
+}
+
+.pf-handle[data-orientation="vertical"] {
+  width: 100%;
+  height: 3px;
+  margin: 1px 0;
+  cursor: row-resize;
+}
+
+.pf-handle:hover,
+.pf-handle[data-separator-active],
+.pf-handle[data-active] {
+  background: var(--ft-border, #cba6f7);
+}
+
+.pf-handle:focus-visible {
+  outline: 2px solid var(--ft-border, #cba6f7);
+  outline-offset: 1px;
+}
+
+/* Container wraps the whole PanelGroup in a padded flex region. */
+.pf-container {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  padding: 6px;
+  box-sizing: border-box;
+}

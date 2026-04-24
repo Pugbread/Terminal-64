@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Drawer } from "vaul";
 import { useThemeStore } from "../../stores/themeStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { startDiscordBot, stopDiscordBot, discordBotStatus, renameDiscordSession, discordCleanupOrphaned, generateTheme, onThemeGenChunk, onThemeGenDone, startOpenwolfDaemon, stopOpenwolfDaemon, openwolfDaemonStatus } from "../../lib/tauriApi";
@@ -171,17 +172,6 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
     { kind: "dictation", label: "Dictation (whisper.cpp)", sizeMB: 80 },
   ];
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, onClose]);
-
-  if (!isOpen) return null;
-
   const opacityPercent = Math.round(bgAlpha * 100);
 
   const handleAddQuickPaste = () => {
@@ -247,18 +237,30 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   };
 
   return (
-    <div className="settings-overlay" onClick={onClose}>
-      <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
-        <div className="settings-header">
-          <span className="settings-title">Settings</span>
-          <button className="settings-close" onClick={onClose}>
-            <svg width="10" height="10" viewBox="0 0 10 10">
-              <path d="M1 1L9 9M9 1L1 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-          </button>
-        </div>
+    <Drawer.Root
+      open={isOpen}
+      onOpenChange={(next) => { if (!next) onClose(); }}
+      snapPoints={[0.9]}
+      activeSnapPoint={isOpen ? 0.9 : null}
+      dismissible
+    >
+      <Drawer.Portal>
+        <Drawer.Overlay className="settings-overlay" />
+        <Drawer.Content className="settings-panel">
+          <div className="settings-drawer-handle" aria-hidden="true" />
+          <Drawer.Title className="settings-header">
+            <span className="settings-title">Settings</span>
+            <button className="settings-close" onClick={onClose} aria-label="Close settings">
+              <svg width="10" height="10" viewBox="0 0 10 10">
+                <path d="M1 1L9 9M9 1L1 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+          </Drawer.Title>
+          <Drawer.Description className="sp-visually-hidden">
+            Terminal 64 application settings
+          </Drawer.Description>
 
-        <div className="settings-body">
+          <div className="settings-body">
           {/* Appearance */}
           <Section label="Appearance" icon="◑">
             <div className="sp-row">
@@ -789,8 +791,9 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
               {botLoading ? "..." : botConnected ? "Disconnect" : "Connect"}
             </button>
           </Section>
-        </div>
-      </div>
-    </div>
+          </div>
+        </Drawer.Content>
+      </Drawer.Portal>
+    </Drawer.Root>
   );
 }
