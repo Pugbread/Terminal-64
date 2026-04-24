@@ -510,14 +510,34 @@
 /* ---- Empty state ---- */
 
 .cc-empty {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  opacity: 0.35;
   user-select: none;
+  overflow: hidden;
+}
+
+.cc-empty-particles {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.cc-empty-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  opacity: 0.5;
 }
 
 .cc-empty-icon {
@@ -2134,6 +2154,32 @@
 
 .cc-cancel-btn-inline:hover {
   background: rgba(243, 139, 168, 0.25);
+}
+
+/* Shimmer overlay — runs while the cancel/send button is visible during streaming */
+.cc-cancel-btn-inline--shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.cc-cancel-btn-inline--shimmer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 0%,
+    transparent 35%,
+    rgba(243, 139, 168, 0.35) 50%,
+    transparent 65%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: cc-shimmer-slide 1.6s linear infinite;
+  pointer-events: none;
+}
+@keyframes cc-shimmer-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
 }
 
 /* ---- Streaming indicator (in status line) ---- */

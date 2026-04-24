@@ -1,5 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import type { SlashCommand } from "../../lib/types";
+import NumberTicker from "../ui/NumberTicker";
+import Kbd from "../ui/Kbd";
 import { searchFiles, readFileBase64 } from "../../lib/tauriApi";
 import { formatDuration } from "../../lib/constants";
 import { isAbsolutePath, joinPath } from "../../lib/platform";
@@ -897,7 +899,7 @@ function ChatInputImpl({ onSend, onCancel, onAttach, onRewrite, isRewriting, isS
           )}
           {isStreaming && (
             <button
-              className="cc-cancel-btn-inline"
+              className="cc-cancel-btn-inline cc-cancel-btn-inline--shimmer"
               onClick={onCancel}
               title="Cancel (Esc)"
             >
@@ -921,14 +923,16 @@ function ChatInputImpl({ onSend, onCancel, onAttach, onRewrite, isRewriting, isS
             <span className="cc-perm-line" onClick={onCyclePerm} title="Click or Shift+Tab to cycle">
               <span className="cc-perm-chevrons" style={{ color: permColor }}>&#x203a;&#x203a;</span>
               {" "}{permLabel}{" "}
-              <span className="cc-perm-hint">(shift+tab to cycle)</span>
+              <span className="cc-perm-hint">
+                (<Kbd>Shift</Kbd>+<Kbd>Tab</Kbd> to cycle)
+              </span>
             </span>
           ) : null}
         </div>
         {contextPct != null && contextPct > 0 && (
           <div className="cc-status-right">
             <span className={`cc-ctx-badge ${contextPct >= 80 ? "cc-ctx-badge--warn" : ""}`}>
-              Context {contextPct}%
+              Context <NumberTicker value={contextPct} />%
             </span>
             {autoCompactAt != null && autoCompactAt > 0 && (
               <span className="cc-ctx-compact-hint">Auto compact at {autoCompactAt}%</span>

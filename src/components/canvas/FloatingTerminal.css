@@ -269,3 +269,43 @@ input.ft-title--editing {
   pointer-events: none !important;
 }
 
+/* ---- Border Beam (streaming Claude session) ---- */
+
+@property --ft-beam-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.floating-terminal--streaming::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: 8px;
+  background: conic-gradient(
+    from var(--ft-beam-angle, 0deg),
+    transparent 0%,
+    transparent 70%,
+    color-mix(in srgb, var(--ft-border, #cba6f7) 80%, transparent) 82%,
+    #89dceb 90%,
+    color-mix(in srgb, var(--ft-border, #cba6f7) 80%, transparent) 96%,
+    transparent 100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  animation: ft-beam-rotate 3s linear infinite;
+  pointer-events: none;
+  z-index: 15;
+}
+
+@keyframes ft-beam-rotate {
+  to { --ft-beam-angle: 360deg; }
+}
+

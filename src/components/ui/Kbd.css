@@ -1,0 +1,33 @@
+.t64-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom-width: 2px;
+  color: var(--fg-muted, #6c7086);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.3px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  animation: t64-kbd-pulse 1.8s ease-out 1;
+  vertical-align: middle;
+}
+
+.t64-kbd:hover {
+  color: var(--fg, #cdd6f4);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(203, 166, 247, 0.35);
+  animation: t64-kbd-pulse 0.9s ease-out 1;
+}
+
+@keyframes t64-kbd-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(203, 166, 247, 0.45); }
+  70% { box-shadow: 0 0 0 6px rgba(203, 166, 247, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(203, 166, 247, 0); }
+}
