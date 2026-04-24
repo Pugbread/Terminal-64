@@ -10,8 +10,11 @@ import {
   onTerminalExit,
 } from "../../lib/tauriApi";
 import { useThemeStore } from "../../stores/themeStore";
+import { useCanvasStore } from "../../stores/canvasStore";
 import { hexToRgba } from "../../lib/themeEngine";
 import { IS_MAC } from "../../lib/platform";
+
+const BASE_FONT_SIZE = 14;
 import "@xterm/xterm/css/xterm.css";
 import "./XTerminal.css";
 
@@ -62,6 +65,32 @@ export default function XTerminal({
   const notifyFocus = useCallback(() => {
     onFocus?.(terminalId);
   }, [terminalId, onFocus]);
+
+  // Keep fontSize in sync with the canvas zoom. xterm rasterizes glyphs onto
+  // its own canvas at options.fontSize, so CSS transforms on the container
+  // don't affect rendered text size — our counter-scale trick pins the net
+  // CSS transform to 1 (for correct selection math), which means without
+  // this the terminal text stays the same on-screen size regardless of
+  // canvas zoom. Scaling fontSize with zoom gives visual zoom back, and
+  // because layout-cellWidth scales with fontSize, cols stay constant and
+  // selection math (visual_offset / layout_cellWidth) remains correct.
+  const canvasZoom = useCanvasStore((s) => s.zoom);
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    const targetSize = Math.max(6, Math.round(BASE_FONT_SIZE * canvasZoom));
+    if (term.options.fontSize === targetSize) return;
+    // Debounce — mid-zoom ticks fire many times per second and each fontSize
+    // change triggers xterm to re-measure + reflow. Let the user settle before
+    // applying.
+    const t = setTimeout(() => {
+      if (termRef.current && termRef.current.options.fontSize !== targetSize) {
+        termRef.current.options.fontSize = targetSize;
+        fitAddonRef.current?.fit();
+      }
+    }, 60);
+    return () => clearTimeout(t);
+  }, [canvasZoom]);
 
   // Apply theme + alpha changes to xterm
   useEffect(() => {
@@ -155,12 +184,13 @@ export default function XTerminal({
       );
     }
 
+    const initialZoom = useCanvasStore.getState().zoom;
     const term = new Terminal({
       cursorBlink: false,
       cursorStyle: "underline",
       cursorWidth: 1,
       cursorInactiveStyle: "none",
-      fontSize: 14,
+      fontSize: Math.max(6, Math.round(BASE_FONT_SIZE * initialZoom)),
       fontFamily: "'Cascadia Code', 'Fira Code', Consolas, monospace",
       fontWeight: "400",
       letterSpacing: 0,
