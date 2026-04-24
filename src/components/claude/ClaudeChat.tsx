@@ -231,51 +231,56 @@ function ChatFooter({
     }
   };
 
+  if (!current && !pendingQuestions && !error) return null;
+
   return (
     <>
       {current && pendingQuestions && (
-        <div className="cc-question">
-          <div className="cc-question-header">
-            {current.header && <span className="cc-question-badge">{current.header}</span>}
-            <span className="cc-question-progress">{progress}</span>
-          </div>
-          <div className="cc-question-text">{current.question}</div>
-          <div className="cc-question-options">
-            {current.options.map((opt, i) => (
-              <button
-                key={opt.label || i}
-                className="cc-question-btn"
-                onClick={() => submitAnswer(opt.label)}
-              >
-                <span className="cc-question-label">{opt.label}</span>
-                {opt.description && <span className="cc-question-desc">{opt.description}</span>}
-              </button>
-            ))}
-            <div className="cc-question-custom">
-              <input
-                className="cc-question-input"
-                placeholder="Or type a custom answer..."
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.target as HTMLInputElement).value.trim()) {
-                    submitAnswer((e.target as HTMLInputElement).value.trim());
-                    (e.target as HTMLInputElement).value = "";
-                  }
-                }}
-              />
+        <div className="cc-row">
+          <div className="cc-question">
+            <div className="cc-question-header">
+              {current.header && <span className="cc-question-badge">{current.header}</span>}
+              <span className="cc-question-progress">{progress}</span>
+            </div>
+            <div className="cc-question-text">{current.question}</div>
+            <div className="cc-question-options">
+              {current.options.map((opt, i) => (
+                <button
+                  key={opt.label || i}
+                  className="cc-question-btn"
+                  onClick={() => submitAnswer(opt.label)}
+                >
+                  <span className="cc-question-label">{opt.label}</span>
+                  {opt.description && <span className="cc-question-desc">{opt.description}</span>}
+                </button>
+              ))}
+              <div className="cc-question-custom">
+                <input
+                  className="cc-question-input"
+                  placeholder="Or type a custom answer..."
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.target as HTMLInputElement).value.trim()) {
+                      submitAnswer((e.target as HTMLInputElement).value.trim());
+                      (e.target as HTMLInputElement).value = "";
+                    }
+                  }}
+                />
+              </div>
             </div>
           </div>
         </div>
       )}
       {error && (
-        <div className="cc-message cc-message--error">
-          <div className="cc-error">{error}</div>
+        <div className="cc-row">
+          <div className="cc-message cc-message--error">
+            <div className="cc-error">{error}</div>
+          </div>
         </div>
       )}
-      {/* Bottom breathing room — Virtuoso doesn't respect its scroller's
-          own padding-bottom for measurement-based scroll targets, so we
-          reserve a fixed sentinel height below the footer content. Must
-          stay in sync with BOTTOM_TOLERANCE_PX. */}
-      <div className="cc-bottom-spacer" />
+      {/* No bottom spacer here — the bottomSpacer virtuoso row handles it
+          inside the list now, which is where Virtuoso's scroll math can
+          see it. A Footer-level spacer would sit BELOW the list items
+          and recreate the unreachable-zone bug. */}
     </>
   );
 }
@@ -379,6 +384,11 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const setDraftPrompt = useClaudeStore((s) => s.setDraftPrompt);
   const chatBodyRef = useRef<HTMLDivElement | null>(null);
   const scrollCleanupRef = useRef<(() => void) | null>(null);
+  // Timestamp of last user-initiated un-stick event (wheel-up / touch-drag
+  // down). commitState uses this to NOT re-stick during the 500ms after —
+  // otherwise scrolling up slightly (dist still < 60) would immediately
+  // undo the wheel-up and snap the user back to bottom on the next paint.
+  const lastUnstickAtRef = useRef(0);
   const setChatBody = useCallback((el: HTMLElement | Window | null) => {
     scrollCleanupRef.current?.();
     scrollCleanupRef.current = null;
@@ -392,10 +402,11 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
       const dist = div.scrollHeight - div.scrollTop - div.clientHeight;
       const maxScroll = div.scrollHeight - div.clientHeight;
       const progress = maxScroll > 1 ? Math.max(0, Math.min(1, 1 - div.scrollTop / maxScroll)) : 0;
-      // Re-enter sticky zone when the user brings themselves close to the
-      // bottom. Threshold matches BOTTOM_TOLERANCE_PX so "near enough" is
-      // consistent across the UI.
-      if (dist < BOTTOM_TOLERANCE_PX) stickyRef.current = true;
+      const inGrace = Date.now() - lastUnstickAtRef.current < 500;
+      // Sticky if at bottom AND the user hasn't just wheeled/touched up.
+      if (dist < BOTTOM_TOLERANCE_PX && !inGrace) stickyRef.current = true;
+      // Un-sticky if user scrolled away (scrollbar drag, PgUp, etc).
+      if (dist >= BOTTOM_TOLERANCE_PX) stickyRef.current = false;
       setIsScrolledUp(dist > BOTTOM_TOLERANCE_PX);
       setScrollProgress(progress);
     };
@@ -405,23 +416,41 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
       requestAnimationFrame(commitState);
     };
     const onScroll = () => { schedule(); };
-    // Wheel-up / touch-drag-up: user intent to leave the bottom. These are
-    // the ONLY sources that flip stickyRef to false. Programmatic scrolls
-    // from our pump don't fire wheel events, so they can't accidentally
-    // un-stick the user.
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) stickyRef.current = false;
+      if (e.deltaY < 0) {
+        stickyRef.current = false;
+        lastUnstickAtRef.current = Date.now();
+      }
     };
     let lastTouchY = 0;
-    const onTouchStart = (e: TouchEvent) => {
-      lastTouchY = e.touches[0]?.clientY ?? 0;
-    };
+    const onTouchStart = (e: TouchEvent) => { lastTouchY = e.touches[0]?.clientY ?? 0; };
     const onTouchMove = (e: TouchEvent) => {
       const y = e.touches[0]?.clientY ?? 0;
-      // Finger moving DOWN on the screen = content scrolls UP = user leaving bottom.
-      if (y - lastTouchY > 2) stickyRef.current = false;
+      if (y - lastTouchY > 2) {
+        stickyRef.current = false;
+        lastUnstickAtRef.current = Date.now();
+      }
       lastTouchY = y;
     };
+
+    // Pump: single MutationObserver on the subtree. Any DOM change (new
+    // row, streaming token, tool result body, etc) → rAF → if sticky,
+    // raw scrollTop=scrollHeight. Vercel's hooks/use-scroll-to-bottom
+    // pattern. MutationObserver fires after layout so scrollHeight is
+    // always current.
+    let pumpScheduled = false;
+    const mo = new MutationObserver(() => {
+      if (!stickyRef.current) return;
+      if (pumpScheduled) return;
+      pumpScheduled = true;
+      requestAnimationFrame(() => {
+        pumpScheduled = false;
+        if (!stickyRef.current) return;
+        const target = chatBodyRef.current;
+        if (target) target.scrollTop = target.scrollHeight;
+      });
+    });
+    mo.observe(div, { childList: true, subtree: true, characterData: true });
 
     commitState();
     div.addEventListener("scroll", onScroll, { passive: true });
@@ -429,6 +458,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     div.addEventListener("touchstart", onTouchStart, { passive: true });
     div.addEventListener("touchmove", onTouchMove, { passive: true });
     scrollCleanupRef.current = () => {
+      mo.disconnect();
       div.removeEventListener("scroll", onScroll);
       div.removeEventListener("wheel", onWheel);
       div.removeEventListener("touchstart", onTouchStart);
@@ -585,42 +615,8 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     requestAnimationFrame(() => scrollToBottom());
   }, [sessionId, scrollToBottom]);
 
-  // Stick-to-bottom for same-item growth (streaming tokens appended into
-  // an existing row). Ported from vercel/ai-chatbot's hooks/
-  // use-scroll-to-bottom.tsx + use-stick-to-bottom's algorithm:
-  // observe the DOM of the streaming bubble, not the zustand store.
-  // ResizeObserver fires AFTER layout, so scrollHeight is always fresh
-  // when we read it — no more racing Virtuoso's measurement cycle that
-  // made the old zustand-pump land above the real bottom on new rows.
-  //
-  // Re-attaches whenever the streaming bubble appears/disappears (a
-  // brief rAF wait on hasStreamingText=true so Virtuoso has a chance
-  // to mount the .cc-bubble--streaming DOM node).
-  useEffect(() => {
-    if (!hasStreamingText) return;
-    const chatBody = chatBodyRef.current;
-    if (!chatBody) return;
-    let ro: ResizeObserver | null = null;
-    let rafId = 0;
-    const attach = () => {
-      const bubble = chatBody.querySelector<HTMLElement>(".cc-bubble--streaming");
-      if (!bubble) {
-        // Virtuoso hasn't mounted it yet — retry next frame.
-        rafId = requestAnimationFrame(attach);
-        return;
-      }
-      ro = new ResizeObserver(() => {
-        if (!stickyRef.current) return;
-        chatBody.scrollTop = chatBody.scrollHeight;
-      });
-      ro.observe(bubble);
-    };
-    rafId = requestAnimationFrame(attach);
-    return () => {
-      cancelAnimationFrame(rafId);
-      ro?.disconnect();
-    };
-  }, [hasStreamingText]);
+  // (MutationObserver is installed in setChatBody above, since it needs
+  // the live scroller element which Virtuoso hands us via scrollerRef.)
 
   // Auto-close the island picker whenever an overlay takes over the chat
   // body. Without this, islandOpen can survive an overlay round-trip and
@@ -904,15 +900,10 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
 
   const handleSend = useCallback(
     async (text: string, permissionOverride?: PermissionMode, fromDiscord = false) => {
-      // Snap-before-append (ported from t3code's ChatView.tsx:2502). Any
-      // path through handleSend eventually appends the user message +
-      // starts a stream, both of which grow scrollHeight. Flipping
-      // stickyRef=true + scrolling NOW guarantees we're at the bottom
-      // before the first new content appears — then the ResizeObserver
-      // on the streaming bubble keeps us there for the rest of the turn.
+      // Re-arm sticky so the user sees their own message + response.
+      // MutationObserver will catch the DOM growth and do the actual
+      // scroll after the new message is appended.
       stickyRef.current = true;
-      const sendEl = chatBodyRef.current;
-      if (sendEl) sendEl.scrollTop = sendEl.scrollHeight;
 
       const loopMatch = text.match(/^\/loop\s*(.*)/i);
       if (loopMatch) {
@@ -2229,13 +2220,13 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             // with a pinnedToBottom ref and an isScrolling callback, which
             // fought Virtuoso's own logic and produced the "can't reach the
             // bottom" jitter. Let Virtuoso handle it.
-            // Let Virtuoso handle new-row auto-follow — its measurement
-            // cycle is synchronous with its follow, so scrollHeight is
-            // always fresh when it scrolls. We only gate via our
-            // stickyRef (set by wheel-up / touch-drag-up) so user intent
-            // to leave the bottom always wins. The streaming-pump above
-            // handles same-item growth which Virtuoso can't detect.
-            followOutput={() => (stickyRef.current ? "auto" : false)}
+            // Virtuoso's built-in follow is OFF — we do it ourselves
+            // via MutationObserver + raw scrollTop. followOutput's
+            // scrollToIndex(LAST,'end') target is incompatible with the
+            // bottomSpacer row since it aligns to the last ITEM's
+            // bottom which would sit at/below the spacer depending on
+            // measurement order. Single pump, single target.
+            followOutput={false}
             initialTopMostItemIndex={Math.max(0, visualRows.length - 1)}
             // Render 1400px past each edge. ChatMessage contains inline
             // images (async base64 load) and syntax-highlighted code
