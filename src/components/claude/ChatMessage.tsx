@@ -27,14 +27,27 @@ const EXT_TO_MIME: Record<string, string> = {
   gif: "image/gif", webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml",
 };
 
+// Module-level cache so Virtuoso unmounting + remounting a message doesn't
+// re-fetch the same image's base64 blob (and flash the filename placeholder
+// on every re-enter). Lives for the lifetime of the chat panel.
+const INLINE_IMAGE_CACHE = new Map<string, string>();
+
 function InlineImage({ filePath }: { filePath: string }) {
-  const [src, setSrc] = useState<string | null>(null);
+  const [src, setSrc] = useState<string | null>(() => INLINE_IMAGE_CACHE.get(filePath) ?? null);
   useEffect(() => {
+    const cached = INLINE_IMAGE_CACHE.get(filePath);
+    if (cached) {
+      setSrc(cached);
+      return;
+    }
     let cancelled = false;
     const ext = filePath.split(".").pop()?.toLowerCase() || "png";
     const mime = EXT_TO_MIME[ext] || "image/png";
     readFileBase64(filePath).then((b64) => {
-      if (!cancelled) setSrc(`data:${mime};base64,${b64}`);
+      if (cancelled) return;
+      const dataUrl = `data:${mime};base64,${b64}`;
+      INLINE_IMAGE_CACHE.set(filePath, dataUrl);
+      setSrc(dataUrl);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [filePath]);

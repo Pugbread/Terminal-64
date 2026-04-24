@@ -549,22 +549,32 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     requestAnimationFrame(() => scrollToBottom());
   }, [sessionId, scrollToBottom]);
 
-  // Same-item streaming growth: Virtuoso's followOutput only fires on data
-  // changes (new/removed items), not when a single item's content grows.
-  // Because visualRows keys streaming on `hasStreamingText` (boolean) —
-  // stable across tokens — we need a separate pump that snaps to bottom on
-  // each token IFF the user is already at bottom. Subscribe directly to the
-  // store (no hook subscription → no re-render) and throttle via rAF.
-  // Uses raw el.scrollTop = el.scrollHeight — scrollToIndex(LAST,end) lands
-  // 16px above the true bottom (footer spacer) and fights Virtuoso's own
-  // follow; raw scroll lands past the spacer and doesn't compete.
+  // All stick-to-bottom is done here via direct store subscription +
+  // raw scrollTop. Virtuoso's built-in followOutput is disabled because
+  // it scrolls to the last ITEM's end — but the scroller has
+  // padding-bottom + a footer spacer BELOW the last item, so
+  // "auto-follow" landed ~60-80px short of the real bottom. When the
+  // user touched the real bottom, followOutput then yanked them up to
+  // its idea of "end" (the "kicks me up ~100px when I hit the bottom"
+  // symptom). Raw scrollTop = scrollHeight lands at the true bottom,
+  // so there's no competing target.
+  //
+  // Fires on both streamingText change (per-token) AND messages.length
+  // change (turn complete / new user message). rAF-throttled so a
+  // burst of token updates collapses to one scroll per frame.
   useEffect(() => {
-    let lastText = useClaudeStore.getState().sessions[sessionId]?.streamingText ?? "";
+    const initial = useClaudeStore.getState().sessions[sessionId];
+    let lastText = initial?.streamingText ?? "";
+    let lastLen = initial?.messages.length ?? 0;
     let scheduled = false;
     return useClaudeStore.subscribe((state) => {
-      const curr = state.sessions[sessionId]?.streamingText ?? "";
-      if (curr === lastText) return;
-      lastText = curr;
+      const s = state.sessions[sessionId];
+      if (!s) return;
+      const currText = s.streamingText ?? "";
+      const currLen = s.messages.length;
+      if (currText === lastText && currLen === lastLen) return;
+      lastText = currText;
+      lastLen = currLen;
       if (!atBottomRef.current) return;
       if (scheduled) return;
       scheduled = true;
@@ -2163,21 +2173,26 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             // with a pinnedToBottom ref and an isScrolling callback, which
             // fought Virtuoso's own logic and produced the "can't reach the
             // bottom" jitter. Let Virtuoso handle it.
-            followOutput="auto"
+            // Disabled — see the "All stick-to-bottom..." useEffect above.
+            // We do the follow ourselves with raw scrollTop so
+            // Virtuoso's last-item-end target doesn't fight the true
+            // scroll bottom (which sits 64px further down due to the
+            // footer spacer + scroller padding-bottom).
+            followOutput={false}
             atBottomStateChange={(atBottom) => {
               atBottomRef.current = atBottom;
               setIsScrolledUp(!atBottom);
             }}
             atBottomThreshold={BOTTOM_TOLERANCE_PX}
             initialTopMostItemIndex={Math.max(0, visualRows.length - 1)}
-            // Render 600px past each edge so items don't unmount in-frame
-            // during fast scroll (the "randomly unloading instances that
-            // are legit in frame" symptom). react-virtuoso's own chat
-            // example sets this to 200; we go higher because our rows
-            // include heavy ToolGroupCard / ChatMessage content with
-            // syntax-highlighted code blocks that pop visibly when they
-            // re-mount.
-            increaseViewportBy={{ top: 600, bottom: 600 }}
+            // Render 1400px past each edge. ChatMessage contains inline
+            // images (async base64 load) and syntax-highlighted code
+            // blocks, both of which visibly pop when their component
+            // first mounts. With a small buffer, fast scrolls unmount
+            // rows just out of frame and they flash on re-entry.
+            // 1400px is ~2 screen heights of overscan at a normal panel
+            // size — enough to cover a flick gesture.
+            increaseViewportBy={{ top: 1400, bottom: 1400 }}
             components={virtuosoComponents}
           />
           )}
