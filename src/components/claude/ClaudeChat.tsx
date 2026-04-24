@@ -585,54 +585,35 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     requestAnimationFrame(() => scrollToBottom());
   }, [sessionId, scrollToBottom]);
 
-  // Stick-to-bottom pump. Subscribes directly to the store so re-renders
-  // are NOT triggered by this. Fires on: per-token streamingText, new
-  // messages, isStreaming flip (which appends the "Finished after" divider).
+  // Stick-to-bottom pump only fires for STREAMING TEXT growth. Virtuoso's
+  // built-in followOutput handles new messages / new rows natively (it
+  // measures items synchronously inside its own reflow cycle, so its
+  // follow is always on the fresh scrollHeight). Our manual pump used
+  // to race that measurement cycle and land on stale scrollHeight — the
+  // result was a "can't scroll past last message / finishedTail" trap.
   //
-  // Critically: we decide "should we follow?" using OUR stickyRef, NOT
-  // Virtuoso's atBottomStateChange. Virtuoso flips "at bottom → false"
-  // every time a new item grows scrollHeight past its threshold, even
-  // when the user hasn't moved — relying on that ref made every previous
-  // pump abort exactly when it needed to follow. stickyRef is only ever
-  // set false by a user wheel-up / touch-drag-up (handled by the wheel
-  // listener attached in setChatBody).
+  // The one case Virtuoso CAN'T handle is same-item growth (streaming
+  // text being appended into the existing streaming row's body). For
+  // that, we pump on streamingText change only, gated by stickyRef.
   useEffect(() => {
     const initial = useClaudeStore.getState().sessions[sessionId];
     let lastText = initial?.streamingText ?? "";
-    let lastLen = initial?.messages.length ?? 0;
-    let lastStreaming = initial?.isStreaming ?? false;
     let scheduled = false;
-
     return useClaudeStore.subscribe((state) => {
       const s = state.sessions[sessionId];
       if (!s) return;
       const currText = s.streamingText ?? "";
-      const currLen = s.messages.length;
-      const currStreaming = s.isStreaming;
-      if (currText === lastText && currLen === lastLen && currStreaming === lastStreaming) return;
+      if (currText === lastText) return;
       lastText = currText;
-      lastLen = currLen;
-      lastStreaming = currStreaming;
-
       if (!stickyRef.current) return;
       if (scheduled) return;
       scheduled = true;
-      // Two rAFs: first frame lets React commit + Virtuoso measure the new
-      // content; second frame reads the settled scrollHeight. Without this
-      // we can snap to a stale scrollHeight that's still smaller than the
-      // new one and land 50-200px above the real bottom.
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          scheduled = false;
-          // Re-check stickyRef ONCE (not in the first rAF) — this catches
-          // the narrow case where the user fired a wheel-up event between
-          // subscribe and paint. Does NOT check Virtuoso's at-bottom
-          // state, which would abort on every new item's measurement.
-          if (!stickyRef.current) return;
-          const el = chatBodyRef.current;
-          if (!el) return;
-          el.scrollTop = el.scrollHeight;
-        });
+        scheduled = false;
+        if (!stickyRef.current) return;
+        const el = chatBodyRef.current;
+        if (!el) return;
+        el.scrollTop = el.scrollHeight;
       });
     });
   }, [sessionId]);
@@ -2222,10 +2203,13 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             // with a pinnedToBottom ref and an isScrolling callback, which
             // fought Virtuoso's own logic and produced the "can't reach the
             // bottom" jitter. Let Virtuoso handle it.
-            // Virtuoso's follow/at-bottom tracking is entirely off. We own
-            // both: the pump scrolls on store changes, the scroll/wheel/
-            // touch listeners in setChatBody flip stickyRef + isScrolledUp.
-            followOutput={false}
+            // Let Virtuoso handle new-row auto-follow — its measurement
+            // cycle is synchronous with its follow, so scrollHeight is
+            // always fresh when it scrolls. We only gate via our
+            // stickyRef (set by wheel-up / touch-drag-up) so user intent
+            // to leave the bottom always wins. The streaming-pump above
+            // handles same-item growth which Virtuoso can't detect.
+            followOutput={() => (stickyRef.current ? "auto" : false)}
             initialTopMostItemIndex={Math.max(0, visualRows.length - 1)}
             // Render 1400px past each edge. ChatMessage contains inline
             // images (async base64 load) and syntax-highlighted code
