@@ -381,17 +381,19 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const scrollCleanupRef = useRef<(() => void) | null>(null);
   const setChatBody = useCallback((el: HTMLElement | Window | null) => {
     // Virtuoso's scrollerRef passes the scroll container. It's always a div
-    // in our configuration (no window-scroller). Narrow here. We also attach
-    // a passive scroll listener that feeds scrollProgress (for the prompt
-    // island ring) — a native listener on the element itself, not an
-    // observer on its children, so it doesn't fight Virtuoso's measurement
-    // cycle.
+    // in our configuration (no window-scroller). Narrow here. We also
+    // attach a passive scroll listener that feeds scrollProgress for the
+    // prompt-island ring — rAF-throttled so a wheel/trackpad gesture
+    // doesn't fire setState on every event (which would cascade
+    // re-renders during scroll — a subtle jitter source).
     scrollCleanupRef.current?.();
     scrollCleanupRef.current = null;
     const div = el instanceof HTMLDivElement ? el : null;
     chatBodyRef.current = div;
     if (!div) return;
-    const onScroll = () => {
+    let scheduled = false;
+    const compute = () => {
+      scheduled = false;
       const maxScroll = div.scrollHeight - div.clientHeight;
       if (maxScroll <= 1) {
         setScrollProgress(0);
@@ -399,7 +401,12 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
       }
       setScrollProgress(Math.max(0, Math.min(1, 1 - div.scrollTop / maxScroll)));
     };
-    onScroll();
+    const onScroll = () => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(compute);
+    };
+    compute();
     div.addEventListener("scroll", onScroll, { passive: true });
     scrollCleanupRef.current = () => div.removeEventListener("scroll", onScroll);
   }, []);
@@ -548,6 +555,9 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   // stable across tokens — we need a separate pump that snaps to bottom on
   // each token IFF the user is already at bottom. Subscribe directly to the
   // store (no hook subscription → no re-render) and throttle via rAF.
+  // Uses raw el.scrollTop = el.scrollHeight — scrollToIndex(LAST,end) lands
+  // 16px above the true bottom (footer spacer) and fights Virtuoso's own
+  // follow; raw scroll lands past the spacer and doesn't compete.
   useEffect(() => {
     let lastText = useClaudeStore.getState().sessions[sessionId]?.streamingText ?? "";
     let scheduled = false;
@@ -561,11 +571,9 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
       requestAnimationFrame(() => {
         scheduled = false;
         if (!atBottomRef.current) return;
-        virtuosoRef.current?.scrollToIndex({
-          index: "LAST",
-          align: "end",
-          behavior: "auto",
-        });
+        const el = chatBodyRef.current;
+        if (!el) return;
+        el.scrollTop = el.scrollHeight;
       });
     });
   }, [sessionId]);
@@ -2162,6 +2170,14 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             }}
             atBottomThreshold={BOTTOM_TOLERANCE_PX}
             initialTopMostItemIndex={Math.max(0, visualRows.length - 1)}
+            // Render 600px past each edge so items don't unmount in-frame
+            // during fast scroll (the "randomly unloading instances that
+            // are legit in frame" symptom). react-virtuoso's own chat
+            // example sets this to 200; we go higher because our rows
+            // include heavy ToolGroupCard / ChatMessage content with
+            // syntax-highlighted code blocks that pop visibly when they
+            // re-mount.
+            increaseViewportBy={{ top: 600, bottom: 600 }}
             components={virtuosoComponents}
           />
           )}
