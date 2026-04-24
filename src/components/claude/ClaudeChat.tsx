@@ -17,7 +17,6 @@ import { fontStack } from "../../lib/fonts";
 import { CLAUDE_BUILTIN_COMMANDS } from "../../lib/claudeSlashCommands";
 import ChatInput from "./ChatInput";
 import PromptIsland from "./PromptIsland";
-import { useChatScrollState } from "./useChatScrollState";
 import { registerChatInputVoiceActions, unregisterChatInputVoiceActions, useVoiceStore, type ChatInputVoiceActions } from "../../stores/voiceStore";
 import { useDelegationStore } from "../../stores/delegationStore";
 import { endDelegation } from "../../hooks/useDelegationOrchestrator";
@@ -156,19 +155,20 @@ function RewindPromptDialog({ affectedFiles, toolSummary, onConfirm, onCancel }:
   );
 }
 
-/** Streaming bubble body — bare message/bubble, no .cc-row wrapper. Rendered
- *  as a virtuoso item inside renderRow (which supplies the wrapper). Keeping
- *  the streaming bubble as a regular list item — rather than inside the
- *  Footer — stops Virtuoso from shrinking scrollTop on every token to anchor
- *  the last "real" item, which was the visible "snap up" jitter. */
+/** Streaming bubble body — owns its own `.cc-row` gutter so renderRow can
+ *  return it directly without the standard wrapper. Rendered as a virtuoso
+ *  item (not inside the Footer) — that keeps Virtuoso from shrinking
+ *  scrollTop on every token to anchor the last "real" item. */
 function StreamingBubbleBody({ sessionId }: { sessionId: string }) {
   const text = useClaudeStore((s) => s.sessions[sessionId]?.streamingText);
   if (!text) return null;
   return (
-    <div className="cc-message cc-message--assistant">
-      <div className="cc-bubble cc-bubble--assistant cc-bubble--streaming">
-        {text}
-        <span className="cc-cursor" />
+    <div className="cc-row">
+      <div className="cc-message cc-message--assistant">
+        <div className="cc-bubble cc-bubble--assistant cc-bubble--streaming">
+          {text}
+          <span className="cc-cursor" />
+        </div>
       </div>
     </div>
   );
@@ -360,14 +360,10 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const incrementPromptCount = useClaudeStore((s) => s.incrementPromptCount);
   const setDraftPrompt = useClaudeStore((s) => s.setDraftPrompt);
   const chatBodyRef = useRef<HTMLDivElement | null>(null);
-  const [chatBodyEl, setChatBodyEl] = useState<HTMLDivElement | null>(null);
   const setChatBody = useCallback((el: HTMLElement | Window | null) => {
-    // Virtuoso's scrollerRef passes the scroll container. It's always a div in
-    // our configuration (no window-scroller). useChatScrollState + the live
-    // scroll listeners all need the HTMLDivElement. Narrow here.
-    const div = el instanceof HTMLDivElement ? el : null;
-    chatBodyRef.current = div;
-    setChatBodyEl(div);
+    // Virtuoso's scrollerRef passes the scroll container. It's always a div
+    // in our configuration (no window-scroller). Narrow here.
+    chatBodyRef.current = el instanceof HTMLDivElement ? el : null;
   }, []);
   const containerRef = useRef<HTMLDivElement>(null);
   const loopTimerRef = useRef<number | null>(null);
@@ -378,7 +374,12 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   // `.cc-messages` element via its React state (not a ref) so it reattaches
   // deterministically across editOverlay/showPlanViewer round-trips.
   const [islandOpen, setIslandOpen] = useState(false);
-  const { isScrolledUp, progress: scrollProgress } = useChatScrollState(chatBodyEl);
+  // Scroll state is sourced from Virtuoso's own callbacks (atBottomStateChange
+  // + rangeChanged) so we don't run a parallel ResizeObserver/MutationObserver
+  // that fights Virtuoso during streaming. isScrolledUp drives island/
+  // jump-bottom visibility; scrollProgress drives the prompt island ring.
+  const [isScrolledUp, setIsScrolledUp] = useState(false);
+  const [scrollProgress, setScrollProgress] = useState(0);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [configMcpServers, setConfigMcpServers] = useState<McpServer[]>([]);
   const [showMcpDrop, setShowMcpDrop] = useState(false);
@@ -480,26 +481,27 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   // (reveal-gates, jumpToPrompt) can branch on it, and we expose a few
   // imperative helpers that delegate to Virtuoso via `virtuosoRef`.
   //
-  // 96px tolerance: the footer carries a StreamingBubble + a 64px
-  // bottom-spacer, so the "is at bottom?" fold sits well above the scroll
-  // height. Anything less and atBottomStateChange misdetects the
-  // user-is-at-bottom state at stream start and the auto-follow stops.
-  const BOTTOM_TOLERANCE_PX = 96;
+  // Tight 24px tolerance. Wider thresholds (we tried 96) make the race
+  // window for "atBottomStateChange flips true while user is dragging up"
+  // wider: during streaming, scrollHeight can grow faster than the user's
+  // upward drag, so we'd keep re-pinning mid-scroll and snap them back.
+  const BOTTOM_TOLERANCE_PX = 24;
   const pinnedToBottom = useRef(true);
 
+  // Set truthy while the user is actively scrolling upward. atBottomStateChange
+  // will refuse to re-pin during that window, even if streaming growth makes
+  // Virtuoso briefly think we're at bottom again. Cleared on a short idle
+  // timer, then the next genuine "at bottom" can re-pin normally.
+  const userScrollingUpRef = useRef(false);
+  const userScrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastScrollTopRef = useRef(0);
+
   const scrollToBottom = useCallback(() => {
-    // `scrollToIndex({index: 'LAST', align: 'end'})` stops at the bottom of
-    // the last virtuoso item, but Virtuoso's Footer (StreamingBubble +
-    // pending questions + error bar) lives *below* the item list. Jumping to
-    // the last row therefore left the Footer — and a streaming response, or
-    // the latest assistant reply — hidden beneath the viewport fold. Scroll
-    // the raw container so we land past the Footer.
-    const el = chatBodyRef.current;
-    if (el) {
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    } else {
-      virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end" });
-    }
+    // Go through Virtuoso so it stays in sync with our scroll intent.
+    // StreamingBubble is a real list item now, so 'LAST' includes it. The
+    // 16px .cc-bottom-spacer inside the footer still gets clipped below the
+    // fold, which is fine — it's just breathing room, not content.
+    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
   }, []);
 
   // Session switch → snap to bottom, close island.
@@ -1676,8 +1678,10 @@ Coordinate actively. If another agent is working on a file you need, mention it 
           inner = <CompactDivider status={row.status} startedAt={row.startedAt} />;
           break;
         case "streaming":
-          inner = <StreamingBubbleBody sessionId={sessionId} />;
-          break;
+          // Streaming bubble keeps its own gutter via StreamingBubbleBody's
+          // .cc-row class; returning early skips the wrapper so the margin
+          // growth isn't part of the virtuoso size measurement each tick.
+          return <StreamingBubbleBody sessionId={sessionId} />;
       }
       // Virtuoso strips our old flex gap; wrap each row so the 10px rhythm
       // can live on `.cc-row + .cc-row`.
@@ -2083,18 +2087,50 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             computeItemKey={(_idx, row) => row.key}
             itemContent={renderRow}
             scrollerRef={setChatBody}
-            // Virtuoso's built-in follow. Instant (not smooth) so streaming
-            // tokens don't chain smooth-scroll animations. The StreamingBubble
-            // is now a real list item (see VisualRow 'streaming'), so
-            // scrollToIndex(LAST) aligns to its bottom — no Footer-growth
-            // anchor-shift, no snap-up jitter.
+            // Virtuoso's built-in follow. StreamingBubble is a real list
+            // item now, so scrollToIndex(LAST) aligns to its bottom — no
+            // Footer-growth anchor shift.
             followOutput={(isAtBottom) => (isAtBottom || pinnedToBottom.current ? "auto" : false)}
             atBottomStateChange={(atBottom) => {
+              // User-intent gate: if the user just scrolled upward, do NOT
+              // re-pin on the next atBottom tick. Streaming growth can make
+              // Virtuoso briefly measure "at bottom" even while the user is
+              // visibly dragging up; without this gate, followOutput then
+              // returns auto and the chat snaps them back.
+              if (atBottom && userScrollingUpRef.current) return;
               pinnedToBottom.current = atBottom;
+              setIsScrolledUp(!atBottom);
             }}
             atBottomThreshold={BOTTOM_TOLERANCE_PX}
             initialTopMostItemIndex={Math.max(0, visualRows.length - 1)}
-            increaseViewportBy={{ top: 600, bottom: 600 }}
+            isScrolling={(scrolling) => {
+              if (!scrolling) return;
+              const el = chatBodyRef.current;
+              if (!el) return;
+              const delta = el.scrollTop - lastScrollTopRef.current;
+              lastScrollTopRef.current = el.scrollTop;
+              if (delta < 0) {
+                userScrollingUpRef.current = true;
+                if (userScrollIdleTimer.current) clearTimeout(userScrollIdleTimer.current);
+                userScrollIdleTimer.current = setTimeout(() => {
+                  userScrollingUpRef.current = false;
+                }, 450);
+              }
+              const maxScroll = el.scrollHeight - el.clientHeight;
+              if (maxScroll > 1) {
+                setScrollProgress(Math.max(0, Math.min(1, 1 - el.scrollTop / maxScroll)));
+              }
+            }}
+            rangeChanged={() => {
+              // Keep progress fresh when Virtuoso repositions without a
+              // scroll event (e.g. item measurement changes).
+              const el = chatBodyRef.current;
+              if (!el) return;
+              const maxScroll = el.scrollHeight - el.clientHeight;
+              if (maxScroll > 1) {
+                setScrollProgress(Math.max(0, Math.min(1, 1 - el.scrollTop / maxScroll)));
+              }
+            }}
             components={virtuosoComponents}
           />
           )}

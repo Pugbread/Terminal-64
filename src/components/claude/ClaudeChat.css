@@ -481,12 +481,11 @@
 }
 
 /* Sentinel appended inside virtuoso's Footer so the last message doesn't
-   hug the viewport bottom. Virtuoso doesn't respect the scroller's own
-   bottom padding for measurement-based scroll targets. Must stay in sync
-   with BOTTOM_TOLERANCE_PX in ClaudeChat.tsx — the threshold needs to
-   cover at least this height or followOutput misdetects "at bottom". */
+   hug the viewport bottom. Keep smaller than BOTTOM_TOLERANCE_PX in
+   ClaudeChat.tsx — otherwise a scroll into "last-item-end" registers as
+   >tolerance-from-bottom and followOutput misdetects state. */
 .cc-bottom-spacer {
-  height: 64px;
+  height: 16px;
 }
 
 .cc-messages::-webkit-scrollbar {
