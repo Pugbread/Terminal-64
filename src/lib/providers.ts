@@ -62,25 +62,33 @@ const ANTHROPIC_PERMISSIONS: PermissionOption[] = [
   { id: "bypass_all", label: "YOLO", color: "#f38ba8", desc: "Skip ALL permissions" },
 ];
 
-// Codex is "free-form" per the CLI source — `--model` is `Option<String>`.
-// This list reflects the publicly-documented options as of 2026-04; users
-// can pick "Custom..." (TODO) or run `codex debug models` for the live list.
+// Models accepted by `codex exec` with a ChatGPT (Plus/Pro) account, verified
+// 2026-04-25 against codex-cli-exec 0.121.0. The API-key path may allow more
+// (o3 / o4-mini / gpt-5-codex / etc) but ChatGPT auth is whitelist-only —
+// anything outside this set 400s with "model is not supported when using
+// Codex with a ChatGPT account". Users on API keys can override via
+// `~/.codex/config.toml`.
 const OPENAI_MODELS: ModelOption[] = [
   { id: "gpt-5.5", label: "GPT-5.5" },
-  { id: "gpt-5", label: "GPT-5" },
-  { id: "gpt-5-codex", label: "GPT-5 Codex" },
-  { id: "o3", label: "o3" },
-  { id: "o4-mini", label: "o4-mini" },
+  { id: "gpt-5.4", label: "GPT-5.4" },
+  { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+  { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+  { id: "gpt-5.2", label: "GPT-5.2" },
 ];
 
-// Codex `model_reasoning_effort` enum (codex-rs/core/config.schema.json).
-// `none` is plan-mode-only and not exposed here.
+// Canonical Codex `reasoning_effort` enum, matching upstream's
+// `ClientRequest__ReasoningEffort` and t3code's `REASONING_EFFORT_LABELS`.
+// Some combinations are server-rejected (e.g. `minimal` 400s if the model's
+// auto-enabled web_search tool is on, with: "The following tools cannot be
+// used with reasoning.effort 'minimal'") — surfaced as a runtime error
+// rather than hidden from the picker. `none` is omitted; it's plan-mode
+// territory and not useful from a chat composer.
 const OPENAI_EFFORTS: EffortOption[] = [
-  { id: "minimal", label: "Min" },
+  { id: "minimal", label: "Minimal" },
   { id: "low", label: "Low" },
-  { id: "medium", label: "Med" },
+  { id: "medium", label: "Medium" },
   { id: "high", label: "High" },
-  { id: "xhigh", label: "X-High" },
+  { id: "xhigh", label: "Extra High" },
 ];
 
 // Codex's permission surface is two enums: `--sandbox` (the filesystem

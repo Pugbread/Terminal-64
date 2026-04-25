@@ -440,6 +440,44 @@ fn close_codex_session(
     state.codex.close(&session_id)
 }
 
+/// Hydrate a Codex chat from its on-disk rollout JSONL. The frontend keys
+/// chat sessions by a T64-local UUID and stores the Codex-assigned thread id
+/// alongside; this command takes the thread id and returns the chat history
+/// in the same shape Claude's `load_session_history` returns, so the
+/// frontend's existing `mapHistoryMessages` + `loadFromDisk` path can render
+/// it unchanged.
+#[tauri::command]
+fn load_codex_session_history(thread_id: String) -> Result<Vec<HistoryMessage>, String> {
+    if thread_id.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(providers::codex::load_codex_history_by_thread(&thread_id))
+}
+
+/// List on-disk Codex sessions whose `session_meta.cwd` matches the given
+/// directory. Counterpart of `list_disk_sessions` for OpenAI/Codex provider —
+/// the dialog calls this when the user has the OpenAI chip selected.
+#[tauri::command]
+fn list_codex_disk_sessions(cwd: String) -> Result<Vec<DiskSession>, String> {
+    if cwd.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(providers::codex::list_codex_disk_sessions(&cwd))
+}
+
+/// Rewind a Codex thread by physically truncating its rollout JSONL on a
+/// turn boundary. `num_turns` is the number of completed turns to drop from
+/// the end; the function returns the number actually removed (capped at the
+/// rollout's turn count). Codex's own `exec resume` reads the truncated file
+/// as full conversation memory on the next prompt.
+#[tauri::command]
+fn truncate_codex_rollout(thread_id: String, num_turns: u32) -> Result<u32, String> {
+    if thread_id.trim().is_empty() {
+        return Err("thread_id is required".to_string());
+    }
+    providers::codex::truncate_codex_rollout_by_turns(&thread_id, num_turns)
+}
+
 #[tauri::command]
 fn rewrite_prompt(
     app_handle: tauri::AppHandle,
@@ -5046,6 +5084,9 @@ pub fn run() {
             send_codex_prompt,
             cancel_codex,
             close_codex_session,
+            load_codex_session_history,
+            list_codex_disk_sessions,
+            truncate_codex_rollout,
             list_slash_commands,
             start_discord_bot,
             stop_discord_bot,

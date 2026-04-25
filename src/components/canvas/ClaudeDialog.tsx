@@ -2,15 +2,17 @@ import { useState, useRef, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useClaudeStore, STORAGE_KEY } from "../../stores/claudeStore";
-import { listDiskSessions } from "../../lib/tauriApi";
+import { listDiskSessions, listCodexDiskSessions } from "../../lib/tauriApi";
 import type { DiskSession } from "../../lib/types";
+import type { ProviderId } from "../../lib/providers";
+import { AnthropicLogo, OpenAILogo } from "../ui/BrandLogos";
 import { formatRelativeTime } from "../../lib/constants";
 import "./ClaudeDialog.css";
 
 interface ClaudeDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (cwd: string, skipPermissions: boolean, sessionName?: string) => void;
+  onConfirm: (cwd: string, skipPermissions: boolean, sessionName: string | undefined, provider: ProviderId) => void;
   onReopen: (sessionId: string, cwd: string) => void;
 }
 
@@ -23,6 +25,7 @@ function formatSize(bytes: number): string {
 export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: ClaudeDialogProps) {
   const [dir, setDir] = useState("");
   const [name, setName] = useState("");
+  const [provider, setProvider] = useState<ProviderId>("anthropic");
   const [diskSessions, setDiskSessions] = useState<DiskSession[]>([]);
   const [loading, setLoading] = useState(false);
   const recentDirs = useSettingsStore((s) => s.recentDirs);
@@ -30,12 +33,13 @@ export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: C
   const sessions = useClaudeStore((s) => s.sessions);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const namedSessions = getNamedSessions(sessions, dir);
+  const namedSessions = getNamedSessions(sessions, dir, provider);
 
   useEffect(() => {
     if (isOpen) {
       setDir("");
       setName("");
+      setProvider("anthropic");
       setDiskSessions([]);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
@@ -44,11 +48,12 @@ export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: C
   useEffect(() => {
     if (!dir.trim()) { setDiskSessions([]); return; }
     setLoading(true);
-    listDiskSessions(dir.trim()).then((s) => {
+    const fetcher = provider === "openai" ? listCodexDiskSessions : listDiskSessions;
+    fetcher(dir.trim()).then((s) => {
       setDiskSessions(s);
       setLoading(false);
     }).catch(() => { setDiskSessions([]); setLoading(false); });
-  }, [dir]);
+  }, [dir, provider]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -69,7 +74,7 @@ export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: C
   const handleNewSession = () => {
     if (!dir.trim()) return;
     addRecentDir(dir.trim());
-    onConfirm(dir.trim(), false, name.trim() || undefined);
+    onConfirm(dir.trim(), false, name.trim() || undefined, provider);
     onClose();
   };
 
@@ -94,7 +99,7 @@ export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: C
     <div className="claude-dialog-overlay" onClick={onClose}>
       <div className="claude-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="claude-dialog-header">
-          <span className="claude-dialog-title">&gt;_ Claude Session</span>
+          <span className="claude-dialog-title">&gt;_ Code Session</span>
           <button className="claude-dialog-close" onClick={onClose}>
             <svg width="9" height="9" viewBox="0 0 9 9">
               <path d="M1 1L8 8M8 1L1 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -103,6 +108,28 @@ export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: C
         </div>
 
         <div className="claude-dialog-body">
+          {/* Step 0: Provider — pinned to the top so the lists below filter
+              by it without the user having to scroll. */}
+          <label className="claude-dialog-label">Provider</label>
+          <div className="claude-dialog-provider-row">
+            <button
+              type="button"
+              className={`claude-dialog-provider-chip ${provider === "anthropic" ? "claude-dialog-provider-chip--active" : ""}`}
+              onClick={() => setProvider("anthropic")}
+            >
+              <AnthropicLogo size={11} />
+              <span>Anthropic</span>
+            </button>
+            <button
+              type="button"
+              className={`claude-dialog-provider-chip ${provider === "openai" ? "claude-dialog-provider-chip--active" : ""}`}
+              onClick={() => setProvider("openai")}
+            >
+              <OpenAILogo size={11} />
+              <span>OpenAI</span>
+            </button>
+          </div>
+
           {/* Step 1: Directory */}
           <label className="claude-dialog-label">Project Directory</label>
           <div className="claude-dialog-dir-row">
@@ -218,13 +245,18 @@ function cwdMatch(a: string | undefined, b: string): boolean {
   return normPath(a) === normPath(b);
 }
 
-function getNamedSessions(liveSessions: Record<string, any>, cwd: string): { id: string; name: string; messageCount: number }[] {
+function getNamedSessions(
+  liveSessions: Record<string, any>,
+  cwd: string,
+  provider: ProviderId,
+): { id: string; name: string; messageCount: number }[] {
   const results: { id: string; name: string; messageCount: number }[] = [];
   const seen = new Set<string>();
+  const providerMatch = (p: string | undefined) => (p ?? "anthropic") === provider;
 
   // Live sessions
   for (const [id, s] of Object.entries(liveSessions)) {
-    if (s.name && cwdMatch(s.cwd, cwd)) {
+    if (s.name && cwdMatch(s.cwd, cwd) && providerMatch(s.provider)) {
       results.push({ id, name: s.name, messageCount: s.messages?.length || 0 });
       seen.add(id);
     }
@@ -236,7 +268,12 @@ function getNamedSessions(liveSessions: Record<string, any>, cwd: string): { id:
     if (raw) {
       const data = JSON.parse(raw);
       for (const [id, session] of Object.entries(data as Record<string, any>)) {
-        if (session.name && !seen.has(id) && cwdMatch(session.cwd, cwd)) {
+        if (
+          session.name &&
+          !seen.has(id) &&
+          cwdMatch(session.cwd, cwd) &&
+          providerMatch(session.provider)
+        ) {
           results.push({ id, name: session.name, messageCount: session.messages?.length || 0 });
         }
       }

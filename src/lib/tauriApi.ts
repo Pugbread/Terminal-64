@@ -139,6 +139,28 @@ export async function closeCodexSession(sessionId: string): Promise<void> {
   return invoke("close_codex_session", { sessionId });
 }
 
+/// Hydrate a Codex chat from its on-disk rollout JSONL. `threadId` is the
+/// Codex-assigned thread id captured from `thread.started`. Returns messages
+/// in the same shape `loadSessionHistory` returns for Claude, so callers can
+/// pipe through `mapHistoryMessages` unchanged.
+export async function loadCodexSessionHistory(threadId: string): Promise<HistoryMessage[]> {
+  return invoke<HistoryMessage[]>("load_codex_session_history", { threadId });
+}
+
+/// List on-disk Codex sessions whose original `cwd` matches `cwd`. Same shape
+/// as `listDiskSessions` (Claude). Used by the new-session dialog when the
+/// user has OpenAI selected.
+export async function listCodexDiskSessions(cwd: string): Promise<DiskSession[]> {
+  return invoke<DiskSession[]>("list_codex_disk_sessions", { cwd });
+}
+
+/// Truncate a Codex rollout to keep only the first `numTurns` completed turns
+/// (turn-boundary granularity — Codex panics on partial turns). Returns the
+/// number of turns retained after truncation. Used by the rewind flow.
+export async function truncateCodexRollout(threadId: string, numTurns: number): Promise<number> {
+  return invoke<number>("truncate_codex_rollout", { threadId, numTurns });
+}
+
 export function onCodexEvent(callback: (payload: CodexEvent) => void): Promise<UnlistenFn> {
   return listen<CodexEvent>("codex-event", (event) => callback(event.payload));
 }

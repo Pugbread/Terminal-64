@@ -328,3 +328,35 @@
   opacity: 0.3;
   cursor: default;
 }
+
+.claude-dialog-provider-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.claude-dialog-provider-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-tertiary, #11111b);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--fg-muted, #6c7086);
+  font-family: var(--claude-font, 'Segoe UI', system-ui, sans-serif);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+
+.claude-dialog-provider-chip:hover {
+  color: var(--fg, #cdd6f4);
+  border-color: var(--fg-muted, #6c7086);
+}
+
+.claude-dialog-provider-chip--active {
+  color: var(--fg, #cdd6f4);
+  border-color: var(--ft-border, #cba6f7);
+  background: rgba(203, 166, 247, 0.08);
+}

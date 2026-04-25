@@ -92,3 +92,4 @@
 | 22:10 | fix silent deny on bypass mode | permission_server.rs | bypass short-circuits before session lookup so unknown-token races allow | ~800 |
 | 22:40 | sensitive-file approval flow | ClaudeChat.tsx, useClaudeEvents.ts, claudeStore.ts | detect CLI classifier reject, show approval card, apply edit locally | ~2500 |
 | 01:24 | verification pass | .wolf/jsonl-refactor/verification.md | PASS — tsc/cargo/clippy clean, 6 scenarios verified | ~4k |
+| 03:13 | research codex CLI | external | findings reported | ~12k |

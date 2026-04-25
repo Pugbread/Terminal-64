@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import type { ChatMessage as ChatMessageType, ToolCall } from "../../lib/types";
+import type { ProviderId } from "../../lib/providers";
 import { readFileBase64 } from "../../lib/tauriApi";
 
 const DELEGATION_BLOCK_RE = /\[DELEGATION_START\][\s\S]*?\[DELEGATION_END\]/;
@@ -586,8 +587,9 @@ function buildCopyText(message: ChatMessageType): string {
   return parts.join("\n\n");
 }
 
-function ChatMessageInner({ message, onRewind, onFork, onEditClick }: {
+function ChatMessageInner({ message, provider, onRewind, onFork, onEditClick }: {
   message: ChatMessageType;
+  provider?: ProviderId;
   onRewind?: (messageId: string, content: string) => void;
   onFork?: (messageId: string) => void;
   onEditClick?: (tcId: string, filePath: string, oldStr: string, newStr: string) => void;
@@ -637,12 +639,14 @@ function ChatMessageInner({ message, onRewind, onFork, onEditClick }: {
     setMenuOpen(false);
   };
 
+  const isCodex = provider === "openai";
+  const codexTitle = isCodex ? { title: "Codex rewind truncates to a turn boundary" } : {};
   const menuEl = menuOpen && menuPos && createPortal(
     <div id="cc-ctx-menu-portal" className="cc-ctx-menu cc-ctx-menu--portal" style={{ top: menuPos.top, left: menuPos.left }}>
-      <button className="cc-ctx-item" onClick={() => { setMenuOpen(false); onRewind?.(message.id, message.role === "user" ? message.content : ""); }}>
+      <button className="cc-ctx-item" {...codexTitle} onClick={() => { setMenuOpen(false); onRewind?.(message.id, message.role === "user" ? message.content : ""); }}>
         <span className="cc-ctx-icon">↩</span> Rewind
       </button>
-      <button className="cc-ctx-item" onClick={() => { setMenuOpen(false); onFork?.(message.id); }}>
+      <button className="cc-ctx-item" {...codexTitle} onClick={() => { setMenuOpen(false); onFork?.(message.id); }}>
         <span className="cc-ctx-icon">⑂</span> Fork
       </button>
       <button className="cc-ctx-item" onClick={handleCopy}>

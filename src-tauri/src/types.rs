@@ -92,7 +92,14 @@ pub struct CreateCodexRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendCodexPromptRequest {
+    /// T64-local session UUID — used as the key for emitted `codex-event`s so
+    /// the frontend's session-keyed store can route them correctly.
     pub session_id: String,
+    /// Codex-assigned thread id (from `thread.started.thread_id` of the first
+    /// turn). When present, we spawn `codex exec resume <thread_id>`. When
+    /// absent, we fall back to resuming under `session_id` (compat for
+    /// older callers; new code should always pass this explicitly).
+    pub thread_id: Option<String>,
     pub cwd: String,
     pub prompt: String,
     pub sandbox_mode: Option<String>,

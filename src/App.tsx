@@ -22,7 +22,7 @@ import { useThemeStore } from "./stores/themeStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { registerCommand } from "./lib/commands";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { closeTerminal, closeClaudeSession, linkSessionToDiscord, unlinkSessionFromDiscord, renameDiscordSession, startDiscordBot, discordCleanupOrphaned, setAllBrowsersVisible, ensureSkillsPlugin, installWidgetZip, openwolfDaemonSwitch, openwolfProjectCwd, installBundledWidget } from "./lib/tauriApi";
+import { closeTerminal, closeClaudeSession, closeCodexSession, linkSessionToDiscord, unlinkSessionFromDiscord, renameDiscordSession, startDiscordBot, discordCleanupOrphaned, setAllBrowsersVisible, ensureSkillsPlugin, installWidgetZip, openwolfDaemonSwitch, openwolfProjectCwd, installBundledWidget } from "./lib/tauriApi";
 import { pushToast } from "./lib/notifications";
 import { useDelegationStore } from "./stores/delegationStore";
 import { useClaudeStore, flushSave as flushClaudeSave, STORAGE_KEY } from "./stores/claudeStore";
@@ -210,8 +210,8 @@ function App() {
 
     registerCommand({
       id: "claude.newSession",
-      label: "New Claude Session (same folder)",
-      category: "Claude",
+      label: "New Codex Session (same folder)",
+      category: "Codex",
       execute: () => {
         const canvas = useCanvasStore.getState();
         const active = canvas.terminals.find(t => t.terminalId === canvas.activeTerminalId);
@@ -254,11 +254,15 @@ function App() {
       for (const t of prev.terminals) {
         if (!currentIds.has(t.terminalId) && !t.poppedOut) {
           if (t.panelType === "claude") {
-            closeClaudeSession(t.terminalId).catch(() => {});
+            const sess = useClaudeStore.getState().sessions[t.terminalId];
+            if (sess?.provider === "openai") {
+              closeCodexSession(t.terminalId).catch(() => {});
+            } else {
+              closeClaudeSession(t.terminalId).catch(() => {});
+            }
             unlinkSessionFromDiscord(t.terminalId).catch(() => {});
             // Only remove unnamed/disposable sessions — named ones (e.g. widget chats)
             // stay in memory so they can be reopened with messages intact
-            const sess = useClaudeStore.getState().sessions[t.terminalId];
             if (!sess?.name) {
               useClaudeStore.getState().removeSession(t.terminalId);
             }
@@ -338,12 +342,12 @@ function App() {
         <button
           className="header-action header-action--claude"
           onClick={() => setClaudeDialogOpen(true)}
-          title="New Claude Session"
+          title="New Code Session"
         >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <path d="M2 9L5 3L8 7L10 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
-          <span>Claude</span>
+          <span>Code</span>
         </button>
 
         <button
@@ -448,16 +452,20 @@ function App() {
       <ClaudeDialog
         isOpen={claudeDialogOpen}
         onClose={() => setClaudeDialogOpen(false)}
-        onConfirm={(cwd, _skip, sessionName) => {
+        onConfirm={(cwd, _skip, sessionName, provider) => {
           useCanvasStore.getState().addClaudeTerminal(cwd, false, sessionName);
           {
             const terminals = useCanvasStore.getState().terminals;
             const newest = terminals[terminals.length - 1];
             if (newest?.panelType === "claude") {
+              const sid = newest.terminalId;
+              // Pre-create the store session with the dialog's provider choice.
+              // ClaudeChat.useEffect's createSession is idempotent, so this
+              // primes provider before it ever defaults to "anthropic".
+              useClaudeStore.getState().createSession(sid, sessionName, false, undefined, cwd, provider);
               if (sessionName) {
-                useClaudeStore.getState().createSession(newest.terminalId, sessionName);
                 // Auto-link to Discord (silently fails if bot not running)
-                linkSessionToDiscord(newest.terminalId, sessionName, cwd).catch(() => {});
+                linkSessionToDiscord(sid, sessionName, cwd).catch(() => {});
               }
             }
           }

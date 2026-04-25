@@ -309,3 +309,20 @@ input.ft-title--editing {
   to { --ft-beam-angle: 360deg; }
 }
 
+
+.ft-provider-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  color: var(--fg-muted, #6c7086);
+  opacity: 0.85;
+}
+
+.floating-terminal--active .ft-provider-badge {
+  opacity: 1;
+  color: var(--fg-secondary, #bac2de);
+}

@@ -1,6 +1,13 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { onClaudeEvent, onClaudeDone, cancelClaude, sendClaudePrompt } from "../lib/tauriApi";
+import {
+  onClaudeEvent,
+  onClaudeDone,
+  cancelClaude,
+  sendClaudePrompt,
+  onCodexEvent,
+  onCodexDone,
+} from "../lib/tauriApi";
 import { useClaudeStore, type ClaudeTask, type PendingQuestionItem } from "../stores/claudeStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import type { ToolCall, HookEventPayload, HookEvent, HookEventType } from "../lib/types";
@@ -123,6 +130,188 @@ function evictIfNeeded<V>(map: Map<string, V>) {
   }
 }
 
+// ── Codex NDJSON event shapes ─────────────────────────────
+//
+// `codex exec --json` emits one JSON object per line. The exact schema is
+// documented in `codex-rs/exec/src/exec_events.rs` upstream; we decode
+// defensively because field names have shifted across CLI releases.
+//
+// Variants we handle:
+//   thread.started        → { thread_id }            — capture for resume()
+//   turn.started          → mark streaming           (no-op fields)
+//   item.started          → push tool call (pending) (item.item_type, item.id, ...)
+//   item.updated          → optional streaming delta on agent_message item
+//   item.completed        → finalize text / mark tool result
+//   turn.completed        → setStreaming(false)
+//   turn.failed | error   → setError + stop streaming
+//
+// Older event names that some CLI builds emit at the top level
+// (`agent_message`, `agent_reasoning`, `tool_use`, `tool_result`,
+// `task_complete`, `session_configured`) are accepted as aliases.
+interface CodexItem {
+  id?: string;
+  item_type?: string;
+  type?: string;
+  text?: string;
+  // command_execution / local_shell_call: command may be a string or an
+  // argv-style string array; exit_code surfaces shell failure for is_error.
+  command?: string | string[];
+  args?: string[];
+  exit_code?: number;
+  // file_change: which file + summary of the change.
+  path?: string;
+  change?: string;
+  // mcp_tool_call: server + tool + arguments.
+  tool_name?: string;
+  server?: string;
+  // web_search: query nested under .action; older shapes put it at top-level.
+  query?: string;
+  action?: { type?: string; query?: string; queries?: string[] };
+  output?: unknown;
+  status?: string;
+  name?: string;
+  arguments?: unknown;
+  result?: unknown;
+}
+
+interface CodexUsage {
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  output_tokens?: number;
+}
+
+interface CodexNdjsonEvent {
+  type: string;
+  thread_id?: string;
+  threadId?: string;
+  turn_id?: string;
+  message?: string;
+  text?: string;
+  delta?: string;
+  error?: { message?: string } | string;
+  item?: CodexItem;
+  // top-level alias fields some builds use
+  command?: string;
+  output?: string;
+  result?: unknown;
+  // turn.completed carries token totals at the top level on the new schema,
+  // and inside payload on the legacy app-server-style schema.
+  usage?: CodexUsage;
+  payload?: { usage?: CodexUsage };
+}
+
+// Per-session in-flight item state — mirrors the Claude pendingBlocks map.
+// When `item.started` for an agent_message arrives we treat its incremental
+// text as streaming; tool items get tracked so the matching `item.completed`
+// can flip status to completed with output.
+interface CodexPendingItem {
+  itemId: string;
+  kind: "agent_message" | "reasoning" | "tool" | "other";
+  toolName: string;
+  text: string;
+  inputArgs: Record<string, unknown>;
+}
+const codexPending = new Map<string, Map<string, CodexPendingItem>>();
+// Tracks whether the active turn's assistant message has been finalized
+// (e.g. via item.completed/agent_message), so turn.completed doesn't double up.
+const codexAssistantFinalized = new Set<string>();
+
+function getCodexItemMap(sessionId: string): Map<string, CodexPendingItem> {
+  let map = codexPending.get(sessionId);
+  if (!map) {
+    map = new Map();
+    codexPending.set(sessionId, map);
+  }
+  return map;
+}
+
+function classifyCodexItem(itemType: string | undefined): CodexPendingItem["kind"] {
+  if (!itemType) return "other";
+  if (itemType === "agent_message" || itemType === "assistant_message") return "agent_message";
+  if (itemType === "reasoning" || itemType === "agent_reasoning") return "reasoning";
+  // command_execution, file_change, mcp_tool_call, web_search, … — all UI tools
+  return "tool";
+}
+
+function codexCommandString(item: CodexItem): string {
+  if (typeof item.command === "string") return item.command;
+  if (Array.isArray(item.command)) return item.command.join(" ");
+  if (Array.isArray(item.args)) return item.args.join(" ");
+  return "";
+}
+
+function codexBasename(p: string): string {
+  // Cheap basename — Codex paths are POSIX-ish but we still strip both
+  // separators to be safe under Windows-mounted rollouts.
+  const m = p.split(/[/\\]/).filter(Boolean);
+  return m.length > 0 ? m[m.length - 1]! : p;
+}
+
+function codexItemDisplayName(item: CodexItem): string {
+  const kind = item.item_type ?? item.type ?? "";
+  if (kind === "command_execution" || kind === "local_shell_call") {
+    const cmd = codexCommandString(item);
+    return cmd ? `$ ${cmd}` : "command";
+  }
+  if (kind === "file_change") {
+    if (item.path) return codexBasename(item.path);
+    return "file_change";
+  }
+  if (kind === "mcp_tool_call") {
+    if (item.server && item.tool_name) return `${item.server}/${item.tool_name}`;
+    return item.tool_name || item.name || "mcp_tool";
+  }
+  if (kind === "web_search" || kind === "web_search_call") {
+    return item.action?.query || item.query || "web_search";
+  }
+  return item.name || kind || "tool";
+}
+
+function codexItemInput(item: CodexItem): Record<string, unknown> {
+  const kind = item.item_type ?? item.type ?? "";
+  const out: Record<string, unknown> = {};
+
+  if (kind === "command_execution" || kind === "local_shell_call") {
+    const cmd = codexCommandString(item);
+    if (cmd) out.command = cmd;
+  } else if (kind === "file_change") {
+    if (item.path) out.path = item.path;
+    if (item.change) out.change = item.change;
+  } else if (kind === "mcp_tool_call") {
+    if (item.tool_name) out.tool_name = item.tool_name;
+    if (item.server) out.server = item.server;
+    if (item.arguments && typeof item.arguments === "object") {
+      out.arguments = item.arguments;
+    }
+  } else if (kind === "web_search" || kind === "web_search_call") {
+    const q = item.action?.query || item.query;
+    if (q) out.query = q;
+    if (item.action?.queries) out.queries = item.action.queries;
+  } else {
+    if (item.command !== undefined) out.command = codexCommandString(item) || item.command;
+    if (item.arguments && typeof item.arguments === "object") {
+      Object.assign(out, item.arguments as Record<string, unknown>);
+    }
+  }
+  return out;
+}
+
+function codexItemResultText(item: CodexItem): string {
+  if (typeof item.output === "string") return item.output;
+  if (item.result !== undefined) {
+    return typeof item.result === "string" ? item.result : JSON.stringify(item.result);
+  }
+  if (typeof item.text === "string") return item.text;
+  if (item.output !== undefined) return JSON.stringify(item.output);
+  return "";
+}
+
+function codexItemIsError(item: CodexItem): boolean {
+  if (item.status === "failed" || item.status === "error") return true;
+  if (typeof item.exit_code === "number" && item.exit_code !== 0) return true;
+  return false;
+}
+
 // RAF batching for streaming text — coalesces deltas into one store update per frame
 const pendingText = new Map<string, string>();
 let rafId: number | null = null;
@@ -157,6 +346,16 @@ const HIDDEN_TOOLS = new Set([
 function getContextWindowForModel(model: string): number {
   if (/\[1m\]|-1m\b|:1m\b/i.test(model)) return 1_000_000;
   return 200_000;
+}
+
+/// Codex / OpenAI context-window estimates by model id. Source: OpenAI docs
+/// (gpt-5.x family ships with 400K). Falls back to 256K for unknown ids.
+function getCodexContextWindow(model: string | undefined | null): number {
+  if (!model) return 256_000;
+  const m = model.toLowerCase();
+  if (m.startsWith("gpt-5")) return 400_000;
+  if (m.startsWith("o3") || m.startsWith("o4")) return 200_000;
+  return 256_000;
 }
 
 /** Sum all input token fields to get total context usage for a turn */
@@ -288,6 +487,8 @@ export function useClaudeEvents() {
   useEffect(() => {
     let unlistenEvent: (() => void) | null = null;
     let unlistenDone: (() => void) | null = null;
+    let unlistenCodexEvent: (() => void) | null = null;
+    let unlistenCodexDone: (() => void) | null = null;
     let unlistenPerm: (() => void) | null = null;
     const unlistenHooks: (() => void)[] = [];
     let cancelled = false;
@@ -686,6 +887,271 @@ export function useClaudeEvents() {
       if (cancelled) { fn2(); return; }
       unlistenDone = fn2;
 
+      // ── Codex (OpenAI Codex CLI) event stream ───────────────
+      // Translates each NDJSON line into the same store actions the Claude
+      // listener uses, so ChatMessage rendering is provider-agnostic.
+      const fnCodex = await onCodexEvent((payload) => {
+        if (cancelled) return;
+        const { session_id, data } = payload;
+        const store = useClaudeStore.getState();
+
+        let parsed: CodexNdjsonEvent;
+        try {
+          parsed = JSON.parse(data) as CodexNdjsonEvent;
+        } catch (err) {
+          console.warn("[codex] Failed to parse event:", data.slice(0, 200), err);
+          store.setError(
+            session_id,
+            "Failed to parse Codex response — the session may need to be restarted.",
+          );
+          return;
+        }
+
+        const type = parsed.type || "";
+
+        // Mark streaming live + touch last-event whenever non-terminal events
+        // flow in, mirroring the Claude path.
+        if (type !== "turn.completed" && type !== "task_complete" && type !== "error") {
+          const sess = store.sessions[session_id];
+          if (sess && !sess.isStreaming) store.setStreaming(session_id, true);
+          store.touchLastEvent(session_id);
+        }
+
+        // 1) Capture Codex's CLI-assigned thread id for resume(). Both the
+        //    new (`thread.started`) and older (`session_configured`) shapes
+        //    are accepted. Field name varies too — accept both.
+        if (type === "thread.started" || type === "session_configured") {
+          const tid = parsed.thread_id || parsed.threadId;
+          if (tid) store.setCodexThreadId(session_id, tid);
+          store.setStreaming(session_id, true);
+          codexAssistantFinalized.delete(session_id);
+          codexPending.delete(session_id);
+          return;
+        }
+
+        if (type === "turn.started") {
+          codexAssistantFinalized.delete(session_id);
+          return;
+        }
+
+        // 2) item.started — note the in-flight item. Tool items get pushed
+        //    onto a fresh assistant message immediately so the UI can render
+        //    "running" status.
+        if (type === "item.started") {
+          const item = parsed.item;
+          if (!item || !item.id) return;
+          const kind = classifyCodexItem(item.item_type ?? item.type);
+          const itemMap = getCodexItemMap(session_id);
+          itemMap.set(item.id, {
+            itemId: item.id,
+            kind,
+            toolName: codexItemDisplayName(item),
+            text: typeof item.text === "string" ? item.text : "",
+            inputArgs: codexItemInput(item),
+          });
+
+          if (kind === "tool") {
+            const toolCall: ToolCall = {
+              id: item.id,
+              name: codexItemDisplayName(item),
+              input: codexItemInput(item),
+            };
+            store.finalizeAssistantMessage(session_id, "", [toolCall]);
+            codexAssistantFinalized.add(session_id);
+          }
+          return;
+        }
+
+        // 3) item.updated / content.delta / agent_message — incremental text
+        //    on whatever item is currently in flight. Codex's deltas may
+        //    arrive on `delta`, `text`, or inside `item.text`.
+        if (type === "item.updated" || type === "content.delta") {
+          const item = parsed.item;
+          const deltaText =
+            (typeof parsed.delta === "string" ? parsed.delta : "") ||
+            (typeof parsed.text === "string" ? parsed.text : "") ||
+            (item && typeof item.text === "string" ? item.text : "");
+          if (!deltaText) return;
+          if (item?.id) {
+            const itemMap = getCodexItemMap(session_id);
+            const tracked = itemMap.get(item.id);
+            if (tracked && tracked.kind === "agent_message") {
+              const next = tracked.text + deltaText;
+              tracked.text = next;
+              // Stream into the same buffer Claude uses; flushPendingText
+              // merges these into the session-level streamingText.
+              const existing = pendingText.get(session_id) || "";
+              pendingText.set(session_id, existing + deltaText);
+              scheduleFlush();
+            }
+          }
+          return;
+        }
+
+        // 4a) LEGACY: top-level agent_message (older Codex CLI builds —
+        //     0.121.0+ emits item.* exclusively). Kept defensively for one
+        //     more cycle; remove once confirmed dead in production.
+        if (type === "agent_message") {
+          const text = parsed.text || parsed.message || "";
+          if (text) {
+            store.finalizeAssistantMessage(session_id, text);
+            codexAssistantFinalized.add(session_id);
+          }
+          return;
+        }
+
+        // 4b) LEGACY: top-level agent_reasoning (older shape) — drop into
+        //     log only. No reasoning UI yet, but we don't want it to leak.
+        if (type === "agent_reasoning") {
+          return;
+        }
+
+        // 5) item.completed — finalize whatever the item represents.
+        if (type === "item.completed") {
+          const item = parsed.item;
+          if (!item || !item.id) return;
+          const itemMap = getCodexItemMap(session_id);
+          const tracked = itemMap.get(item.id);
+          const kind = tracked?.kind ?? classifyCodexItem(item.item_type ?? item.type);
+
+          if (kind === "agent_message") {
+            // Flush any buffered streaming deltas before finalizing.
+            if (rafId !== null) {
+              cancelAnimationFrame(rafId);
+              rafId = null;
+            }
+            flushPendingText();
+            const finalText =
+              (typeof item.text === "string" && item.text) ||
+              tracked?.text ||
+              "";
+            if (finalText.trim()) {
+              store.finalizeAssistantMessage(session_id, finalText.trim());
+              codexAssistantFinalized.add(session_id);
+            } else {
+              store.clearStreamingText(session_id);
+            }
+          } else if (kind === "tool") {
+            const result = codexItemResultText(item);
+            const isError = codexItemIsError(item);
+            store.updateToolResult(session_id, item.id, result, isError);
+          }
+          // reasoning + other item kinds are silent for now.
+          itemMap.delete(item.id);
+          return;
+        }
+
+        // 6) LEGACY: top-level tool_use / tool_result aliases (older shape).
+        //    Current `codex exec --json` 0.121.0 routes everything through
+        //    item.started/item.completed; revisit deletion next cycle.
+        if (type === "tool_use" || type === "tool_call_begin") {
+          const item = parsed.item || {};
+          const id = item.id || parsed.thread_id || `${type}-${Date.now()}`;
+          const toolCall: ToolCall = {
+            id,
+            name: codexItemDisplayName(item),
+            input: codexItemInput(item),
+          };
+          store.finalizeAssistantMessage(session_id, "", [toolCall]);
+          codexAssistantFinalized.add(session_id);
+          return;
+        }
+        if (type === "tool_result" || type === "tool_call_end") {
+          const item = parsed.item || {};
+          const id = item.id || "";
+          if (!id) return;
+          const result =
+            (typeof parsed.output === "string" ? parsed.output : "") ||
+            codexItemResultText(item);
+          const isError = codexItemIsError(item);
+          store.updateToolResult(session_id, id, result, isError);
+          return;
+        }
+
+        // 7) Turn / task termination.
+        if (
+          type === "turn.completed" ||
+          type === "task_complete" ||
+          type === "task.completed"
+        ) {
+          if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+          flushPendingText();
+          // If we never saw an explicit agent_message item but accumulated
+          // streamingText, salvage it as a final assistant message.
+          const sess = store.sessions[session_id];
+          if (
+            !codexAssistantFinalized.has(session_id) &&
+            sess?.streamingText?.trim()
+          ) {
+            store.finalizeAssistantMessage(session_id, sess.streamingText.trim());
+          }
+          // Codex emits token totals in the `usage` field of turn.completed.
+          // Treat (input_tokens) as live context occupancy and back it with
+          // the model's nominal window so the chat input renders a context %
+          // the same way Anthropic sessions do.
+          const usage = (parsed.usage ?? parsed.payload?.usage) as
+            | { input_tokens?: number; cached_input_tokens?: number; output_tokens?: number }
+            | undefined;
+          if (usage && typeof usage.input_tokens === "number") {
+            const inputUsed = usage.input_tokens || 0;
+            const ctxMax =
+              getCodexContextWindow(sess?.selectedModel ?? sess?.model ?? null);
+            store.setContextUsage(session_id, inputUsed, ctxMax);
+          }
+          store.setStreaming(session_id, false);
+          store.clearStreamingText(session_id);
+          codexAssistantFinalized.delete(session_id);
+          codexPending.delete(session_id);
+          return;
+        }
+
+        if (type === "turn.failed" || type === "turn.aborted" || type === "error") {
+          const errMsg =
+            (typeof parsed.error === "string" ? parsed.error : parsed.error?.message) ||
+            parsed.message ||
+            "Codex reported an error.";
+          store.setError(session_id, errMsg);
+          store.setStreaming(session_id, false);
+          store.clearStreamingText(session_id);
+          codexAssistantFinalized.delete(session_id);
+          codexPending.delete(session_id);
+          return;
+        }
+
+        // Unknown event types are ignored silently.
+      });
+      if (cancelled) { fnCodex(); return; }
+      unlistenCodexEvent = fnCodex;
+
+      const fnCodexDone = await onCodexDone((payload) => {
+        if (cancelled) return;
+        if (rafId !== null) {
+          cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+        flushPendingText();
+        const store = useClaudeStore.getState();
+        const session = store.sessions[payload.session_id];
+        if (session?.streamingText?.trim()) {
+          store.finalizeAssistantMessage(payload.session_id, session.streamingText.trim());
+        }
+        // Force a transition so subscribers see the change even if isStreaming
+        // was already false from an earlier turn.completed event.
+        const current = useClaudeStore.getState().sessions[payload.session_id];
+        if (current && !current.isStreaming) {
+          store.setStreaming(payload.session_id, true);
+        }
+        store.setStreaming(payload.session_id, false);
+        store.clearStreamingText(payload.session_id);
+        codexPending.delete(payload.session_id);
+        codexAssistantFinalized.delete(payload.session_id);
+      });
+      if (cancelled) { fnCodexDone(); return; }
+      unlistenCodexDone = fnCodexDone;
+
       // Listen for permission requests from the hook server
       const fn4 = await listen<PermissionRequestPayload>(
         "permission-request",
@@ -754,6 +1220,8 @@ export function useClaudeEvents() {
           pendingText.delete(id);
           pendingBlocks.delete(id);
           assistantFinalized.delete(id);
+          codexPending.delete(id);
+          codexAssistantFinalized.delete(id);
         }
       }
     });
@@ -765,10 +1233,13 @@ export function useClaudeEvents() {
       flushPendingText();
       unsubStore();
       unlistenEvent?.(); unlistenDone?.(); unlistenPerm?.();
+      unlistenCodexEvent?.(); unlistenCodexDone?.();
       for (const u of unlistenHooks) u();
       pendingText.clear();
       pendingBlocks.clear();
       assistantFinalized.clear();
+      codexPending.clear();
+      codexAssistantFinalized.clear();
     };
   }, []);
 }

@@ -3,7 +3,9 @@ import { useShallow } from "zustand/react/shallow";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useCanvasStore, type CanvasTerminal } from "../../stores/canvasStore";
 import { useClaudeStore } from "../../stores/claudeStore";
-import { closeTerminal, writeTerminal, closeClaudeSession, renameDiscordSession, closeBrowser, createWidgetFolder } from "../../lib/tauriApi";
+import { closeTerminal, writeTerminal, closeClaudeSession, closeCodexSession, renameDiscordSession, closeBrowser, createWidgetFolder } from "../../lib/tauriApi";
+import type { ProviderId } from "../../lib/providers";
+import { AnthropicLogo, OpenAILogo } from "../ui/BrandLogos";
 import { BORDER_COLORS, ACTIVITY_TIMEOUT_MS } from "../../lib/constants";
 import { computeDragSnap, computeResizeSnap } from "../../lib/snapUtils";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -203,7 +205,12 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
 
   const handleClose = useCallback(() => {
     if (term.panelType === "claude") {
-      closeClaudeSession(term.terminalId).catch(() => {});
+      const sess = useClaudeStore.getState().sessions[term.terminalId];
+      if (sess?.provider === "openai") {
+        closeCodexSession(term.terminalId).catch(() => {});
+      } else {
+        closeClaudeSession(term.terminalId).catch(() => {});
+      }
     } else if (term.panelType === "browser") {
       closeBrowser(term.terminalId).catch(() => {});
     } else if (term.panelType !== "widget" && term.panelType !== "shared-chat") {
@@ -257,10 +264,14 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
   const isSharedChat = term.panelType === "shared-chat";
   const isWidget = term.panelType === "widget";
   const isBrowser = term.panelType === "browser";
-  const { claudeSessionName, claudeCwd } = useClaudeStore(useShallow((s) => {
-    if (!isClaude) return { claudeSessionName: undefined, claudeCwd: undefined };
+  const { claudeSessionName, claudeCwd, claudeProvider } = useClaudeStore(useShallow((s) => {
+    if (!isClaude) return { claudeSessionName: undefined, claudeCwd: undefined, claudeProvider: undefined };
     const sess = s.sessions[term.terminalId];
-    return { claudeSessionName: sess?.name, claudeCwd: sess?.cwd };
+    return {
+      claudeSessionName: sess?.name,
+      claudeCwd: sess?.cwd,
+      claudeProvider: (sess?.provider ?? "anthropic") as ProviderId,
+    };
   }));
 
   const claudeTitle = (() => {
@@ -347,6 +358,9 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
             </>
           ) : (
             <>
+              <span className="ft-provider-badge" title={claudeProvider === "openai" ? "OpenAI Codex" : "Anthropic Claude"}>
+                {claudeProvider === "openai" ? <OpenAILogo size={11} /> : <AnthropicLogo size={11} />}
+              </span>
               <span className="ft-title">{claudeTitle}</span>
               <button className="ft-btn ft-btn--edit" onClick={(e) => {
                 e.stopPropagation();

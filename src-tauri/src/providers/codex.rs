@@ -38,7 +38,10 @@ use crate::providers::traits::{
     ProviderUserInputAnswers,
 };
 use crate::providers::util::{cap_event_size, shim_command};
-use crate::types::{CodexDone, CodexEvent, CreateCodexRequest, SendCodexPromptRequest};
+use crate::types::{
+    CodexDone, CodexEvent, CreateCodexRequest, DiskSession, HistoryMessage, HistoryToolCall,
+    SendCodexPromptRequest,
+};
 
 // ── Binary discovery ───────────────────────────────────────
 
@@ -140,34 +143,44 @@ fn build_command(
 ) -> Command {
     let codex_bin = resolve_codex_path();
     let mut cmd = shim_command(&codex_bin);
-    cmd.arg("exec");
-    if let InvokeMode::Resume(thread_id) = mode {
-        cmd.arg("resume").arg(thread_id);
+
+    // `-C, --cd` is a TOP-LEVEL codex flag (not an `exec` flag) — it must be
+    // emitted before any subcommand. It's also the only way to set cwd for
+    // `codex exec resume`, which does not accept -C.
+    if !cwd.is_empty() && cwd != "." {
+        cmd.arg("-C").arg(cwd);
+        cmd.current_dir(cwd); // belt + suspenders
     }
+
+    cmd.arg("exec");
+    if matches!(mode, InvokeMode::Resume(_)) {
+        cmd.arg("resume");
+    }
+
     cmd.arg("--json");
     if skip_git_repo_check {
         cmd.arg("--skip-git-repo-check");
     }
-    if !cwd.is_empty() && cwd != "." {
-        cmd.arg("-C").arg(cwd);
-        cmd.current_dir(cwd);
-    }
-
-    if let Some(m) = model {
-        if !m.is_empty() {
-            cmd.arg("-m").arg(m);
-        }
-    }
 
     // Sandbox flag and the convenience presets are mutually exclusive in the
     // CLI: `--full-auto` and `--yolo` already imply a sandbox choice.
+    // Extra wrinkle: `codex exec resume` does NOT accept `-s`, so we translate
+    // to `-c sandbox_mode=<value>` (a generic config override that DOES work
+    // on resume).
     if yolo {
         cmd.arg("--dangerously-bypass-approvals-and-sandbox");
     } else if full_auto {
         cmd.arg("--full-auto");
     } else if let Some(s) = sandbox_mode {
         if !s.is_empty() {
-            cmd.arg("-s").arg(s);
+            match mode {
+                InvokeMode::Fresh => {
+                    cmd.arg("-s").arg(s);
+                }
+                InvokeMode::Resume(_) => {
+                    cmd.arg("-c").arg(format!("sandbox_mode={}", s));
+                }
+            }
         }
     }
 
@@ -179,16 +192,28 @@ fn build_command(
         }
     }
 
+    if let Some(m) = model {
+        if !m.is_empty() {
+            cmd.arg("-m").arg(m);
+        }
+    }
+
     if let Some(e) = effort {
         if !e.is_empty() {
             cmd.arg("-c").arg(format!("model_reasoning_effort={}", e));
         }
     }
 
-    // Prompt is the final positional arg. NB: on Windows when shim_command
-    // routes through cmd.exe, embedded newlines may be truncated. Same caveat
-    // as the Claude adapter; we accept this limitation for Step 1 since the
-    // most common case (single-line prompts) works fine on all platforms.
+    // Positional args come last, in the order the CLI expects:
+    //   Fresh:   codex exec [OPTIONS] [PROMPT]
+    //   Resume:  codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
+    // NB: on Windows when shim_command routes through cmd.exe, embedded
+    // newlines may be truncated. Same caveat as the Claude adapter; accepted
+    // for Step 1 since the most common case (single-line prompts) works on
+    // all platforms.
+    if let InvokeMode::Resume(thread_id) = mode {
+        cmd.arg(thread_id);
+    }
     cmd.arg(prompt);
 
     cmd.stdout(Stdio::piped())
@@ -211,6 +236,28 @@ fn spawn_and_stream(
             drop(inst);
             std::thread::sleep(std::time::Duration::from_millis(150));
         }
+    }
+
+    // Diagnostics: dump the full argv so we can compare against a working
+    // shell invocation. The child inherits the Tauri app's environment which
+    // on macOS GUI launches can be surprisingly sparse.
+    {
+        let prog = cmd.get_program().to_string_lossy().to_string();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        let cwd = cmd
+            .get_current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<inherited>".to_string());
+        safe_eprintln!(
+            "[codex] spawn argv for {}: {} {:?} (cwd={})",
+            session_id,
+            prog,
+            args,
+            cwd
+        );
     }
 
     let mut child = cmd
@@ -300,7 +347,44 @@ fn spawn_and_stream(
                 safe_eprintln!("[codex] Failed to emit error event for {}: {}", sid, e);
             }
         }
-        safe_eprintln!("[codex] Reader thread ended for {} (gen {})", sid, gen);
+        // Wait on the child if it's still ours so we can log the exit status
+        // — otherwise silent exits look identical to normal completion in
+        // the logs.
+        let exit_info = {
+            let mut inst_g = match instances_clone.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            match inst_g.get_mut(&sid) {
+                Some(instance) if instance.generation == gen => match instance.child.try_wait() {
+                    Ok(Some(status)) => format!("exit={:?}", status),
+                    Ok(None) => {
+                        drop(inst_g);
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        let mut again = match instances_clone.lock() {
+                            Ok(g) => g,
+                            Err(_) => return,
+                        };
+                        match again.get_mut(&sid) {
+                            Some(i) => match i.child.wait() {
+                                Ok(status) => format!("exit={:?}", status),
+                                Err(e) => format!("wait-err={}", e),
+                            },
+                            None => "child-already-gone".to_string(),
+                        }
+                    }
+                    Err(e) => format!("try_wait-err={}", e),
+                },
+                _ => "child-not-ours".to_string(),
+            }
+        };
+        safe_eprintln!(
+            "[codex] Reader thread ended for {} (gen {}) had_output={} {}",
+            sid,
+            gen,
+            had_output,
+            exit_info
+        );
         let is_current = if let Ok(mut inst) = instances_clone.lock() {
             if let Some(instance) = inst.get(&sid) {
                 if instance.generation == gen {
@@ -413,15 +497,27 @@ impl CodexAdapter {
         req: SendCodexPromptRequest,
     ) -> Result<(), String> {
         if req.session_id.trim().is_empty() {
-            return Err("send_prompt: session_id is required for codex resume".to_string());
+            return Err("send_prompt: session_id is required".to_string());
         }
+        // The thread_id (Codex-assigned) is what `codex exec resume` needs as
+        // its positional argument. session_id (T64-local UUID) is what we
+        // emit events under so the frontend can route them to the right
+        // session row. Fall back to session_id for older callers that haven't
+        // split the fields yet.
+        let resume_id_owned = req
+            .thread_id
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| req.session_id.clone());
         safe_eprintln!(
-            "[codex] Resuming session {} cwd={}",
+            "[codex] Resuming session_id={} thread_id={} cwd={}",
             req.session_id,
+            resume_id_owned,
             req.cwd
         );
         let cmd = build_command(
-            InvokeMode::Resume(&req.session_id),
+            InvokeMode::Resume(&resume_id_owned),
             &req.cwd,
             &req.prompt,
             &req.sandbox_mode,
@@ -577,4 +673,647 @@ impl ProviderAdapter for CodexAdapter {
         let (_tx, rx) = mpsc::channel(1);
         rx
     }
+}
+
+// ── Session JSONL history loader ──────────────────────────────────
+//
+// Codex persists each conversation to a "rollout" file at
+//   ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl
+// Each line: { timestamp, type, payload }. Real chat content lives in
+// `response_item` lines whose `payload.type == "message"` and whose role
+// is "user" or "assistant". A few user messages are system-injected by the
+// CLI itself (environment_context, permissions blurbs, model_switch
+// notes); we filter those out so the rendered chat shows only what the
+// human + the model actually said.
+//
+// Returns messages in chronological order, mapped to the same
+// HistoryMessage shape Claude uses so the frontend can route through
+// existing `mapHistoryMessages` / `loadFromDisk` plumbing.
+
+fn codex_sessions_root() -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+    let p = std::path::Path::new(&home).join(".codex").join("sessions");
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// Walk `~/.codex/sessions/**/rollout-*-<thread_id>.jsonl` and return the
+/// path to the (single) rollout file matching the given Codex thread id, if
+/// one exists. The directory layout is shallow enough (year/month/day) that
+/// a manual three-level walk is cheaper than pulling in `walkdir`.
+fn find_codex_rollout(thread_id: &str) -> Option<std::path::PathBuf> {
+    let root = codex_sessions_root()?;
+    let suffix = format!("-{}.jsonl", thread_id);
+    for year in std::fs::read_dir(&root).ok()?.flatten() {
+        if !year.file_type().ok()?.is_dir() {
+            continue;
+        }
+        for month in std::fs::read_dir(year.path()).ok()?.flatten() {
+            if !month.file_type().ok()?.is_dir() {
+                continue;
+            }
+            for day in std::fs::read_dir(month.path()).ok()?.flatten() {
+                if !day.file_type().ok()?.is_dir() {
+                    continue;
+                }
+                for file in std::fs::read_dir(day.path()).ok()?.flatten() {
+                    let p = file.path();
+                    if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                        if name.ends_with(&suffix) {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Detect user messages that Codex injects as part of its prompt assembly
+/// (environment context, permission blurbs, model-switch nudges, developer
+/// instructions, file blocks) so we can hide them from the rendered chat
+/// history. Defensive fallback: any message that's wholly wrapped in a
+/// matching `<tag>…</tag>` envelope is treated as injected.
+fn is_codex_system_injected_user_text(text: &str) -> bool {
+    let t = text.trim();
+    const KNOWN: &[&str] = &[
+        "<environment_context>",
+        "<permissions instructions>",
+        "<model_switch>",
+        "<user_instructions>",
+        "<developer_instructions>",
+        "<files>",
+    ];
+    if KNOWN.iter().any(|p| t.starts_with(p)) {
+        return true;
+    }
+    // Defensive: any wrapper that opens with <tag …> and ends with </tag>.
+    if let Some(rest) = t.strip_prefix('<') {
+        if let Some(close_pos) = rest.find('>') {
+            let tag_inner = &rest[..close_pos];
+            let tag_name = tag_inner
+                .split(|c: char| c.is_whitespace())
+                .next()
+                .unwrap_or("");
+            if !tag_name.is_empty() && !tag_name.starts_with('/') {
+                let close_tag = format!("</{}>", tag_name);
+                if t.ends_with(&close_tag) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Treat a Codex tool output blob as an error if it carries one of the
+/// shell-style failure signals we render in the live event stream:
+///   - `^Process exited with code N` for any non-zero N
+///   - leading `Error:` (used by Codex's MCP / built-in tools on failure)
+fn detect_codex_tool_error(output: &str) -> bool {
+    if output.starts_with("Error:") {
+        return true;
+    }
+    if let Some(rest) = output.strip_prefix("Process exited with code ") {
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(code) = digits.parse::<i32>() {
+            return code != 0;
+        }
+    }
+    false
+}
+
+/// Append a `HistoryToolCall` to the most recent assistant `HistoryMessage`,
+/// or synthesise an empty-content assistant message when none exists / the
+/// trailing entry is a user turn. Records `(msg_idx, tc_idx)` in `pending`
+/// so the matching `*_output` envelope can patch the result back in.
+fn attach_codex_tool_call(
+    out: &mut Vec<HistoryMessage>,
+    pending: &mut HashMap<String, (usize, usize)>,
+    tc: HistoryToolCall,
+    pending_key: &str,
+    ts_ms: f64,
+) {
+    let target_idx = match out.last() {
+        Some(m) if m.role == "assistant" => out.len() - 1,
+        _ => {
+            out.push(HistoryMessage {
+                id: format!("codex-tools-{}", pending_key),
+                role: "assistant".to_string(),
+                content: String::new(),
+                timestamp: ts_ms,
+                tool_calls: Some(Vec::new()),
+            });
+            out.len() - 1
+        }
+    };
+    let msg = &mut out[target_idx];
+    let tcs = msg.tool_calls.get_or_insert_with(Vec::new);
+    let ti = tcs.len();
+    tcs.push(tc);
+    pending.insert(pending_key.to_string(), (target_idx, ti));
+}
+
+/// Parse a Codex rollout JSONL into the same HistoryMessage shape Claude uses,
+/// with tool calls (function/local-shell, web_search, mcp) attached to the
+/// preceding assistant turn. Single pass over the file; `pending_tools` keys
+/// each in-flight `function_call` / `local_shell_call` by `call_id` so the
+/// matching `*_output` envelope can patch the result back in. Web-search and
+/// MCP tool calls are single-shot — we materialise them with the embedded
+/// status/result on the spot.
+pub fn load_codex_history_by_thread(thread_id: &str) -> Vec<HistoryMessage> {
+    let Some(path) = find_codex_rollout(thread_id) else {
+        return Vec::new();
+    };
+    let Ok(file) = std::fs::File::open(&path) else {
+        return Vec::new();
+    };
+    let reader = std::io::BufReader::new(file);
+    let mut out: Vec<HistoryMessage> = Vec::new();
+    let mut pending_tools: HashMap<String, (usize, usize)> = HashMap::new();
+
+    for line in reader.lines().map_while(Result::ok) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if envelope.get("type").and_then(|v| v.as_str()) != Some("response_item") {
+            continue;
+        }
+        let Some(payload) = envelope.get("payload") else {
+            continue;
+        };
+        let ptype = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        // Codex timestamps are ISO 8601 strings; convert to ms-since-epoch
+        // so the frontend's existing renderer doesn't need a separate path.
+        let ts_ms = envelope
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.timestamp_millis() as f64)
+            .unwrap_or(0.0);
+
+        match ptype {
+            "message" => {
+                let role = match payload.get("role").and_then(|v| v.as_str()) {
+                    Some(r @ ("user" | "assistant")) => r.to_string(),
+                    _ => continue,
+                };
+                // Concatenate every text-bearing content block. Codex stores
+                // assistant text under `output_text` and user text under
+                // `input_text`; both have a `text` field directly.
+                let mut text = String::new();
+                if let Some(arr) = payload.get("content").and_then(|v| v.as_array()) {
+                    for block in arr {
+                        if let Some(s) = block.get("text").and_then(|v| v.as_str()) {
+                            if !text.is_empty() {
+                                text.push('\n');
+                            }
+                            text.push_str(s);
+                        }
+                    }
+                }
+                if text.trim().is_empty() {
+                    continue;
+                }
+                if role == "user" && is_codex_system_injected_user_text(&text) {
+                    continue;
+                }
+                let id = payload
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("codex-{}", out.len()));
+                out.push(HistoryMessage {
+                    id,
+                    role,
+                    content: text,
+                    timestamp: ts_ms,
+                    tool_calls: None,
+                });
+            }
+            "function_call" | "local_shell_call" => {
+                let call_id = payload
+                    .get("call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if call_id.is_empty() {
+                    continue;
+                }
+                let name = payload
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| {
+                        if ptype == "local_shell_call" {
+                            "local_shell".to_string()
+                        } else {
+                            "function".to_string()
+                        }
+                    });
+                // `arguments` is a JSON string (per OpenAI tool-call schema);
+                // parse it so the frontend renderer can pick fields out
+                // (e.g. `command`, `path`). Fall back to a `{_raw: "..."}`
+                // wrapper so malformed payloads still render. For
+                // `local_shell_call`, prefer the structured `action` if
+                // `arguments` is missing.
+                let input =
+                    if let Some(args_str) = payload.get("arguments").and_then(|v| v.as_str()) {
+                        serde_json::from_str::<serde_json::Value>(args_str)
+                            .unwrap_or_else(|_| serde_json::json!({ "_raw": args_str }))
+                    } else if let Some(action) = payload.get("action") {
+                        action.clone()
+                    } else {
+                        serde_json::Value::Null
+                    };
+                let tc = HistoryToolCall {
+                    id: call_id.clone(),
+                    name,
+                    input,
+                    result: None,
+                    is_error: false,
+                };
+                attach_codex_tool_call(&mut out, &mut pending_tools, tc, &call_id, ts_ms);
+            }
+            "function_call_output" | "local_shell_call_output" => {
+                let call_id = payload
+                    .get("call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if call_id.is_empty() {
+                    continue;
+                }
+                let output = match payload.get("output") {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    Some(other) => other.to_string(),
+                    None => String::new(),
+                };
+                let is_error = detect_codex_tool_error(&output);
+                if let Some(&(mi, ti)) = pending_tools.get(&call_id) {
+                    if let Some(msg) = out.get_mut(mi) {
+                        if let Some(tcs) = msg.tool_calls.as_mut() {
+                            if let Some(tc) = tcs.get_mut(ti) {
+                                tc.result = Some(output);
+                                tc.is_error = is_error;
+                            }
+                        }
+                    }
+                    pending_tools.remove(&call_id);
+                }
+            }
+            "web_search_call" => {
+                // Single-shot: built-in search tool already includes the
+                // status when persisted, so we synthesise the tool call and
+                // its result in one go. No `*_output` envelope follows.
+                let id = payload
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("ws-{}", out.len()));
+                let action = payload
+                    .get("action")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let status = payload
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let is_error = !status.is_empty() && status != "completed";
+                let result = if status.is_empty() {
+                    None
+                } else {
+                    Some(status)
+                };
+                let tc = HistoryToolCall {
+                    id: id.clone(),
+                    name: "web_search".to_string(),
+                    input: action,
+                    result,
+                    is_error,
+                };
+                attach_codex_tool_call(&mut out, &mut pending_tools, tc, &id, ts_ms);
+            }
+            "mcp_tool_call" => {
+                // Single-shot: MCP tool calls embed the result in the same
+                // envelope (per upstream `mcp_tool_call` schema). Pair fields
+                // defensively — `server`, `tool`, `arguments`, `result`,
+                // `is_error` — none are guaranteed by the spec we have.
+                let id = payload
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        payload
+                            .get("call_id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| format!("mcp-{}", out.len()));
+                let server = payload.get("server").and_then(|v| v.as_str()).unwrap_or("");
+                let tool = payload.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+                let name = if !server.is_empty() && !tool.is_empty() {
+                    format!("{}__{}", server, tool)
+                } else if !tool.is_empty() {
+                    tool.to_string()
+                } else {
+                    "mcp_tool".to_string()
+                };
+                let input = payload
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let result = payload.get("result").map(|v| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                });
+                let is_error = payload
+                    .get("is_error")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let tc = HistoryToolCall {
+                    id: id.clone(),
+                    name,
+                    input,
+                    result,
+                    is_error,
+                };
+                attach_codex_tool_call(&mut out, &mut pending_tools, tc, &id, ts_ms);
+            }
+            // No UI for chain-of-thought yet; live handler also drops it.
+            "reasoning" => continue,
+            _ => continue,
+        }
+    }
+    out
+}
+
+/// Walk `~/.codex/sessions/**/rollout-*.jsonl` and return one `DiskSession`
+/// per rollout whose `session_meta.cwd` matches the requested directory.
+/// Each rollout's id is the Codex thread id (the suffix after the timestamp
+/// in the filename); summary is the first user-typed prompt or a fallback.
+/// Used by the dialog's "Previous Sessions" list when provider == "openai".
+pub fn list_codex_disk_sessions(cwd: &str) -> Vec<DiskSession> {
+    let Some(root) = codex_sessions_root() else {
+        return Vec::new();
+    };
+    let target = std::path::Path::new(cwd);
+    let target_canon = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+
+    let mut out: Vec<DiskSession> = Vec::new();
+    let Ok(year_iter) = std::fs::read_dir(&root) else {
+        return out;
+    };
+    for year in year_iter.flatten() {
+        if !year.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let Ok(month_iter) = std::fs::read_dir(year.path()) else {
+            continue;
+        };
+        for month in month_iter.flatten() {
+            if !month.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let Ok(day_iter) = std::fs::read_dir(month.path()) else {
+                continue;
+            };
+            for day in day_iter.flatten() {
+                if !day.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let Ok(file_iter) = std::fs::read_dir(day.path()) else {
+                    continue;
+                };
+                for file in file_iter.flatten() {
+                    let p = file.path();
+                    let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+                        continue;
+                    };
+                    if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
+                        continue;
+                    }
+                    if let Some(meta) = peek_codex_rollout(&p) {
+                        let rollout_cwd = std::path::Path::new(&meta.cwd);
+                        let rollout_canon = std::fs::canonicalize(rollout_cwd)
+                            .unwrap_or_else(|_| rollout_cwd.to_path_buf());
+                        if rollout_canon != target_canon {
+                            continue;
+                        }
+                        let modified = file
+                            .metadata()
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+                        out.push(DiskSession {
+                            id: meta.thread_id,
+                            modified,
+                            size,
+                            summary: meta.summary,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| b.modified.cmp(&a.modified));
+    out
+}
+
+struct CodexRolloutMeta {
+    thread_id: String,
+    cwd: String,
+    summary: String,
+}
+
+/// Read just enough of a rollout JSONL to recover the thread id, cwd, and
+/// the first real user prompt (skipping injected developer/permissions/env
+/// blocks). Stops as soon as it finds a usable summary.
+fn peek_codex_rollout(path: &std::path::Path) -> Option<CodexRolloutMeta> {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    let mut thread_id: Option<String> = None;
+    let mut cwd: Option<String> = None;
+    let mut summary: Option<String> = None;
+    for line in reader.lines().map_while(Result::ok).take(200) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let etype = envelope.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if etype == "session_meta" {
+            if let Some(payload) = envelope.get("payload") {
+                if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                    thread_id = Some(id.to_string());
+                }
+                if let Some(c) = payload.get("cwd").and_then(|v| v.as_str()) {
+                    cwd = Some(c.to_string());
+                }
+            }
+        } else if etype == "response_item" && summary.is_none() {
+            if let Some(payload) = envelope.get("payload") {
+                let ptype = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let role = payload.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                if ptype == "message" && role == "user" {
+                    if let Some(arr) = payload.get("content").and_then(|v| v.as_array()) {
+                        for block in arr {
+                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                if !is_codex_system_injected_user_text(text) {
+                                    let trimmed: String = text.chars().take(120).collect();
+                                    summary = Some(trimmed);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if thread_id.is_some() && cwd.is_some() && summary.is_some() {
+            break;
+        }
+    }
+    Some(CodexRolloutMeta {
+        thread_id: thread_id?,
+        cwd: cwd.unwrap_or_default(),
+        summary: summary.unwrap_or_default(),
+    })
+}
+
+// ── Rollout truncation (rewind) ──────────────────────────────────
+//
+// `codex exec resume <thread_id>` re-reads the entire rollout JSONL as
+// conversation memory. There is no `--resume-at` flag, so the only way to
+// rewind is to physically truncate the rollout file on a turn boundary.
+//
+// A "turn" is the run between an `event_msg{type:"task_started"}` and the
+// matching `event_msg{type:"task_complete"}`. Mid-turn truncation leaves an
+// orphan `task_started`, an unpaired `function_call`, or stranded
+// `agent_reasoning`, which Codex's own state machine refuses on resume —
+// so we always cut immediately AFTER a `task_complete` line.
+//
+// Line 0 is `session_meta` (id, cwd, cli_version, base_instructions, git);
+// it is preserved verbatim — Codex needs it to anchor the resume.
+
+/// Truncate a Codex rollout to drop the last `num_turns` completed turns.
+///
+/// Returns the number of turns actually removed (capped at the total turn
+/// count present in the rollout). Errors only on missing rollout / corrupt
+/// `session_meta` / IO failure.
+pub fn truncate_codex_rollout_by_turns(thread_id: &str, num_turns: u32) -> Result<u32, String> {
+    if num_turns == 0 {
+        return Ok(0);
+    }
+    let path = find_codex_rollout(thread_id)
+        .ok_or_else(|| format!("rollout for thread {} not found", thread_id))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    if content.is_empty() {
+        return Ok(0);
+    }
+    let lines: Vec<&str> = content.split_inclusive('\n').collect();
+    if lines.is_empty() {
+        return Ok(0);
+    }
+    // Validate line 0 is `session_meta` so we don't accidentally clobber a
+    // file with a different schema.
+    let first_trim = lines[0].trim();
+    let first_envelope: serde_json::Value =
+        serde_json::from_str(first_trim).map_err(|e| format!("parse session_meta line: {}", e))?;
+    if first_envelope.get("type").and_then(|v| v.as_str()) != Some("session_meta") {
+        return Err("first line is not session_meta — refusing to truncate".to_string());
+    }
+
+    // Walk the file once, recording the index of every `task_complete` event.
+    let mut task_complete_indices: Vec<usize> = Vec::new();
+    for (i, raw) in lines.iter().enumerate() {
+        let s = raw.trim();
+        if s.is_empty() {
+            continue;
+        }
+        let Ok(env) = serde_json::from_str::<serde_json::Value>(s) else {
+            continue;
+        };
+        if env.get("type").and_then(|v| v.as_str()) == Some("event_msg") {
+            if let Some(p) = env.get("payload") {
+                if p.get("type").and_then(|v| v.as_str()) == Some("task_complete") {
+                    task_complete_indices.push(i);
+                }
+            }
+        }
+    }
+    let total_turns = task_complete_indices.len();
+    if total_turns == 0 {
+        // No completed turns — nothing safe to truncate.
+        return Ok(0);
+    }
+    let drop = (num_turns as usize).min(total_turns);
+    let keep_turns = total_turns - drop;
+    // If we keep N turns, cut after the Nth `task_complete`. Keeping zero
+    // turns means we drop everything past line 0 (`session_meta`).
+    let truncate_after_idx = if keep_turns == 0 {
+        0
+    } else {
+        task_complete_indices[keep_turns - 1]
+    };
+    let keep_count = truncate_after_idx + 1;
+    let truncated: String = lines.iter().take(keep_count).copied().collect();
+
+    // Atomic write: stage to sibling tmp, fsync, rename, fsync parent dir.
+    let parent = path.parent().ok_or("rollout path has no parent")?;
+    let suffix = format!(
+        ".tmp.{}.{}",
+        std::process::id(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let tmp = path.with_extension(format!(
+        "{}{}",
+        path.extension().and_then(|e| e.to_str()).unwrap_or("jsonl"),
+        suffix
+    ));
+    {
+        use std::io::Write;
+        let mut f =
+            std::fs::File::create(&tmp).map_err(|e| format!("create {}: {}", tmp.display(), e))?;
+        f.write_all(truncated.as_bytes())
+            .map_err(|e| format!("write {}: {}", tmp.display(), e))?;
+        if let Err(e) = f.sync_all() {
+            safe_eprintln!("[codex truncate] sync_all {}: {}", tmp.display(), e);
+        }
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("rename {} -> {}: {}", tmp.display(), path.display(), e)
+    })?;
+    #[cfg(unix)]
+    {
+        if let Err(e) = std::fs::File::open(parent).and_then(|d| d.sync_all()) {
+            safe_eprintln!(
+                "[codex truncate] parent sync_all {}: {}",
+                parent.display(),
+                e
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+    }
+
+    Ok(drop as u32)
 }

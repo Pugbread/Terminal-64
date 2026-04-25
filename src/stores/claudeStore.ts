@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatMessage, ToolCall, McpTool, HookEvent } from "../lib/types";
-import { loadSessionHistory, mapHistoryMessages, statSessionJsonl } from "../lib/tauriApi";
+import type { ProviderId } from "../lib/providers";
+import { loadSessionHistory, mapHistoryMessages, statSessionJsonl, loadCodexSessionHistory } from "../lib/tauriApi";
 
 export const STORAGE_KEY = "terminal64-claude-sessions";
 
@@ -16,11 +17,30 @@ export interface PersistedSessionMeta {
   draftPrompt: string;
   lastSeenAt: number;
   schemaVersion: number;
+  provider?: ProviderId;
+  codexThreadId?: string | null;
+  // Pre-rendered transcript inherited from a parent session at fork time.
+  // Codex has no native fork; the new thread is seeded with the parent's
+  // history so the first prompt sees the same context. Persisted so a
+  // reload before the first turn doesn't lose the seed.
+  seedTranscript?: ChatMessage[];
+  // Per-session model + reasoning-effort, persisted so flipping models in
+  // one chat doesn't bleed into other sessions and so a reload restores the
+  // user's pick. Null/undefined falls back to settings-store defaults.
+  // (Distinct from `ClaudeSession.model` which is the runtime-reported value
+  // from the CLI's `system` init event.)
+  selectedModel?: string | null;
+  selectedEffort?: string | null;
+  // Codex sandbox/approval preset id ("read-only" | "workspace" | "full-auto"
+  // | "yolo"). Anthropic sessions cycle their permission mode mid-flight via
+  // the topbar Shift+Tab handler; Codex doesn't have an equivalent so the
+  // chosen preset is what we re-send on each `codex exec resume`.
+  selectedCodexPermission?: string | null;
 }
 
 // Bump when the shape of PersistedSessionMeta changes. Older clients that
 // encounter a higher version refuse to overwrite — see downgradeLockActive.
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 4;
 
 // Flips true once we see persisted data written by a newer schema than we
 // understand. While active, saveToStorage is a no-op so a downgraded client
@@ -114,6 +134,28 @@ export interface ClaudeSession {
   // True once the JSONL on disk has been loaded (or load attempted and failed).
   // UI uses this to know when it's safe to claim "no messages" vs "still loading".
   jsonlLoaded: boolean;
+  // Which backend CLI this session is bound to. Existing sessions hydrated
+  // from older metadata default to "anthropic" for backward compatibility.
+  provider: ProviderId;
+  // Codex's CLI mints its own thread id on `thread.started`; we capture it
+  // here so follow-up `codex exec resume <id>` calls can find the thread.
+  // Always null for anthropic sessions.
+  codexThreadId: string | null;
+  // Fork-time prelude. When non-null, these messages were rendered into
+  // `messages` at session-create time; the send path may also splice them
+  // into the first prompt sent to a freshly-spawned Codex thread so the
+  // model has the parent's context. Null for normal (non-forked) sessions.
+  seedTranscript: ChatMessage[] | null;
+  // Per-session model + reasoning effort. Null = "use the settings-store
+  // default for this session's provider". The topbar dropdowns read these,
+  // and selecting a new value writes back via setSessionModel/setSessionEffort
+  // so the choice survives reloads. Different from the existing `model` field
+  // above, which is the CLI's runtime-reported active model.
+  selectedModel: string | null;
+  selectedEffort: string | null;
+  // Codex sandbox/approval preset id. Null on Anthropic sessions; defaults
+  // to PROVIDER_CONFIG.openai.defaultPermission for OpenAI.
+  selectedCodexPermission: string | null;
 }
 
 export interface ActiveLoop {
@@ -132,7 +174,14 @@ interface ClaudeState {
     ephemeral?: boolean,
     skipOpenwolf?: boolean,
     cwd?: string,
+    provider?: ProviderId,
   ) => void;
+  setCodexThreadId: (sessionId: string, threadId: string | null) => void;
+  setSeedTranscript: (sessionId: string, messages: ChatMessage[]) => void;
+  clearSeedTranscript: (sessionId: string) => void;
+  setSelectedModel: (sessionId: string, model: string | null) => void;
+  setSelectedEffort: (sessionId: string, effort: string | null) => void;
+  setSelectedCodexPermission: (sessionId: string, permission: string | null) => void;
   removeSession: (sessionId: string) => void;
   addUserMessage: (sessionId: string, text: string) => void;
   appendStreamingText: (sessionId: string, text: string) => void;
@@ -238,6 +287,9 @@ function loadMetadata(sessionId: string): PersistedSessionMeta | null {
   const data = readPersistedMeta();
   const entry = data[sessionId];
   if (!entry) return null;
+  // Older blobs (schemaVersion < 2) lacked `provider` — back-fill anthropic
+  // so the session keeps routing through the Claude adapter as before.
+  const provider: ProviderId = entry.provider === "openai" ? "openai" : "anthropic";
   return {
     sessionId: entry.sessionId || sessionId,
     name: entry.name || "",
@@ -245,6 +297,16 @@ function loadMetadata(sessionId: string): PersistedSessionMeta | null {
     draftPrompt: entry.draftPrompt || "",
     lastSeenAt: entry.lastSeenAt || 0,
     schemaVersion: (entry as { schemaVersion?: number }).schemaVersion ?? 0,
+    provider,
+    codexThreadId: entry.codexThreadId ?? null,
+    // v2 blobs lack seedTranscript — leave undefined so consumers treat the
+    // session as un-seeded. Stored as ChatMessage[] when present.
+    ...(Array.isArray(entry.seedTranscript) ? { seedTranscript: entry.seedTranscript } : {}),
+    // v3 and earlier didn't carry per-session model/effort; v4+ does.
+    selectedModel: typeof entry.selectedModel === "string" ? entry.selectedModel : null,
+    selectedEffort: typeof entry.selectedEffort === "string" ? entry.selectedEffort : null,
+    selectedCodexPermission:
+      typeof entry.selectedCodexPermission === "string" ? entry.selectedCodexPermission : null,
   };
 }
 
@@ -277,6 +339,12 @@ function saveToStorage(sessions: Record<string, ClaudeSession>) {
         draftPrompt: s.draftPrompt || "",
         lastSeenAt: now,
         schemaVersion: CURRENT_SCHEMA_VERSION,
+        provider: s.provider,
+        codexThreadId: s.codexThreadId,
+        ...(s.seedTranscript ? { seedTranscript: s.seedTranscript } : {}),
+        ...(s.selectedModel ? { selectedModel: s.selectedModel } : {}),
+        ...(s.selectedEffort ? { selectedEffort: s.selectedEffort } : {}),
+        ...(s.selectedCodexPermission ? { selectedCodexPermission: s.selectedCodexPermission } : {}),
       };
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
@@ -310,6 +378,34 @@ const hydrationCache = new Map<string, HydrationCacheEntry>();
 // Async JSONL hydration. Fire-and-forget — errors are logged but non-fatal so
 // the user can still interact with a session whose history hasn't loaded yet.
 function hydrateFromJsonl(sessionId: string, cwd: string) {
+  // Codex sessions don't live in `~/.claude/projects` — they're at
+  // `~/.codex/sessions/.../rollout-*-<thread_id>.jsonl`. We key off the
+  // codexThreadId stored in the session (captured from `thread.started`
+  // and persisted to localStorage). When it's not yet known (very first
+  // turn before the thread.started event fires) we just mark loaded so
+  // the UI doesn't sit in a loading state forever.
+  const sess = useClaudeStore.getState().sessions[sessionId];
+  if (sess?.provider === "openai") {
+    const tid = sess.codexThreadId;
+    if (!tid) {
+      patchSession(sessionId, { jsonlLoaded: true });
+      return;
+    }
+    loadCodexSessionHistory(tid)
+      .then((history) => {
+        if (history.length > 0) {
+          const messages = mapHistoryMessages(history);
+          useClaudeStore.getState().loadFromDisk(sessionId, messages);
+        } else {
+          patchSession(sessionId, { jsonlLoaded: true });
+        }
+      })
+      .catch((err) => {
+        console.warn("[claudeStore] Codex hydrate failed:", sessionId, err);
+        patchSession(sessionId, { jsonlLoaded: true });
+      });
+    return;
+  }
   statSessionJsonl(sessionId, cwd)
     .then((stat) => {
       if (stat) {
@@ -351,7 +447,7 @@ function hydrateFromJsonl(sessionId: string, cwd: string) {
 export const useClaudeStore = create<ClaudeState>((set, get) => ({
   sessions: {},
 
-  createSession: (sessionId, initialName, ephemeral, skipOpenwolf, cwd) => {
+  createSession: (sessionId, initialName, ephemeral, skipOpenwolf, cwd, provider) => {
     const existing = get().sessions[sessionId];
     if (existing) {
       if (initialName && !existing.name) {
@@ -373,13 +469,27 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
     const seededName = initialName ?? meta?.name ?? "";
     const seededCwd = cwd ?? meta?.cwd ?? "";
     const seededDraft = meta?.draftPrompt ?? "";
+    const seededProvider: ProviderId = provider ?? meta?.provider ?? "anthropic";
+    const seededCodexThreadId = meta?.codexThreadId ?? null;
+    // Fork plumbing: a parent session can stash a transcript in metadata
+    // before the child is created. We pre-render those messages so the UI
+    // shows the inherited history immediately; the actual model context for
+    // a Codex thread gets restitched into the first prompt by the send path.
+    const seededTranscript: ChatMessage[] | null = Array.isArray(meta?.seedTranscript) && meta.seedTranscript.length > 0
+      ? meta.seedTranscript
+      : null;
+    const seededMessages: ChatMessage[] = seededTranscript ? [...seededTranscript] : [];
+    const seededPromptCount = seededMessages.filter((m) => m.role === "user").length;
+    const seededSelectedModel = meta?.selectedModel ?? null;
+    const seededSelectedEffort = meta?.selectedEffort ?? null;
+    const seededSelectedCodexPermission = meta?.selectedCodexPermission ?? null;
 
     set((s) => {
       const sessions = {
         ...s.sessions,
         [sessionId]: {
           sessionId,
-          messages: [],
+          messages: seededMessages,
           tasks: [],
           isStreaming: false,
           streamingText: "",
@@ -391,7 +501,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
           contextUsed: 0,
           contextMax: 0,
           error: null,
-          promptCount: 0,
+          promptCount: seededPromptCount,
           planModeActive: false,
           pendingQuestions: null,
           pendingPermission: null,
@@ -414,6 +524,12 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
           subagentIds: [],
           hookEventLog: [],
           jsonlLoaded: !!ephemeral, // ephemeral sessions never load from disk
+          provider: seededProvider,
+          codexThreadId: seededCodexThreadId,
+          seedTranscript: seededTranscript,
+          selectedModel: seededSelectedModel,
+          selectedEffort: seededSelectedEffort,
+          selectedCodexPermission: seededSelectedCodexPermission,
         },
       };
       if (!ephemeral) debouncedSave();
@@ -647,6 +763,67 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
     set((s) => ({ sessions: updateSession(s.sessions, sessionId, { mcpServers: servers }) }));
   },
 
+  setCodexThreadId: (sessionId, threadId) => {
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session || session.codexThreadId === threadId) return s;
+      const updated = updateSession(s.sessions, sessionId, { codexThreadId: threadId });
+      if (!session.ephemeral) debouncedSave();
+      return { sessions: updated };
+    });
+  },
+
+  setSeedTranscript: (sessionId, messages) => {
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      const next = messages.length > 0 ? messages : null;
+      const updated = updateSession(s.sessions, sessionId, { seedTranscript: next });
+      if (!session.ephemeral) debouncedSave();
+      return { sessions: updated };
+    });
+  },
+
+  clearSeedTranscript: (sessionId) => {
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session || session.seedTranscript === null) return s;
+      const updated = updateSession(s.sessions, sessionId, { seedTranscript: null });
+      if (!session.ephemeral) debouncedSave();
+      return { sessions: updated };
+    });
+  },
+
+  setSelectedModel: (sessionId, model) => {
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session || session.selectedModel === model) return s;
+      const updated = updateSession(s.sessions, sessionId, { selectedModel: model });
+      if (!session.ephemeral) debouncedSave();
+      return { sessions: updated };
+    });
+  },
+
+  setSelectedEffort: (sessionId, effort) => {
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session || session.selectedEffort === effort) return s;
+      const updated = updateSession(s.sessions, sessionId, { selectedEffort: effort });
+      if (!session.ephemeral) debouncedSave();
+      return { sessions: updated };
+    });
+  },
+
+  setSelectedCodexPermission: (sessionId, permission) => {
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session || session.selectedCodexPermission === permission) return s;
+      const updated = updateSession(s.sessions, sessionId, { selectedCodexPermission: permission });
+      if (!session.ephemeral) debouncedSave();
+      return { sessions: updated };
+    });
+  },
+
   enqueuePrompt: (sessionId, text) => {
     set((s) => {
       const session = s.sessions[sessionId];
@@ -851,6 +1028,12 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
     });
   },
 }));
+
+// Provider routing selector. Returns "anthropic" for any unknown / missing
+// session so the legacy Claude path stays the safe default.
+export function selectSessionProvider(sessionId: string): ProviderId {
+  return useClaudeStore.getState().sessions[sessionId]?.provider ?? "anthropic";
+}
 
 // Lightweight selector for voice/fuzzy session matching.
 export function getSessionsForVoiceMatch(): { id: string; name: string }[] {
