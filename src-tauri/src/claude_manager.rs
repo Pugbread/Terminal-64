@@ -27,25 +27,7 @@ pub fn resolve_openwolf_path() -> String {
 
 /// PATH that includes common locations for node, npm, pm2.
 pub fn openwolf_env_path() -> String {
-    let existing = std::env::var("PATH").unwrap_or_default();
-    #[cfg(target_os = "windows")]
-    {
-        let home = std::env::var("USERPROFILE").unwrap_or_default();
-        let appdata = std::env::var("APPDATA").unwrap_or_default();
-        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
-        let program_files =
-            std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
-        format!(
-            "{appdata}\\npm;{home}\\.cargo\\bin;{home}\\.npm-global;{localappdata}\\Programs\\nodejs;{program_files}\\nodejs;{existing}"
-        )
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!(
-            "/opt/homebrew/bin:/usr/local/bin:{home}/.cargo/bin:{home}/.npm-global/bin:/opt/homebrew/lib/node_modules/.bin:{existing}"
-        )
-    }
+    crate::providers::util::expanded_tool_path()
 }
 
 fn resolve_openwolf_path_inner() -> String {

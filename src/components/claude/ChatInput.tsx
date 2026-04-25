@@ -929,16 +929,19 @@ function ChatInputImpl({ onSend, onCancel, onAttach, onRewrite, isRewriting, isS
             </span>
           ) : null}
         </div>
-        {contextPct != null && contextPct > 0 && (
+        {contextPct != null && contextPct > 0 && (() => {
+          const safeContextPct = Math.min(100, Math.max(0, Math.round(contextPct)));
+          return (
           <div className="cc-status-right">
-            <span className={`cc-ctx-badge ${contextPct >= 80 ? "cc-ctx-badge--warn" : ""}`}>
-              Context <NumberTicker value={contextPct} />%
+            <span className={`cc-ctx-badge ${safeContextPct >= 80 ? "cc-ctx-badge--warn" : ""}`}>
+              Context <NumberTicker value={safeContextPct} />%
             </span>
             {autoCompactAt != null && autoCompactAt > 0 && (
               <span className="cc-ctx-compact-hint">Auto compact at {autoCompactAt}%</span>
             )}
           </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );

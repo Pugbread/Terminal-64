@@ -11,103 +11,23 @@ import {
 import { useClaudeStore, type ClaudeTask, type PendingQuestionItem } from "../stores/claudeStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import type { ToolCall, HookEventPayload, HookEvent, HookEventType } from "../lib/types";
-
-// --- Claude CLI stream JSON types ---
-
-interface ClaudeUsage {
-  input_tokens?: number;
-  cache_creation_input_tokens?: number;
-  cache_read_input_tokens?: number;
-  output_tokens?: number;
-}
-
-interface ClaudeContentBlock {
-  type: string;
-  text?: string;
-  thinking?: string;
-  id?: string;
-  name?: string;
-  input?: Record<string, unknown>;
-  content?: string | ClaudeContentBlock[];
-  tool_use_id?: string;
-  is_error?: boolean;
-  parentToolUseId?: string;
-}
-
-interface ClaudeQuestion {
-  question?: string;
-  text?: string;
-  description?: string;
-  header?: string;
-  options?: (string | { label?: string; description?: string })[];
-  multiSelect?: boolean;
-}
-
-interface ClaudeMcpServerRaw {
-  name?: string;
-  status?: string;
-  error?: string;
-  type?: string;
-  transport?: string;
-  scope?: string;
-  tools?: { name?: string; description?: string }[];
-}
-
-interface ClaudeModelUsageEntry {
-  contextWindow?: number;
-  [key: string]: unknown;
-}
-
-interface PermissionRequestPayload {
-  request_id: string;
-  session_id: string;
-  tool_name: string;
-  tool_input: Record<string, unknown>;
-}
-
-/** Loosely-typed parsed event from the Claude CLI stream-JSON output.
- *  The CLI emits many event shapes — this captures common fields. */
-interface ClaudeStreamEvent {
-  type: string;
-  subtype?: string;
-  event?: ClaudeStreamEvent;
-  parent_tool_use_id?: string;
-  model?: string;
-  mcp_servers?: ClaudeMcpServerRaw[];
-  content_block?: { type: string; id?: string; name?: string; thinking?: string };
-  delta?: {
-    type: string;
-    text?: string;
-    thinking?: string;
-    partial_json?: string;
-    stop_reason?: string;
-    stop_sequence?: string | null;
-  };
-  message?: {
-    content?: ClaudeContentBlock[];
-    usage?: ClaudeUsage;
-    stop_reason?: string;
-    attachments?: ClaudeAttachment[];
-  };
-  content?: ClaudeContentBlock[];
-  usage?: ClaudeUsage;
-  total_cost_usd?: number;
-  output_tokens?: number;
-  is_error?: boolean;
-  result?: string;
-  modelUsage?: Record<string, ClaudeModelUsageEntry>;
-  // Top-level error events from Claude CLI (rate limit, API error, overloaded, etc.)
-  error?: { type?: string; message?: string } | string;
-  message_text?: string;
-}
-
-interface ClaudeAttachment {
-  type: string;
-  message?: string;
-  path?: string;
-  stderr?: string;
-  max_turns?: number;
-}
+import {
+  getClaudeContextWindowForModel,
+  type ClaudeContentBlock,
+  type ClaudeQuestion,
+  type ClaudeStreamEvent,
+  type PermissionRequestPayload,
+} from "../lib/claudeEventDecoder";
+import {
+  classifyCodexItem,
+  codexItemDisplayName,
+  codexItemInput,
+  codexItemIsError,
+  codexItemResultText,
+  getCodexContextWindow,
+  type CodexNdjsonEvent,
+  type CodexPendingItem,
+} from "../lib/codexEventDecoder";
 
 const sessionToolMaps = new Map<string, Map<string, string>>();
 const sessionFilePathMaps = new Map<string, Map<string, string>>();
@@ -148,69 +68,10 @@ function evictIfNeeded<V>(map: Map<string, V>) {
 // Older event names that some CLI builds emit at the top level
 // (`agent_message`, `agent_reasoning`, `tool_use`, `tool_result`,
 // `task_complete`, `session_configured`) are accepted as aliases.
-interface CodexItem {
-  id?: string;
-  item_type?: string;
-  type?: string;
-  text?: string;
-  // command_execution / local_shell_call: command may be a string or an
-  // argv-style string array; exit_code surfaces shell failure for is_error.
-  command?: string | string[];
-  args?: string[];
-  exit_code?: number;
-  // file_change: which file + summary of the change.
-  path?: string;
-  change?: string;
-  // mcp_tool_call: server + tool + arguments.
-  tool_name?: string;
-  server?: string;
-  // web_search: query nested under .action; older shapes put it at top-level.
-  query?: string;
-  action?: { type?: string; query?: string; queries?: string[] };
-  output?: unknown;
-  status?: string;
-  name?: string;
-  arguments?: unknown;
-  result?: unknown;
-}
-
-interface CodexUsage {
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  output_tokens?: number;
-}
-
-interface CodexNdjsonEvent {
-  type: string;
-  thread_id?: string;
-  threadId?: string;
-  turn_id?: string;
-  message?: string;
-  text?: string;
-  delta?: string;
-  error?: { message?: string } | string;
-  item?: CodexItem;
-  // top-level alias fields some builds use
-  command?: string;
-  output?: string;
-  result?: unknown;
-  // turn.completed carries token totals at the top level on the new schema,
-  // and inside payload on the legacy app-server-style schema.
-  usage?: CodexUsage;
-  payload?: { usage?: CodexUsage };
-}
-
 // Per-session in-flight item state — mirrors the Claude pendingBlocks map.
 // When `item.started` for an agent_message arrives we treat its incremental
 // text as streaming; tool items get tracked so the matching `item.completed`
 // can flip status to completed with output.
-interface CodexPendingItem {
-  itemId: string;
-  kind: "agent_message" | "reasoning" | "tool" | "other";
-  toolName: string;
-  text: string;
-  inputArgs: Record<string, unknown>;
-}
 const codexPending = new Map<string, Map<string, CodexPendingItem>>();
 // Tracks whether the active turn's assistant message has been finalized
 // (e.g. via item.completed/agent_message), so turn.completed doesn't double up.
@@ -223,93 +84,6 @@ function getCodexItemMap(sessionId: string): Map<string, CodexPendingItem> {
     codexPending.set(sessionId, map);
   }
   return map;
-}
-
-function classifyCodexItem(itemType: string | undefined): CodexPendingItem["kind"] {
-  if (!itemType) return "other";
-  if (itemType === "agent_message" || itemType === "assistant_message") return "agent_message";
-  if (itemType === "reasoning" || itemType === "agent_reasoning") return "reasoning";
-  // command_execution, file_change, mcp_tool_call, web_search, … — all UI tools
-  return "tool";
-}
-
-function codexCommandString(item: CodexItem): string {
-  if (typeof item.command === "string") return item.command;
-  if (Array.isArray(item.command)) return item.command.join(" ");
-  if (Array.isArray(item.args)) return item.args.join(" ");
-  return "";
-}
-
-function codexBasename(p: string): string {
-  // Cheap basename — Codex paths are POSIX-ish but we still strip both
-  // separators to be safe under Windows-mounted rollouts.
-  const m = p.split(/[/\\]/).filter(Boolean);
-  return m.length > 0 ? m[m.length - 1]! : p;
-}
-
-function codexItemDisplayName(item: CodexItem): string {
-  const kind = item.item_type ?? item.type ?? "";
-  if (kind === "command_execution" || kind === "local_shell_call") {
-    const cmd = codexCommandString(item);
-    return cmd ? `$ ${cmd}` : "command";
-  }
-  if (kind === "file_change") {
-    if (item.path) return codexBasename(item.path);
-    return "file_change";
-  }
-  if (kind === "mcp_tool_call") {
-    if (item.server && item.tool_name) return `${item.server}/${item.tool_name}`;
-    return item.tool_name || item.name || "mcp_tool";
-  }
-  if (kind === "web_search" || kind === "web_search_call") {
-    return item.action?.query || item.query || "web_search";
-  }
-  return item.name || kind || "tool";
-}
-
-function codexItemInput(item: CodexItem): Record<string, unknown> {
-  const kind = item.item_type ?? item.type ?? "";
-  const out: Record<string, unknown> = {};
-
-  if (kind === "command_execution" || kind === "local_shell_call") {
-    const cmd = codexCommandString(item);
-    if (cmd) out.command = cmd;
-  } else if (kind === "file_change") {
-    if (item.path) out.path = item.path;
-    if (item.change) out.change = item.change;
-  } else if (kind === "mcp_tool_call") {
-    if (item.tool_name) out.tool_name = item.tool_name;
-    if (item.server) out.server = item.server;
-    if (item.arguments && typeof item.arguments === "object") {
-      out.arguments = item.arguments;
-    }
-  } else if (kind === "web_search" || kind === "web_search_call") {
-    const q = item.action?.query || item.query;
-    if (q) out.query = q;
-    if (item.action?.queries) out.queries = item.action.queries;
-  } else {
-    if (item.command !== undefined) out.command = codexCommandString(item) || item.command;
-    if (item.arguments && typeof item.arguments === "object") {
-      Object.assign(out, item.arguments as Record<string, unknown>);
-    }
-  }
-  return out;
-}
-
-function codexItemResultText(item: CodexItem): string {
-  if (typeof item.output === "string") return item.output;
-  if (item.result !== undefined) {
-    return typeof item.result === "string" ? item.result : JSON.stringify(item.result);
-  }
-  if (typeof item.text === "string") return item.text;
-  if (item.output !== undefined) return JSON.stringify(item.output);
-  return "";
-}
-
-function codexItemIsError(item: CodexItem): boolean {
-  if (item.status === "failed" || item.status === "error") return true;
-  if (typeof item.exit_code === "number" && item.exit_code !== 0) return true;
-  return false;
 }
 
 // RAF batching for streaming text — coalesces deltas into one store update per frame
@@ -343,21 +117,6 @@ const HIDDEN_TOOLS = new Set([
 // reports 200k which makes the percentage overshoot (e.g. 200% at 40% real
 // usage). Detect the `[1m]` suffix the CLI appends to extended-context model
 // IDs and return 1M so the ratio is correct regardless of what the CLI says.
-function getContextWindowForModel(model: string): number {
-  if (/\[1m\]|-1m\b|:1m\b/i.test(model)) return 1_000_000;
-  return 200_000;
-}
-
-/// Codex / OpenAI context-window estimates by model id. Source: OpenAI docs
-/// (gpt-5.x family ships with 400K). Falls back to 256K for unknown ids.
-function getCodexContextWindow(model: string | undefined | null): number {
-  if (!model) return 256_000;
-  const m = model.toLowerCase();
-  if (m.startsWith("gpt-5")) return 400_000;
-  if (m.startsWith("o3") || m.startsWith("o4")) return 200_000;
-  return 256_000;
-}
-
 /** Sum all input token fields to get total context usage for a turn */
 function totalInputTokens(usage: ClaudeUsage | undefined): number {
   if (!usage) return 0;
@@ -546,7 +305,7 @@ export function useClaudeEvents() {
           // Only update contextMax — preserve existing contextUsed so the
           // topbar badge doesn't vanish between turns.
           const prevUsed = store.sessions[session_id]?.contextUsed || 0;
-          store.setContextUsage(session_id, prevUsed, getContextWindowForModel(model));
+          store.setContextUsage(session_id, prevUsed, getClaudeContextWindowForModel(model));
           if (Array.isArray(parsed.mcp_servers)) {
             store.setMcpServers(session_id, parsed.mcp_servers.map((s) => {
               const tools = Array.isArray(s.tools) ? s.tools.map((t) => ({
@@ -661,7 +420,7 @@ export function useClaudeEvents() {
           const totalIn = totalInputTokens(msgUsage);
           if (totalIn > 0) {
             const sess = store.sessions[session_id];
-            const ctxMax = sess?.contextMax || getContextWindowForModel(sess?.model || "");
+            const ctxMax = sess?.contextMax || getClaudeContextWindowForModel(sess?.model || "");
             store.setContextUsage(session_id, totalIn, ctxMax);
           }
 
@@ -716,7 +475,7 @@ export function useClaudeEvents() {
           const totalIn = totalInputTokens(parsed.usage);
           if (totalIn > 0) {
             const sess = store.sessions[session_id];
-            const ctxMax = sess?.contextMax || getContextWindowForModel(sess?.model || "");
+            const ctxMax = sess?.contextMax || getClaudeContextWindowForModel(sess?.model || "");
             store.setContextUsage(session_id, totalIn, ctxMax);
           }
           // Surface non-normal stop reasons (refusal, pause_turn, max_tokens) — these
@@ -790,7 +549,7 @@ export function useClaudeEvents() {
           if (totalIn || output_tokens) store.addTokens(session_id, totalIn + output_tokens);
 
           const sess = store.sessions[session_id];
-          const modelCtx = getContextWindowForModel(sess?.model || "");
+          const modelCtx = getClaudeContextWindowForModel(sess?.model || "");
           let ctxMax = sess?.contextMax || modelCtx;
           if (parsed.modelUsage) {
             for (const modelData of Object.values(parsed.modelUsage)) {
@@ -1034,7 +793,30 @@ export function useClaudeEvents() {
           } else if (kind === "tool") {
             const result = codexItemResultText(item);
             const isError = codexItemIsError(item);
-            store.updateToolResult(session_id, item.id, result, isError);
+            if (!tracked) {
+              store.finalizeAssistantMessage(session_id, "", [{
+                id: item.id,
+                name: codexItemDisplayName(item),
+                input: codexItemInput(item),
+              }]);
+              codexAssistantFinalized.add(session_id);
+            }
+            store.updateToolResult(session_id, item.id, result, isError, {
+              name: codexItemDisplayName(item),
+              input: codexItemInput(item),
+            });
+            const itemType = item.item_type ?? item.type;
+            if (itemType === "file_change") {
+              const changedPaths = [
+                item.path,
+                ...(Array.isArray(item.changes)
+                  ? item.changes.map((change) => change?.path)
+                  : []),
+              ].filter((path): path is string => typeof path === "string" && path.length > 0);
+              if (changedPaths.length > 0) {
+                store.addModifiedFiles(session_id, changedPaths);
+              }
+            }
           }
           // reasoning + other item kinds are silent for now.
           itemMap.delete(item.id);
@@ -1099,7 +881,7 @@ export function useClaudeEvents() {
             const inputUsed = usage.input_tokens || 0;
             const ctxMax =
               getCodexContextWindow(sess?.selectedModel ?? sess?.model ?? null);
-            store.setContextUsage(session_id, inputUsed, ctxMax);
+            store.setContextUsage(session_id, Math.min(inputUsed, ctxMax), ctxMax);
           }
           store.setStreaming(session_id, false);
           store.clearStreamingText(session_id);

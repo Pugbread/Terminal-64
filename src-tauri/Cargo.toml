@@ -37,6 +37,7 @@ rand = "0.8"
 zip = "2"
 rusqlite = { version = "0.39", features = ["bundled"] }
 zerocopy = "0.8"
+toml_edit = "0.25"
 # Voice control: mic capture + resample + ASR
 cpal = "0.15"
 rubato = "0.15"

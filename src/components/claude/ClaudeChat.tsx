@@ -7,7 +7,7 @@ import { useClaudeStore } from "../../stores/claudeStore";
 import { useShallow } from "zustand/react/shallow";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useThemeStore } from "../../stores/themeStore";
-import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, createCodexSession, sendCodexPrompt, cancelCodex, closeCodexSession, loadCodexSessionHistory, listSlashCommands, resolvePermission, readFile, readFileBase64, writeFile, loadSessionHistoryTail, mapHistoryMessages, findRewindUuid, truncateSessionJsonlByMessages, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, deleteFiles, shellExec, filterUntrackedFiles, ensureT64Mcp, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile, savePastedImage, resolveSkillPrompt } from "../../lib/tauriApi";
+import { createClaudeSession, sendClaudePrompt, cancelClaude, closeClaudeSession, createCodexSession, sendCodexPrompt, cancelCodex, closeCodexSession, loadCodexSessionHistory, listSlashCommands, resolvePermission, readFile, readFileBase64, writeFile, loadSessionHistoryTail, mapHistoryMessages, findRewindUuid, truncateSessionJsonlByMessages, truncateCodexRollout, forkSessionJsonl, listMcpServers, createCheckpoint, restoreCheckpoint, cleanupCheckpoints, deleteFiles, shellExec, filterUntrackedFiles, ensureT64Mcp, ensureCodexMcp, ensureCodexSkills, setT64DelegationEnv, getDelegationPort, getDelegationSecret, getAppDir, createMcpConfigFile, savePastedImage, resolveSkillPrompt } from "../../lib/tauriApi";
 import type { SlashCommand, PermissionMode, McpServer, HookEvent, ChatMessage as ChatMessageData, ToolCall, CreateCodexRequest, SendCodexPromptRequest } from "../../lib/types";
 import { decodeCodexPermission, type ProviderId } from "../../lib/providers";
 import type { McpServerStatus } from "../../stores/claudeStore";
@@ -22,6 +22,10 @@ import PromptIsland from "./PromptIsland";
 import { registerChatInputVoiceActions, unregisterChatInputVoiceActions, useVoiceStore, type ChatInputVoiceActions } from "../../stores/voiceStore";
 import { useDelegationStore } from "../../stores/delegationStore";
 import { endDelegation } from "../../hooks/useDelegationOrchestrator";
+import { useChatSend } from "../../hooks/useChatSend";
+import { useChatFork } from "../../hooks/useChatFork";
+import { useChatRewind } from "../../hooks/useChatRewind";
+import { useDelegationSpawn } from "../../hooks/useDelegationSpawn";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { v4 as uuidv4 } from "uuid";
 import { formatDuration } from "../../lib/constants";
@@ -36,6 +40,7 @@ import {
 } from "../ui/DropdownMenu";
 import "./ClaudeChat.css";
 import "../ui/DropdownMenu.css";
+import { cancelProviderSession, closeProviderSession } from "../../lib/providerRuntime";
 
 // Provider lookup. `provider` is non-optional on ClaudeSession but the
 // fallback covers the brief window between mount and createSession.
@@ -44,11 +49,11 @@ function sessionProviderFor(sessionId: string): ProviderId {
 }
 
 async function cancelByProvider(sessionId: string, provider: ProviderId): Promise<void> {
-  return provider === "openai" ? cancelCodex(sessionId) : cancelClaude(sessionId);
+  return cancelProviderSession(sessionId, provider);
 }
 
 async function closeByProvider(sessionId: string, provider: ProviderId): Promise<void> {
-  return provider === "openai" ? closeCodexSession(sessionId) : closeClaudeSession(sessionId);
+  return closeProviderSession(sessionId, provider);
 }
 
 let monacoThemeForBg = "";
@@ -240,14 +245,27 @@ function ChatFooter({
       store.addUserMessage(sessionId, `Answered questions:\n${formatted}`);
       const provider = sessionProviderFor(sessionId);
       const followupPrompt = `Here are my answers to your questions:\n${formatted}\n\nProceed based on these choices. Do not ask the same questions again.`;
+      const currentSession = useClaudeStore.getState().sessions[sessionId];
+      const codexBase = {
+        session_id: sessionId,
+        cwd: effectiveCwd,
+        prompt: followupPrompt,
+        ...(model ? { model } : {}),
+        ...(effort ? { effort } : {}),
+        ...decodeCodexPermission(currentSession?.selectedCodexPermission || "workspace"),
+      };
       const sendPromise = provider === "openai"
-        ? sendCodexPrompt({
+        ? (currentSession?.codexThreadId ? sendCodexPrompt({
+            ...codexBase,
+            thread_id: currentSession.codexThreadId,
+          }) : createCodexSession({
             session_id: sessionId,
             cwd: effectiveCwd,
             prompt: followupPrompt,
             ...(model ? { model } : {}),
             ...(effort ? { effort } : {}),
-          })
+            ...decodeCodexPermission(currentSession?.selectedCodexPermission || "workspace"),
+          }))
         : sendClaudePrompt(
             {
               session_id: sessionId,
@@ -450,8 +468,13 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   // the global default (so the next new session inherits the user's habit).
   const persistedSelectedModel = useClaudeStore((s) => s.sessions[sessionId]?.selectedModel ?? null);
   const persistedSelectedEffort = useClaudeStore((s) => s.sessions[sessionId]?.selectedEffort ?? null);
-  const selectedModel = persistedSelectedModel ?? useSettingsStore.getState().claudeModel ?? "sonnet";
-  const selectedEffort = persistedSelectedEffort ?? useSettingsStore.getState().claudeEffort ?? "high";
+  const providerDefaults = PROVIDER_CONFIG[selectedProvider];
+  const globalModel = useSettingsStore.getState().claudeModel;
+  const globalEffort = useSettingsStore.getState().claudeEffort;
+  const selectedModel = persistedSelectedModel
+    ?? (providerDefaults.models.some((m) => m.id === globalModel) ? globalModel : providerDefaults.defaultModel);
+  const selectedEffort = persistedSelectedEffort
+    ?? (providerDefaults.efforts.some((e) => e.id === globalEffort) ? globalEffort : providerDefaults.defaultEffort);
   const setSelectedModel = useCallback((id: string) => {
     useClaudeStore.getState().setSelectedModel(sessionId, id);
   }, [sessionId]);
@@ -546,7 +569,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   }, [selectedProvider]);
   const t64Commands = useRef<SlashCommand[]>([
     { name: "loop", description: "Run a prompt on a loop (e.g. /loop 5m improve the code)", usage: "/loop [interval] <prompt> — default 10m. /loop stop to cancel.", source: "Terminal 64" },
-    { name: "delegate", description: "Split work into parallel sub-sessions", usage: "/delegate <prompt> — Claude plans the task split, spawns agents with MCP team chat.", source: "Terminal 64" },
+    { name: "delegate", description: "Split work into parallel sub-sessions", usage: "/delegate <prompt> — Plans the task split, spawns agents with MCP team chat.", source: "Terminal 64" },
     { name: "reload-plugins", description: "Reload slash commands, skills, and MCP servers", usage: "/reload-plugins — re-fetches all available commands and MCP configs.", source: "Terminal 64" },
   ]);
   const reloadCommands = useCallback(() => {
@@ -803,132 +826,16 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     return () => { if (unlisten) unlisten(); };
   }, [sessionId]);
 
-  const actualSend = useCallback(
-    async (prompt: string, permissionOverride?: PermissionMode) => {
-      const sess = useClaudeStore.getState().sessions[sessionId];
-      const started = sess?.hasBeenStarted ?? false;
-      const provider = sessionProviderFor(sessionId);
-      try {
-        if (sess && sess.modifiedFiles.length > 0) {
-          const results = await Promise.allSettled(
-            sess.modifiedFiles.map(async (fp) => {
-              try { return { path: fp, content: await readFile(fp) }; }
-              catch { return { path: fp, content: "" }; }
-            })
-          );
-          const snapshots = results.map((r) => (r as PromiseFulfilledResult<{ path: string; content: string }>).value);
-          createCheckpoint(sessionId, sess.promptCount + 1, snapshots).catch(() => {});
-        }
-        if (!started && (!effectiveCwd || effectiveCwd === ".")) {
-          useClaudeStore.getState().setError(sessionId, "No working directory set. Create a new session.");
-          return;
-        }
-        // Ensure CWD is always stored on the session for rewind/fork
-        if (effectiveCwd && effectiveCwd !== "." && (!sess?.cwd || sess.cwd !== effectiveCwd)) {
-          useClaudeStore.getState().setCwd(sessionId, effectiveCwd);
-        }
-
-        if (provider === "openai") {
-          // Codex doesn't share the same MCP/.mcp.json wiring or rewind/fork
-          // primitives. Map the Codex permission preset (read-only/workspace/
-          // full-auto/yolo) onto sandbox/approval/full_auto/yolo wire fields.
-          const codexPerm = decodeCodexPermission(selectedCodexPermission);
-          // session_id stays our T64-local UUID for ALL calls so events route
-          // back to the correct store row. thread_id (captured from
-          // `thread.started` of the first turn) is what `codex exec resume`
-          // needs as its positional arg — we pass it as a separate field so
-          // the backend can use it without clobbering the emit key.
-          const threadId = sess?.codexThreadId ?? null;
-          const codexCreate: CreateCodexRequest = {
-            session_id: sessionId,
-            cwd: effectiveCwd,
-            prompt,
-            ...(selectedModel ? { model: selectedModel } : {}),
-            ...(selectedEffort ? { effort: selectedEffort } : {}),
-            ...codexPerm,
-          };
-          const codexSend: SendCodexPromptRequest = {
-            ...codexCreate,
-            ...(threadId ? { thread_id: threadId } : {}),
-          };
-          console.log("[send] Codex prompt:", { started, sessionId, threadId, cwd: effectiveCwd, promptPreview: prompt.slice(0, 80) });
-          if (started) {
-            try {
-              await sendCodexPrompt(codexSend);
-            } catch (err) {
-              console.log("[send] sendCodexPrompt failed, falling back to createCodexSession:", err);
-              await createCodexSession(codexCreate);
-            }
-          } else {
-            try {
-              await createCodexSession(codexCreate);
-            } catch {
-              await sendCodexPrompt(codexSend);
-            }
-          }
-        } else {
-          const req = {
-            session_id: sessionId, cwd: effectiveCwd, prompt,
-            permission_mode: permissionOverride || permMode!.id,
-            ...(selectedModel ? { model: selectedModel } : {}),
-            ...(selectedEffort ? { effort: selectedEffort } : {}),
-          };
-          // Ensure T64 MCP server is in .mcp.json before first session creation
-          if (!started) {
-            await ensureT64Mcp(effectiveCwd).catch(() => {});
-          }
-          // Use --resume if session was ever started (survives rewind/cancel),
-          // otherwise create new. Falls back to the other on failure.
-          // After rewind, pass --resume-session-at to slice conversation at the rewind point
-          // (one-shot: cleared after use so subsequent prompts resume normally).
-          const resumeAtUuid = sess?.resumeAtUuid || undefined;
-          if (resumeAtUuid) {
-            useClaudeStore.getState().setResumeAtUuid(sessionId, null);
-          }
-          // Fork support: use --fork-session <parentId> with --resume on first prompt
-          const forkParent = sess?.forkParentSessionId || undefined;
-          if (forkParent) {
-            useClaudeStore.getState().setForkParentSessionId(sessionId, null);
-          }
-          const skipOw = sess?.skipOpenwolf || false;
-          console.log("[send] Sending prompt:", { started, sessionId, cwd: effectiveCwd, resumeAtUuid, forkParent, skipOw, promptPreview: prompt.slice(0, 80) });
-          if (forkParent) {
-            // Forked session's first prompt — use --fork-session so the CLI
-            // creates this session's JSONL from the parent's chain. loadFromDisk
-            // sets hasBeenStarted=true for the hydrated messages, so we can't
-            // rely on !started here; the presence of forkParent is the signal.
-            await sendClaudePrompt({ ...req, cwd: effectiveCwd, fork_session: forkParent }, skipOw);
-            console.log("[send] sendClaudePrompt (--fork-session) succeeded");
-          } else if (started) {
-            try {
-              await sendClaudePrompt({ ...req, cwd: effectiveCwd, ...(resumeAtUuid ? { resume_session_at: resumeAtUuid } : {}) }, skipOw);
-              console.log("[send] sendClaudePrompt (--resume) succeeded");
-            } catch (resumeErr) {
-              console.log("[send] sendClaudePrompt failed, falling back to createClaudeSession:", resumeErr);
-              // Restore the rewind UUID so the next attempt can use it
-              if (resumeAtUuid) {
-                useClaudeStore.getState().setResumeAtUuid(sessionId, resumeAtUuid);
-                console.log("[send] Restored resumeAtUuid for retry:", resumeAtUuid);
-              }
-              // Session file might not exist yet (edge case) — try create
-              await createClaudeSession(req, skipOw);
-            }
-          } else {
-            try {
-              await createClaudeSession(req, skipOw);
-            } catch {
-              // Session might already exist from disk — try resume
-              await sendClaudePrompt({ ...req, cwd: effectiveCwd }, skipOw);
-            }
-          }
-        }
-        incrementPromptCount(sessionId);
-      } catch (err) {
-        useClaudeStore.getState().setError(sessionId, String(err));
-      }
-    },
-    [sessionId, effectiveCwd, permMode, selectedModel, selectedEffort, selectedCodexPermission, incrementPromptCount]
-  );
+  const actualSend = useChatSend({
+    sessionId,
+    effectiveCwd,
+    permissionMode: permMode.id,
+    selectedModel,
+    selectedEffort,
+    selectedCodexPermission,
+    incrementPromptCount,
+  });
+  const rewindHistory = useChatRewind();
 
   const handleSend = useCallback(
     async (text: string, permissionOverride?: PermissionMode, fromDiscord = false) => {
@@ -986,7 +893,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
         const userGoal = delegateMatch[1]!.trim();
         if (!userGoal) return;
 
-        const skillPrompt = `You are orchestrating a delegation. The user wants to split work across multiple parallel Claude agents.
+        const skillPrompt = `You are orchestrating a delegation. The user wants to split work across multiple parallel coding agents.
 
 USER'S GOAL: ${userGoal}
 
@@ -1233,10 +1140,14 @@ Rules:
       // permission error, etc.) we surface the error and leave the UI state intact
       // so the user hasn't "lost" their conversation on a failed rewind.
       try {
-        const result = await truncateSessionJsonlByMessages(sessionId, rewindCwd, keepMessages);
-        console.log("[rewind] Undo-send JSONL truncated:", result);
+        await rewindHistory({
+          provider: rewindProvider,
+          sessionId,
+          cwd: rewindCwd,
+          keepMessages,
+        });
       } catch (err) {
-        console.error("[rewind] Undo-send JSONL truncation failed:", err);
+        console.error("[rewind] Undo-send truncation failed:", err);
         useClaudeStore.getState().setError(sessionId, `Rewind failed: ${err}`);
         return;
       }
@@ -1244,8 +1155,6 @@ Rules:
       // without blocking on findRewindUuid's whole-file parse.
       useClaudeStore.getState().truncateFromMessage(sessionId, messageId);
       setRewindText(targetMsg!.content);
-      const uuid = await findRewindUuid(sessionId, rewindCwd, keepMessages);
-      useClaudeStore.getState().setResumeAtUuid(sessionId, uuid);
       console.log("[rewind] === UNDO-SEND COMPLETE ===", { prefill: targetMsg!.content.slice(0, 80) });
       return;
     }
@@ -1297,10 +1206,14 @@ Rules:
       // store — the user keeps their conversation view and sees an error toast
       // rather than a ghost conversation with a stale JSONL on disk.
       try {
-        const result = await truncateSessionJsonlByMessages(sessionId, rewindCwd, keepMessages);
-        console.log("[rewind] JSONL truncated:", result);
+        await rewindHistory({
+          provider: rewindProvider,
+          sessionId,
+          cwd: rewindCwd,
+          keepMessages,
+        });
       } catch (err) {
-        console.error("[rewind] JSONL truncation failed:", err);
+        console.error("[rewind] truncation failed:", err);
         useClaudeStore.getState().setError(sessionId, `Rewind failed: ${err}`);
         return;
       }
@@ -1320,10 +1233,6 @@ Rules:
       // will pass --resume-session-at <uuid> so Claude CLI slices its own
       // parentUuid chain correctly (matching how Claude's own /rewind works:
       // append-only JSONL).
-      const uuid = await findRewindUuid(sessionId, rewindCwd, keepMessages);
-      console.log("[rewind] Found rewind UUID:", uuid, "for keepMessages:", keepMessages);
-      useClaudeStore.getState().setResumeAtUuid(sessionId, uuid);
-
       // Force-cancel any active delegation group AND collect modifiedFiles from
       // ALL groups ever spawned by this parent — parentToGroup only tracks the
       // most recent group, so previous completed delegations' child files would
@@ -1416,55 +1325,9 @@ Rules:
         rewindContent: rewindContent?.slice(0, 80),
       });
     }
-  }, [sessionId, effectiveCwd]);
+  }, [sessionId, effectiveCwd, rewindHistory]);
 
-  const handleFork = useCallback(async (messageId: string) => {
-    const store = useClaudeStore.getState();
-    const sess = store.sessions[sessionId];
-    if (!sess) return;
-
-    const msgIdx = sess.messages.findIndex(m => m.id === messageId);
-    if (msgIdx < 0) return;
-    const forkedMessages = sess.messages.slice(0, msgIdx);
-
-    const canvas = useCanvasStore.getState();
-    const parentPanel = canvas.terminals.find(t => t.terminalId === sessionId);
-    const x = parentPanel?.x ?? 80;
-    const y = (parentPanel?.y ?? 80) - (parentPanel?.height ?? 400) - 20;
-    const w = parentPanel?.width;
-    const h = parentPanel?.height;
-
-    const newPanel = canvas.addClaudeTerminalAt(
-      effectiveCwd, false, undefined, undefined, x, y, w, h,
-    );
-
-    // Pre-create the fork's JSONL on disk by copying + truncating the parent's.
-    // Without this, `--resume <newSessionId>` on the first prompt fails because
-    // the CLI can't find a JSONL at that path. fork_session_jsonl does the
-    // copy + truncate atomically so the first prompt finds a ready session.
-    // Codex doesn't have a JSONL fork primitive; skip it and seed the new
-    // session's transcript so the adapter can render the prefix on first send.
-    if (forkedMessages.length > 0 && sess.provider === "anthropic") {
-      try {
-        await forkSessionJsonl(sessionId, newPanel.terminalId, effectiveCwd, msgIdx);
-        console.log("[fork] Pre-created fork JSONL:", newPanel.terminalId);
-      } catch (err) {
-        console.warn("[fork] forkSessionJsonl failed — falling back to --fork-session:", err);
-      }
-    }
-
-    store.createSession(newPanel.terminalId, undefined, false, undefined, sess.cwd, sess.provider);
-    if (sess.provider === "openai" && sess.codexThreadId) {
-      store.setCodexThreadId(newPanel.terminalId, sess.codexThreadId);
-    }
-    if (forkedMessages.length > 0) {
-      store.loadFromDisk(newPanel.terminalId, forkedMessages);
-      if (sess.provider === "openai") {
-        store.setSeedTranscript(newPanel.terminalId, forkedMessages);
-      }
-    }
-    store.setCwd(newPanel.terminalId, effectiveCwd);
-  }, [sessionId, effectiveCwd]);
+  const handleFork = useChatFork({ sessionId, effectiveCwd });
 
   const handleEditClick = useCallback(async (tcId: string, filePath: string, _oldStr: string, newStr: string) => {
     // Save scroll position before opening overlay
@@ -1555,100 +1418,13 @@ Rules:
   const hasTasks = (session?.tasks.length ?? 0) > 0;
   const hasSideContent = hasPlan || hasTasks;
 
-  const spawnDelegation = useCallback(
-    async (tasks: { description: string }[], sharedContext: string) => {
-      const delStore = useDelegationStore.getState();
-      const group = delStore.createGroup(sessionId, tasks, "auto", sharedContext || undefined, permMode.id);
-
-      // Spawn shared chat panel below the parent
-      const canvas = useCanvasStore.getState();
-      const parentPanel = canvas.terminals.find((t) => t.terminalId === sessionId);
-      const parentW = parentPanel?.width || 600;
-      const parentH = parentPanel?.height || 400;
-      canvas.addSharedChatPanel(
-        group.id,
-        parentPanel?.x || 80,
-        (parentPanel?.y || 80) + parentH + 20,
-        parentW,
-        Math.min(300, parentH * 0.6),
-      );
-
-      let delegationPort = 0;
-      let delegationSecret = "";
-      try {
-        delegationPort = await getDelegationPort();
-        delegationSecret = await getDelegationSecret();
-      } catch (err) {
-        console.warn("[delegation] Failed to get port/secret:", err);
-      }
-
-      // Resolve a real CWD — never use "." which resolves to process CWD (/ in production)
-      const parentSess = useClaudeStore.getState().sessions[sessionId];
-      const sessCwd = parentSess?.cwd;
-      const appDir = (effectiveCwd && effectiveCwd !== "." && effectiveCwd !== "/")
-        ? effectiveCwd
-        : (sessCwd && sessCwd !== "." && sessCwd !== "/")
-          ? sessCwd
-          : "";
-      // Inherit parent's skipOpenwolf so delegating from widget/skill sessions doesn't
-      // create .wolf/ in the widget folder via auto-init.
-      const inheritSkipOpenwolf = !!parentSess?.skipOpenwolf;
-
-      let mcpConfigPath = "";
-      if (delegationPort > 0 && delegationSecret) {
-        try {
-          mcpConfigPath = await createMcpConfigFile(delegationPort, delegationSecret, group.id, "Agent");
-        } catch (err) {
-          console.warn("[delegation] Failed to create MCP config:", err);
-        }
-      }
-
-      // Spawn headless child sessions — no canvas panels, ephemeral
-      group.tasks.forEach((task, i) => {
-        const childSessionId = uuidv4();
-        const childName = `[D] ${task.description.slice(0, 30)}`;
-
-        delStore.setTaskSessionId(group.id, task.id, childSessionId);
-        delStore.updateTaskStatus(group.id, task.id, "running");
-
-        const channelNote = delegationPort > 0
-          ? `\n\nIMPORTANT — Team Coordination via terminal-64 MCP:
-You are part of a team of ${tasks.length} agents working in the same codebase. You MUST use the team chat to coordinate:
-
-1. send_to_team — Post a message to the shared team chat. Do this:
-   • At the START of your work (announce what you're about to do)
-   • Before modifying any shared files (to avoid conflicts)
-   • After completing major milestones
-   • If you encounter issues or blockers
-2. read_team — Check what other agents have posted. Do this BEFORE starting work and periodically during long tasks to stay aware of what others are doing.
-3. report_done — When your task is fully complete, call this with a summary of what you did and what files you changed.
-
-Coordinate actively. If another agent is working on a file you need, mention it in team chat and work around it. Communication prevents conflicts.`
-          : "";
-
-        const initialPrompt = `Context: ${sharedContext}\n\nYour task: ${task.description}\n\nYou are agent "Agent ${i + 1}" — one of ${tasks.length} parallel agents. Focus on YOUR specific task only.${channelNote}\n\nWhen done, call report_done (if available) or state your task is complete.`;
-
-        // Create ephemeral session in store (not saved to localStorage)
-        useClaudeStore.getState().createSession(childSessionId, childName, true, inheritSkipOpenwolf);
-        addUserMessage(childSessionId, initialPrompt);
-
-        setTimeout(() => {
-          createClaudeSession({
-            session_id: childSessionId,
-            cwd: appDir,
-            prompt: initialPrompt,
-            permission_mode: "bypass_all",
-            ...(mcpConfigPath ? { mcp_config: mcpConfigPath } : {}),
-            no_session_persistence: true,
-          }, inheritSkipOpenwolf).catch((err) => {
-            console.warn(`[delegation] Failed to start child ${childSessionId}:`, err);
-            delStore.updateTaskStatus(group.id, task.id, "failed", String(err));
-          });
-        }, i * 500);
-      });
-    },
-    [sessionId, effectiveCwd, addUserMessage],
-  );
+  const spawnDelegation = useDelegationSpawn({
+    sessionId,
+    effectiveCwd,
+    selectedProvider,
+    permissionMode: permMode.id,
+    addUserMessage,
+  });
 
   // Detect delegation blocks in assistant messages and auto-spawn (only when /delegate was used)
   const delegateRequested = useRef(false);
@@ -1994,10 +1770,8 @@ Coordinate actively. If another agent is working on a file you need, mention it 
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1L7 5L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
         <div className="cc-topbar-center">
-          {/* MCP servers — t64 built-in excluded from count but shown in dropdown.
-              Hidden for Codex sessions: the dropdown reads ~/.claude.json,
-              which is irrelevant to Codex's ~/.codex/config.toml MCP wiring. */}
-          {selectedProvider === "anthropic" && (() => {
+          {/* MCP servers — t64 built-in excluded from count but shown in dropdown. */}
+          {(() => {
             const userMcp = mcpServers.filter((s) => s.name !== "terminal-64");
             const hasError = mcpServers.some((s) => "status" in s && ((s as McpServerStatus).status === "failed" || (s as McpServerStatus).status === "error"));
             return (
@@ -2530,7 +2304,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                   isStreaming={session.isStreaming}
                   {...(panelColor ? { accentColor: panelColor } : {})}
                   streamingStartedAt={session.streamingStartedAt}
-                  slashCommands={selectedProvider === "openai" ? [] : slashCommands}
+                  slashCommands={slashCommands}
                   initialText={rewindText}
                   onInitialTextConsumed={() => setRewindText(null)}
                   {...(selectedProvider === "anthropic" ? {
@@ -2552,7 +2326,7 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                   draftPrompt={session.draftPrompt}
                   onDraftChange={(t) => setDraftPrompt(sessionId, t)}
                   onPasteImage={handlePasteImage}
-                  contextPct={session.contextMax > 0 ? Math.round((session.contextUsed / session.contextMax) * 100) : 0}
+                  contextPct={session.contextMax > 0 ? Math.min(100, Math.max(0, Math.round((session.contextUsed / session.contextMax) * 100))) : 0}
                   autoCompactAt={autoCompactEnabled ? autoCompactThreshold : 0}
                   {...(isActive ? { onRegisterVoiceActions: handleRegisterVoiceActions } : {})}
                   sessionId={sessionId}

@@ -13,7 +13,7 @@ interface ClaudeDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (cwd: string, skipPermissions: boolean, sessionName: string | undefined, provider: ProviderId) => void;
-  onReopen: (sessionId: string, cwd: string) => void;
+  onReopen: (sessionId: string, cwd: string, provider: ProviderId) => void;
 }
 
 function formatSize(bytes: number): string {
@@ -80,7 +80,7 @@ export default function ClaudeDialog({ isOpen, onClose, onConfirm, onReopen }: C
 
   const handleOpenSession = (sessionId: string) => {
     if (dir.trim()) addRecentDir(dir.trim());
-    onReopen(sessionId, dir.trim());
+    onReopen(sessionId, dir.trim(), provider);
     onClose();
   };
 

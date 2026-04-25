@@ -3,7 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { useClaudeStore } from "../stores/claudeStore";
 import { useDelegationStore } from "../stores/delegationStore";
 import { useCanvasStore } from "../stores/canvasStore";
-import { cancelClaude, sendClaudePrompt, cleanupDelegationGroup, clearT64DelegationEnv, deleteSessionJsonl, closeClaudeSession } from "../lib/tauriApi";
+import { cancelClaude, cancelCodex, createCodexSession, sendClaudePrompt, sendCodexPrompt, cleanupDelegationGroup, clearT64DelegationEnv, deleteSessionJsonl, closeClaudeSession, closeCodexSession } from "../lib/tauriApi";
+import { decodeCodexPermission } from "../lib/providers";
 import type { ChatMessage, ToolCall, HookEventPayload } from "../lib/types";
 
 const FORWARDING_PREFIX = "[Update from";
@@ -52,8 +53,14 @@ function purgeDelegationChildren(groupId: string) {
     if (!childId) continue;
     clearIdleTimer(childId);
     // Kill the CLI subprocess if still alive
-    cancelClaude(childId).catch(() => {});
-    closeClaudeSession(childId).catch(() => {});
+    const childProvider = claudeStore.sessions[childId]?.provider ?? parentSession?.provider ?? "anthropic";
+    if (childProvider === "openai") {
+      cancelCodex(childId).catch(() => {});
+      closeCodexSession(childId).catch(() => {});
+    } else {
+      cancelClaude(childId).catch(() => {});
+      closeClaudeSession(childId).catch(() => {});
+    }
     // Drop from the store (ephemeral sessions are already skipped by
     // saveToStorage — this just frees memory and removes the canvas-less entry)
     claudeStore.removeSession(childId);
@@ -61,7 +68,7 @@ function purgeDelegationChildren(groupId: string) {
     // --no-session-persistence so usually nothing is written; when it IS
     // written (older CLI, interrupted flag parsing, etc.) we still want a
     // clean slate.
-    if (parentCwd) {
+    if (parentCwd && childProvider !== "openai") {
       deleteSessionJsonl(childId, parentCwd).catch(() => {});
     }
   }
@@ -251,8 +258,19 @@ function extractReportDone(msgs: ChatMessage[]): string | null {
     const msg = msgs[i];
     if (msg && msg.role === "assistant" && msg.toolCalls) {
       for (const tc of msg.toolCalls) {
-        if ((tc.name === "report_done" || tc.name.endsWith("__report_done")) && tc.input?.summary) {
-          return String(tc.input.summary);
+        const args = tc.input?.arguments;
+        const nestedSummary = args && typeof args === "object" && "summary" in args
+          ? (args as { summary?: unknown }).summary
+          : undefined;
+        const toolName = String(tc.input?.tool_name || tc.name);
+        if (
+          (tc.name === "report_done" ||
+            tc.name.endsWith("__report_done") ||
+            tc.name.endsWith("/report_done") ||
+            toolName === "report_done") &&
+          (tc.input?.summary || nestedSummary)
+        ) {
+          return String(tc.input?.summary || nestedSummary);
         }
       }
     }
@@ -312,12 +330,28 @@ export async function performMerge(groupId: string) {
   } else {
     useClaudeStore.getState().addUserMessage(group.parentSessionId, mergePrompt);
     try {
-      await sendClaudePrompt({
-        session_id: group.parentSessionId,
-        cwd: parentSession.cwd || ".",
-        prompt: mergePrompt,
-        permission_mode: group.parentPermissionMode || "auto",
-      }, parentSession.skipOpenwolf);
+      if (parentSession.provider === "openai") {
+        const baseReq = {
+          session_id: group.parentSessionId,
+          cwd: parentSession.cwd || ".",
+          prompt: mergePrompt,
+          ...(parentSession.selectedModel ? { model: parentSession.selectedModel } : {}),
+          ...(parentSession.selectedEffort ? { effort: parentSession.selectedEffort } : {}),
+          ...decodeCodexPermission(parentSession.selectedCodexPermission || "full-auto"),
+        };
+        if (parentSession.codexThreadId) {
+          await sendCodexPrompt({ ...baseReq, thread_id: parentSession.codexThreadId });
+        } else {
+          await createCodexSession(baseReq);
+        }
+      } else {
+        await sendClaudePrompt({
+          session_id: group.parentSessionId,
+          cwd: parentSession.cwd || ".",
+          prompt: mergePrompt,
+          permission_mode: group.parentPermissionMode || "auto",
+        }, parentSession.skipOpenwolf);
+      }
       mergeSucceeded = true;
     } catch (err) {
       console.warn("[delegation] Failed to merge to parent:", err);
@@ -330,7 +364,7 @@ export async function performMerge(groupId: string) {
     delStore.setGroupStatus(groupId, "merged");
     closeSharedChatPanel(groupId);
     cleanupDelegationGroup(groupId).catch(() => {});
-    if (parentSession?.cwd) clearT64DelegationEnv(parentSession.cwd);
+    if (parentSession?.provider !== "openai" && parentSession?.cwd) clearT64DelegationEnv(parentSession.cwd);
     purgeDelegationChildren(groupId);
   }
 }
@@ -361,7 +395,7 @@ export function endDelegation(groupId: string, forceCancel = false) {
     closeSharedChatPanel(groupId);
     cleanupDelegationGroup(groupId).catch(() => {});
     const parentSession = useClaudeStore.getState().sessions[group.parentSessionId];
-    if (parentSession?.cwd) clearT64DelegationEnv(parentSession.cwd);
+    if (parentSession?.provider !== "openai" && parentSession?.cwd) clearT64DelegationEnv(parentSession.cwd);
     purgeDelegationChildren(groupId);
   }
 }

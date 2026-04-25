@@ -1,3 +1,4 @@
+use crate::providers::util::expanded_tool_path;
 use crate::types::*;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::HashMap;
@@ -68,6 +69,7 @@ impl PtyManager {
 
         let mut cmd = CommandBuilder::new(&shell);
         cmd.env("TERM", "xterm-256color");
+        cmd.env("PATH", expanded_tool_path());
         if let Some(cwd) = &req.cwd {
             cmd.cwd(cwd);
         }

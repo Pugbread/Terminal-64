@@ -1,7 +1,8 @@
 import { useDelegationStore } from "../../stores/delegationStore";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { useClaudeStore } from "../../stores/claudeStore";
-import { sendClaudePrompt } from "../../lib/tauriApi";
+import { createCodexSession, sendClaudePrompt, sendCodexPrompt } from "../../lib/tauriApi";
+import { decodeCodexPermission } from "../../lib/providers";
 import "./Delegation.css";
 
 interface DelegationBadgeProps {
@@ -46,12 +47,28 @@ export default function DelegationBadge({ sessionId }: DelegationBadgeProps) {
       if (sibSession.isStreaming) {
         useClaudeStore.getState().enqueuePrompt(sibId, forwardMsg);
       } else {
-        sendClaudePrompt({
-          session_id: sibId,
-          cwd: sibSession.cwd || ".",
-          prompt: forwardMsg,
-          permission_mode: "bypass_all",
-        }, sibSession.skipOpenwolf).catch((err) => console.warn(`[delegation] Manual forward failed:`, err));
+        if (sibSession.provider === "openai") {
+          const baseReq = {
+            session_id: sibId,
+            cwd: sibSession.cwd || ".",
+            prompt: forwardMsg,
+            ...(sibSession.selectedModel ? { model: sibSession.selectedModel } : {}),
+            ...(sibSession.selectedEffort ? { effort: sibSession.selectedEffort } : {}),
+            ...decodeCodexPermission("yolo"),
+          };
+          const req = sibSession.codexThreadId
+            ? { ...baseReq, thread_id: sibSession.codexThreadId }
+            : baseReq;
+          const op = sibSession.codexThreadId ? sendCodexPrompt(req) : createCodexSession(baseReq);
+          op.catch((err) => console.warn(`[delegation] Manual Codex forward failed:`, err));
+        } else {
+          sendClaudePrompt({
+            session_id: sibId,
+            cwd: sibSession.cwd || ".",
+            prompt: forwardMsg,
+            permission_mode: "bypass_all",
+          }, sibSession.skipOpenwolf).catch((err) => console.warn(`[delegation] Manual forward failed:`, err));
+        }
       }
     }
   };

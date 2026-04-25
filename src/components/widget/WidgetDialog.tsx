@@ -103,7 +103,7 @@ window.parent.postMessage({ type: "t64:write-terminal", payload: { terminalId: t
 
 | Request | Payload | Response event | Response payload |
 |---|---|---|---|
-| \`t64:create-session\` | \`{ cwd?, name?, prompt?, id? }\` | \`t64:session-spawned\` | \`{ id, sessionId }\` |
+| \`t64:create-session\` | \`{ cwd?, name?, prompt?, provider?, id? }\` | \`t64:session-spawned\` | \`{ id, sessionId }\` |
 | \`t64:send-prompt\` | \`{ sessionId, prompt, id? }\` | \`t64:prompt-sent\` | \`{ id, error }\` |
 | \`t64:request-state\` | none | \`t64:state\` | \`{ sessions, activeTerminals, theme }\` |
 | \`t64:request-messages\` | \`{ sessionId }\` | \`t64:messages\` | \`{ sessionId, messages[] }\` |
@@ -350,11 +350,15 @@ export default function WidgetDialog({ isOpen, onClose }: WidgetDialogProps) {
       useCanvasStore.getState().addWidgetTerminal(id, widgetName);
       // Open a Claude session pointed at the widget folder with system prompt
       const fullPrompt = WIDGET_SYSTEM_PROMPT + "\n\n" + buildWidgetContext();
+      const activeId = useCanvasStore.getState().activeTerminalId;
+      const activeProvider = activeId
+        ? useClaudeStore.getState().sessions[activeId]?.provider
+        : undefined;
       spawnClaudeWithPrompt(folderPath, `Widget: ${widgetName}`, fullPrompt, () => ({
         canvasStore: useCanvasStore,
         claudeStore: useClaudeStore,
         settingsStore: useSettingsStore,
-      }), { skipOpenwolf: true });
+      }), { skipOpenwolf: true, provider: activeProvider ?? "anthropic" });
       onClose();
     } catch (err) {
       console.warn("[widget] Failed to create:", err);

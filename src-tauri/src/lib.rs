@@ -414,7 +414,17 @@ fn create_codex_session(
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
     req: CreateCodexRequest,
+    openwolf_enabled: Option<bool>,
+    openwolf_auto_init: Option<bool>,
+    openwolf_design_qc: Option<bool>,
 ) -> Result<String, String> {
+    maybe_apply_openwolf(
+        &None,
+        &req.cwd,
+        openwolf_enabled.unwrap_or(false),
+        openwolf_auto_init.unwrap_or(true),
+        openwolf_design_qc.unwrap_or(false),
+    );
     state.codex.create_session(&app_handle, req)
 }
 
@@ -423,7 +433,17 @@ fn send_codex_prompt(
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
     req: SendCodexPromptRequest,
+    openwolf_enabled: Option<bool>,
+    openwolf_auto_init: Option<bool>,
+    openwolf_design_qc: Option<bool>,
 ) -> Result<(), String> {
+    maybe_apply_openwolf(
+        &None,
+        &req.cwd,
+        openwolf_enabled.unwrap_or(false),
+        openwolf_auto_init.unwrap_or(true),
+        openwolf_design_qc.unwrap_or(false),
+    );
     state.codex.send_prompt(&app_handle, req)
 }
 
@@ -438,6 +458,26 @@ fn close_codex_session(
     session_id: String,
 ) -> Result<(), String> {
     state.codex.close(&session_id)
+}
+
+#[tauri::command]
+fn rollback_codex_thread(
+    state: tauri::State<'_, AppState>,
+    thread_id: String,
+    cwd: String,
+    num_turns: u32,
+) -> Result<(), String> {
+    state.codex.rollback_thread(&thread_id, &cwd, num_turns)
+}
+
+#[tauri::command]
+fn fork_codex_thread(
+    state: tauri::State<'_, AppState>,
+    thread_id: String,
+    cwd: String,
+    drop_turns: u32,
+) -> Result<String, String> {
+    state.codex.fork_thread(&thread_id, &cwd, drop_turns)
 }
 
 /// Hydrate a Codex chat from its on-disk rollout JSONL. The frontend keys
@@ -2118,6 +2158,79 @@ fn parse_mcp_server(name: &str, cfg: &serde_json::Value, scope: &str) -> McpServ
     }
 }
 
+fn append_codex_mcp_servers(
+    servers: &mut Vec<McpServer>,
+    seen: &mut std::collections::HashSet<String>,
+    path: &std::path::Path,
+    scope: &str,
+) {
+    let Ok(doc) = read_toml_document(path) else {
+        return;
+    };
+    let Some(table) = doc.get("mcp_servers").and_then(|i| i.as_table()) else {
+        return;
+    };
+    for (name, item) in table.iter() {
+        let Some(cfg) = item.as_table() else {
+            continue;
+        };
+        let key = format!("codex:{}:{}", scope, name);
+        if !seen.insert(key) {
+            continue;
+        }
+        let display_name = if seen.contains(name) {
+            format!("codex/{}", name)
+        } else {
+            name.to_string()
+        };
+        seen.insert(name.to_string());
+        let command = cfg
+            .get("command")
+            .and_then(|v| v.as_str())
+            .or_else(|| cfg.get("url").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .to_string();
+        let args = cfg.get("args").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        });
+        let env = cfg.get("env").and_then(|v| v.as_table()).map(|env| {
+            env.iter()
+                .map(|(k, v)| (k.to_string(), v.as_str().unwrap_or("").to_string()))
+                .collect::<std::collections::HashMap<_, _>>()
+        });
+        let headers = cfg
+            .get("headers")
+            .and_then(|v| v.as_table())
+            .map(|headers| {
+                headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.as_str().unwrap_or("").to_string()))
+                    .collect::<std::collections::HashMap<_, _>>()
+            });
+        let url = cfg
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        servers.push(McpServer {
+            name: display_name,
+            transport: cfg
+                .get("type")
+                .or_else(|| cfg.get("transport"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("stdio")
+                .to_string(),
+            command,
+            scope: scope.to_string(),
+            url,
+            args,
+            env,
+            headers,
+        });
+    }
+}
+
 #[tauri::command]
 fn list_mcp_servers(cwd: String) -> Result<Vec<McpServer>, String> {
     let mut servers = Vec::new();
@@ -2138,6 +2251,12 @@ fn list_mcp_servers(cwd: String) -> Result<Vec<McpServer>, String> {
                 }
             }
         }
+        append_codex_mcp_servers(
+            &mut servers,
+            &mut seen,
+            &home.join(".codex").join("config.toml"),
+            "codex-user",
+        );
     }
 
     let project_mcp = std::path::Path::new(&cwd).join(".mcp.json");
@@ -2152,6 +2271,14 @@ fn list_mcp_servers(cwd: String) -> Result<Vec<McpServer>, String> {
             }
         }
     }
+    append_codex_mcp_servers(
+        &mut servers,
+        &mut seen,
+        &std::path::Path::new(&cwd)
+            .join(".codex")
+            .join("config.toml"),
+        "codex-project",
+    );
 
     Ok(servers)
 }
@@ -3030,6 +3157,89 @@ fn ensure_t64_mcp(app_handle: tauri::AppHandle, cwd: String) -> Result<(), Strin
     )
     .map_err(|e| e.to_string())?;
     safe_eprintln!("[mcp] Updated .mcp.json with node_path={}", node_path);
+    Ok(())
+}
+
+fn read_toml_document(path: &std::path::Path) -> Result<toml_edit::DocumentMut, String> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => s
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("parse {}: {}", path.display(), e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(toml_edit::DocumentMut::new()),
+        Err(e) => Err(format!("read {}: {}", path.display(), e)),
+    }
+}
+
+fn write_toml_document(path: &std::path::Path, doc: &toml_edit::DocumentMut) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+    }
+    std::fs::write(path, doc.to_string()).map_err(|e| format!("write {}: {}", path.display(), e))
+}
+
+fn configure_codex_t64_mcp(
+    path: &std::path::Path,
+    node_path: &str,
+    script_path: &str,
+) -> Result<(), String> {
+    use toml_edit::{value, Array};
+    let mut doc = read_toml_document(path)?;
+    doc["mcp_servers"]["terminal-64"]["command"] = value(node_path);
+    let mut args = Array::default();
+    args.push(script_path);
+    doc["mcp_servers"]["terminal-64"]["args"] = value(args);
+    let mut env_vars = Array::default();
+    for key in [
+        "T64_DELEGATION_PORT",
+        "T64_DELEGATION_SECRET",
+        "T64_GROUP_ID",
+        "T64_AGENT_LABEL",
+    ] {
+        env_vars.push(key);
+    }
+    doc["mcp_servers"]["terminal-64"]["env_vars"] = value(env_vars);
+    doc["mcp_servers"]["terminal-64"]["enabled"] = value(true);
+
+    // Codex reads AGENTS.md as its project instruction file. Terminal 64
+    // projects commonly already carry Claude Code instructions in CLAUDE.md;
+    // make Codex fall back to those automatically instead of forcing users to
+    // maintain a duplicate AGENTS.md.
+    let mut doc_fallbacks = Array::default();
+    if let Some(existing) = doc
+        .get("project_doc_fallback_filenames")
+        .and_then(|i| i.as_array())
+    {
+        for value in existing.iter() {
+            if let Some(s) = value.as_str() {
+                doc_fallbacks.push(s);
+            }
+        }
+    }
+    for name in ["CLAUDE.md", "CLAUDE.MD"] {
+        let present = doc_fallbacks
+            .iter()
+            .any(|v| v.as_str().map(|s| s == name).unwrap_or(false));
+        if !present {
+            doc_fallbacks.push(name);
+        }
+    }
+    doc["project_doc_fallback_filenames"] = value(doc_fallbacks);
+    write_toml_document(path, &doc)
+}
+
+#[tauri::command]
+fn ensure_codex_mcp(app_handle: tauri::AppHandle, cwd: String) -> Result<(), String> {
+    let app_dir = get_app_dir(app_handle)?;
+    let script_path = format!("{}/mcp/t64-server.mjs", app_dir);
+    let node_path = resolve_node_path();
+    let project_dir = std::path::Path::new(&cwd).join(".codex");
+    let config_path = project_dir.join("config.toml");
+    configure_codex_t64_mcp(&config_path, node_path, &script_path)?;
+    safe_eprintln!(
+        "[codex:mcp] Updated {} with terminal-64 MCP",
+        config_path.display()
+    );
     Ok(())
 }
 
@@ -4075,6 +4285,65 @@ fn ensure_skills_plugin() -> Result<(), String> {
         "[skills] Plugin bridge installed at {}",
         plugin_dir.display()
     );
+    if let Err(e) = ensure_codex_skills() {
+        safe_eprintln!("[codex:skills] ensure_codex_skills: {}", e);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn ensure_codex_skills() -> Result<(), String> {
+    use toml_edit::{value, ArrayOfTables, Item, Table};
+
+    let home = dirs::home_dir().ok_or("No home dir")?;
+    let skills_dir = home.join(".terminal64").join("skills");
+    std::fs::create_dir_all(&skills_dir).map_err(|e| format!("mkdir skills: {}", e))?;
+
+    let config_path = home.join(".codex").join("config.toml");
+    let mut doc = read_toml_document(&config_path)?;
+
+    let mut existing: Vec<Table> = Vec::new();
+    if let Some(current) = doc
+        .get("skills")
+        .and_then(|i| i.get("config"))
+        .and_then(|i| i.as_array_of_tables())
+    {
+        for table in current.iter() {
+            let path = table.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            if !path.contains(".terminal64/skills") && !path.contains(".terminal64\\skills") {
+                existing.push(table.clone());
+            }
+        }
+    }
+
+    let mut managed_paths: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.join("SKILL.md").exists() {
+                managed_paths.push(path);
+            }
+        }
+    }
+    managed_paths.sort();
+
+    let mut aot = ArrayOfTables::new();
+    for table in existing {
+        aot.push(table);
+    }
+    for path in managed_paths {
+        let mut table = Table::new();
+        table["path"] = value(path.to_string_lossy().to_string());
+        table["enabled"] = value(true);
+        aot.push(table);
+    }
+
+    doc["skills"]["config"] = Item::ArrayOfTables(aot);
+    write_toml_document(&config_path, &doc)?;
+    safe_eprintln!(
+        "[codex:skills] Updated {} with Terminal 64 skills",
+        config_path.display()
+    );
     Ok(())
 }
 
@@ -5084,6 +5353,8 @@ pub fn run() {
             send_codex_prompt,
             cancel_codex,
             close_codex_session,
+            rollback_codex_thread,
+            fork_codex_thread,
             load_codex_session_history,
             list_codex_disk_sessions,
             truncate_codex_rollout,
@@ -5126,6 +5397,7 @@ pub fn run() {
             get_app_dir,
             get_node_path,
             ensure_t64_mcp,
+            ensure_codex_mcp,
             create_mcp_config_file,
             create_widget_folder,
             read_widget_html,
@@ -5174,6 +5446,7 @@ pub fn run() {
             resolve_skill_prompt,
             get_skill_creator_path,
             ensure_skills_plugin,
+            ensure_codex_skills,
             sync_claude_skills,
             generate_skill_metadata,
             install_bundled_widget,

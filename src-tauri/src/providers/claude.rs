@@ -35,7 +35,9 @@ use crate::providers::traits::{
     ProviderSessionStartInput, ProviderThreadSnapshot, ProviderTurnStartResult,
     ProviderUserInputAnswers,
 };
-use crate::providers::util::{cap_event_size, sanitize_dangling_tool_uses, shim_command};
+use crate::providers::util::{
+    cap_event_size, expanded_tool_path, sanitize_dangling_tool_uses, shim_command,
+};
 use crate::types::{ClaudeDone, ClaudeEvent, CreateClaudeRequest, SendClaudePromptRequest};
 
 // ── Binary discovery ───────────────────────────────────────
@@ -259,6 +261,7 @@ fn build_command(
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::piped());
+    cmd.env("PATH", expanded_tool_path());
 
     cmd
 }

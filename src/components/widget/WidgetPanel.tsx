@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { getWidgetServerPort, widgetFileModified, widgetGetState, widgetSetState, widgetClearState, proxyFetch, createBrowser, setBrowserBounds, setBrowserZoom, setBrowserVisible, closeBrowser, navigateBrowser, browserEval, shellExec, readFile, writeFile, listDirectory, searchFiles, deleteFiles, createTerminal, closeTerminal, writeTerminal, createClaudeSession, sendClaudePrompt, onTerminalOutput, openwolfDaemonSwitch, openwolfDaemonInfo, openwolfDaemonStopAll } from "../../lib/tauriApi";
+import { getWidgetServerPort, widgetFileModified, widgetGetState, widgetSetState, widgetClearState, proxyFetch, createBrowser, setBrowserBounds, setBrowserZoom, setBrowserVisible, closeBrowser, navigateBrowser, browserEval, shellExec, readFile, writeFile, listDirectory, searchFiles, deleteFiles, createTerminal, closeTerminal, writeTerminal, createClaudeSession, sendClaudePrompt, createCodexSession, sendCodexPrompt, onTerminalOutput, openwolfDaemonSwitch, openwolfDaemonInfo, openwolfDaemonStopAll } from "../../lib/tauriApi";
+import { decodeCodexPermission, type ProviderId } from "../../lib/providers";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { pushToast } from "../../lib/notifications";
 import { useClaudeStore, type ClaudeSession } from "../../stores/claudeStore";
@@ -30,6 +31,7 @@ function buildStateSnapshot() {
     sessionId: string;
     name: string;
     cwd: string;
+    provider: ProviderId;
     model: string;
     isStreaming: boolean;
     promptCount: number;
@@ -44,6 +46,7 @@ function buildStateSnapshot() {
       sessionId: sid,
       name: s.name,
       cwd: s.cwd,
+      provider: s.provider,
       model: s.model,
       isStreaming: s.isStreaming,
       promptCount: s.promptCount,
@@ -551,34 +554,59 @@ export default function WidgetPanel({ widgetId }: WidgetPanelProps) {
           if (!sessionId || !prompt) return;
           const sess = useClaudeStore.getState().sessions[sessionId];
           if (!sess) { post({ type: "t64:prompt-sent", payload: { id: spId, error: "Session not found" } }); return; }
-          sendClaudePrompt({
-            session_id: sessionId,
-            cwd: sess.cwd,
-            prompt,
-            permission_mode: "auto",
-          }, sess.skipOpenwolf)
+          const op = sess.provider === "openai"
+            ? (sess.codexThreadId
+              ? sendCodexPrompt({
+                session_id: sessionId,
+                thread_id: sess.codexThreadId,
+                cwd: sess.cwd,
+                prompt,
+                ...decodeCodexPermission(sess.selectedCodexPermission || "full-auto"),
+              })
+              : createCodexSession({
+                session_id: sessionId,
+                cwd: sess.cwd,
+                prompt,
+                ...decodeCodexPermission(sess.selectedCodexPermission || "full-auto"),
+              }))
+            : sendClaudePrompt({
+              session_id: sessionId,
+              cwd: sess.cwd,
+              prompt,
+              permission_mode: "auto",
+            }, sess.skipOpenwolf);
+          op
             .then(() => post({ type: "t64:prompt-sent", payload: { id: spId, error: null } }))
             .catch((err) => post({ type: "t64:prompt-sent", payload: { id: spId, error: String(err) } }));
           return;
         }
 
         case "t64:create-session": {
-          const { cwd: sessCwd, name: sessName, prompt: sessPrompt, id: csId } = msg.payload || {};
+          const { cwd: sessCwd, name: sessName, prompt: sessPrompt, id: csId, provider: rawProvider } = msg.payload || {};
+          const provider: ProviderId = rawProvider === "openai" ? "openai" : "anthropic";
           const panel = useCanvasStore.getState().addClaudeTerminalAt(
             sessCwd || ".", false, sessName || "Widget Session"
           );
           const sid = panel.terminalId;
-          useClaudeStore.getState().createSession(sid, sessName || "Widget Session", false, true);
+          useClaudeStore.getState().createSession(sid, sessName || "Widget Session", false, true, sessCwd || ".", provider);
           if (sessPrompt) {
             setTimeout(() => {
               useClaudeStore.getState().addUserMessage(sid, sessPrompt);
               useClaudeStore.getState().incrementPromptCount(sid);
-              createClaudeSession({
-                session_id: sid,
-                cwd: sessCwd || ".",
-                prompt: sessPrompt,
-                permission_mode: "auto",
-              }, true).catch((err) => {
+              const op = provider === "openai"
+                ? createCodexSession({
+                  session_id: sid,
+                  cwd: sessCwd || ".",
+                  prompt: sessPrompt,
+                  ...decodeCodexPermission("full-auto"),
+                })
+                : createClaudeSession({
+                  session_id: sid,
+                  cwd: sessCwd || ".",
+                  prompt: sessPrompt,
+                  permission_mode: "auto",
+                }, true);
+              op.catch((err) => {
                 useClaudeStore.getState().setError(sid, `Failed to start session: ${err}`);
               });
             }, 300);

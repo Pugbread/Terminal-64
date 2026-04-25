@@ -138,36 +138,7 @@ export interface ClaudeDone {
 
 // ── Codex (OpenAI Codex CLI) ──────────────────────────────
 
-export interface CreateCodexRequest {
-  session_id: string;
-  cwd: string;
-  prompt: string;
-  sandbox_mode?: string;
-  approval_policy?: string;
-  model?: string;
-  effort?: string;
-  full_auto?: boolean;
-  yolo?: boolean;
-  skip_git_repo_check?: boolean;
-}
-
-export interface SendCodexPromptRequest {
-  // T64-local session UUID — the key all `codex-event`s are emitted under.
-  session_id: string;
-  // Codex-assigned thread id captured from `thread.started` of the first
-  // turn. Passed to `codex exec resume <thread_id>`. Omit to fall back to
-  // session_id (only correct for the very first resume attempt).
-  thread_id?: string;
-  cwd: string;
-  prompt: string;
-  sandbox_mode?: string;
-  approval_policy?: string;
-  model?: string;
-  effort?: string;
-  full_auto?: boolean;
-  yolo?: boolean;
-  skip_git_repo_check?: boolean;
-}
+export type { CreateCodexRequest, SendCodexPromptRequest } from "../contracts/providerIpc";
 
 export interface CodexEvent {
   session_id: string;

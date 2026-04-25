@@ -383,6 +383,97 @@ impl DiscordBot {
             }
         });
 
+        let tx_codex = msg_tx.clone();
+        let accum_for_codex = accum.clone();
+        let unlisten_codex = app_handle.listen("codex-event", move |event| {
+            let Ok(payload) = serde_json::from_str::<CodexEvent>(event.payload()) else {
+                return;
+            };
+            let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload.data) else {
+                return;
+            };
+            let sid = payload.session_id.clone();
+            match parsed["type"].as_str() {
+                Some("thread.started") | Some("turn.started") => {
+                    if let Ok(mut g) = accum_for_codex.lock() {
+                        g.insert(sid, String::new());
+                    }
+                }
+                Some("item.updated") => {
+                    let item = &parsed["item"];
+                    let item_type = item["type"].as_str().unwrap_or("");
+                    if item_type == "agent_message" || item_type == "assistant_message" {
+                        let delta = parsed["delta"]
+                            .as_str()
+                            .or_else(|| item["text"].as_str())
+                            .unwrap_or("");
+                        if delta.is_empty() {
+                            return;
+                        }
+                        let full = if let Ok(mut g) = accum_for_codex.lock() {
+                            let buf = g.entry(sid.clone()).or_default();
+                            buf.push_str(delta);
+                            buf.clone()
+                        } else {
+                            return;
+                        };
+                        let _ = tx_codex.send(DiscordOutMsg::StreamUpdate {
+                            session_id: sid,
+                            full_text: full,
+                        });
+                    }
+                }
+                Some("item.completed") => {
+                    let item = &parsed["item"];
+                    match item["type"].as_str().unwrap_or("") {
+                        "agent_message" | "assistant_message" => {
+                            let final_text = item["text"].as_str().unwrap_or("");
+                            if !final_text.trim().is_empty() {
+                                if let Ok(mut g) = accum_for_codex.lock() {
+                                    g.insert(sid.clone(), final_text.to_string());
+                                }
+                                let _ = tx_codex.send(DiscordOutMsg::StreamUpdate {
+                                    session_id: sid.clone(),
+                                    full_text: final_text.to_string(),
+                                });
+                            }
+                        }
+                        "command_execution" | "file_change" | "mcp_tool_call" | "web_search" => {
+                            let name = codex_tool_name(item);
+                            let detail = summarize_codex_item(item);
+                            let line = if detail.is_empty() {
+                                format!("> ⚙ **{}**", name)
+                            } else {
+                                format!("> ⚙ **{}** {}", name, detail)
+                            };
+                            let _ = tx_codex.send(DiscordOutMsg::Post {
+                                session_id: sid,
+                                text: line,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                Some("turn.completed") | Some("task_complete") | Some("task.completed") => {
+                    if let Ok(mut g) = accum_for_codex.lock() {
+                        g.remove(&sid);
+                    }
+                    let _ = tx_codex.send(DiscordOutMsg::StreamEnd { session_id: sid });
+                }
+                Some("error") => {
+                    let msg = parsed["message"]
+                        .as_str()
+                        .or_else(|| parsed["error"]["message"].as_str())
+                        .unwrap_or("Codex reported an error.");
+                    let _ = tx_codex.send(DiscordOutMsg::Post {
+                        session_id: sid,
+                        text: format!("**Codex error:** {}", msg),
+                    });
+                }
+                _ => {}
+            }
+        });
+
         // Listen for GUI messages — forward as "ADMIN: message"
         let tx2 = msg_tx.clone();
         let unlisten2 = app_handle.listen("gui-message", move |event| {
@@ -400,8 +491,11 @@ impl DiscordBot {
         });
 
         // Store unlisten handles for cleanup
-        *self._unlisten_handles.lock().map_err(|e| e.to_string())? =
-            vec![Box::new(unlisten1), Box::new(unlisten2)];
+        *self._unlisten_handles.lock().map_err(|e| e.to_string())? = vec![
+            Box::new(unlisten1),
+            Box::new(unlisten_codex),
+            Box::new(unlisten2),
+        ];
 
         self.shutdown_tx = Some(shutdown_tx);
         self.runtime = Some(rt);
@@ -1169,6 +1263,66 @@ fn sanitize_name(name: &str) -> String {
         t[..90].into()
     } else {
         t
+    }
+}
+
+fn codex_tool_name(item: &serde_json::Value) -> String {
+    match item["type"].as_str().unwrap_or("") {
+        "command_execution" => "Bash".to_string(),
+        "file_change" => "Edit".to_string(),
+        "mcp_tool_call" => item["tool_name"]
+            .as_str()
+            .or_else(|| item["tool"].as_str())
+            .unwrap_or("MCP")
+            .to_string(),
+        "web_search" => "WebSearch".to_string(),
+        other if !other.is_empty() => other.to_string(),
+        _ => "Tool".to_string(),
+    }
+}
+
+fn summarize_codex_item(item: &serde_json::Value) -> String {
+    match item["type"].as_str().unwrap_or("") {
+        "command_execution" => format!(
+            "`{}`",
+            item["command"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(80)
+                .collect::<String>()
+        ),
+        "file_change" => {
+            let paths = item["changes"]
+                .as_array()
+                .map(|changes| {
+                    changes
+                        .iter()
+                        .filter_map(|change| change["path"].as_str())
+                        .take(3)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if paths.is_empty() {
+                String::new()
+            } else {
+                format!("`{}`", paths.join("`, `"))
+            }
+        }
+        "mcp_tool_call" => {
+            let server = item["server"].as_str().unwrap_or("");
+            let tool = item["tool_name"]
+                .as_str()
+                .or_else(|| item["tool"].as_str())
+                .unwrap_or("");
+            if server.is_empty() && tool.is_empty() {
+                String::new()
+            } else {
+                format!("`{}/{}`", server, tool)
+            }
+        }
+        "web_search" => format!("`{}`", item["query"].as_str().unwrap_or("")),
+        _ => String::new(),
     }
 }
 

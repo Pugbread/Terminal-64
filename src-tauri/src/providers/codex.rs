@@ -1,10 +1,10 @@
 //! `CodexAdapter` — OpenAI Codex CLI-backed implementation of `ProviderAdapter`.
 //!
-//! Spawns `codex exec --json` (NDJSON over stdout) for one-shot/initial turns
-//! and `codex exec resume <thread_id> --json "<prompt>"` for follow-ups.
-//! Parses the NDJSON event schema documented in
-//! `codex-rs/exec/src/exec_events.rs` upstream and re-emits each line as a
-//! `codex-event` Tauri event so the frontend can route by `session_id`.
+//! The primary path uses `codex app-server --listen stdio://`, speaks the
+//! JSON-RPC app-server protocol, and translates rich app-server notifications
+//! back into Terminal 64's existing `codex-event` surface. The legacy
+//! `codex exec --json` adapter is retained as a fallback via
+//! `T64_CODEX_TRANSPORT=exec`.
 //!
 //! Supported flags (mapped from CreateCodexRequest / SendCodexPromptRequest):
 //!   -m/--model <id>                                  → req.model
@@ -23,8 +23,9 @@
 //! through `send_prompt` which uses the resume subcommand.
 
 use async_trait::async_trait;
+use serde_json::{json, Value as JsonValue};
 use std::collections::HashMap;
-use std::io::BufRead;
+use std::io::{BufRead, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
@@ -37,7 +38,7 @@ use crate::providers::traits::{
     ProviderSessionStartInput, ProviderThreadSnapshot, ProviderTurnStartResult,
     ProviderUserInputAnswers,
 };
-use crate::providers::util::{cap_event_size, shim_command};
+use crate::providers::util::{cap_event_size, expanded_tool_path, shim_command};
 use crate::types::{
     CodexDone, CodexEvent, CreateCodexRequest, DiskSession, HistoryMessage, HistoryToolCall,
     SendCodexPromptRequest,
@@ -140,6 +141,7 @@ fn build_command(
     full_auto: bool,
     yolo: bool,
     skip_git_repo_check: bool,
+    mcp_env: &Option<HashMap<String, String>>,
 ) -> Command {
     let codex_bin = resolve_codex_path();
     let mut cmd = shim_command(&codex_bin);
@@ -219,7 +221,352 @@ fn build_command(
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
+    cmd.env("PATH", expanded_tool_path());
+    if let Some(env) = mcp_env {
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+    }
     cmd
+}
+
+fn codex_transport_is_exec() -> bool {
+    std::env::var("T64_CODEX_TRANSPORT")
+        .map(|v| v.eq_ignore_ascii_case("exec"))
+        .unwrap_or(false)
+}
+
+fn build_app_server_command(cwd: &str, mcp_env: &Option<HashMap<String, String>>) -> Command {
+    let codex_bin = resolve_codex_path();
+    let mut cmd = shim_command(&codex_bin);
+    if !cwd.is_empty() && cwd != "." {
+        cmd.current_dir(cwd);
+    }
+    cmd.arg("app-server")
+        .arg("--listen")
+        .arg("stdio://")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::piped());
+    cmd.env("PATH", expanded_tool_path());
+    if let Some(env) = mcp_env {
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+    }
+    cmd
+}
+
+fn app_server_sandbox(
+    sandbox_mode: &Option<String>,
+    full_auto: bool,
+    yolo: bool,
+) -> Option<String> {
+    if yolo {
+        Some("danger-full-access".to_string())
+    } else if full_auto {
+        Some("workspace-write".to_string())
+    } else {
+        sandbox_mode.clone().filter(|s| !s.is_empty())
+    }
+}
+
+fn app_server_approval_policy(
+    approval_policy: &Option<String>,
+    full_auto: bool,
+    yolo: bool,
+) -> Option<String> {
+    if yolo || full_auto {
+        Some("never".to_string())
+    } else {
+        approval_policy.clone().filter(|s| !s.is_empty())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn app_server_thread_params(
+    cwd: &str,
+    sandbox_mode: &Option<String>,
+    approval_policy: &Option<String>,
+    model: &Option<String>,
+    effort: &Option<String>,
+    full_auto: bool,
+    yolo: bool,
+) -> JsonValue {
+    let mut params = serde_json::Map::new();
+    if !cwd.is_empty() {
+        params.insert("cwd".to_string(), json!(cwd));
+    }
+    if let Some(model) = model.as_ref().filter(|m| !m.is_empty()) {
+        params.insert("model".to_string(), json!(model));
+    }
+    if let Some(effort) = effort.as_ref().filter(|e| !e.is_empty()) {
+        params.insert(
+            "config".to_string(),
+            json!({ "model_reasoning_effort": effort }),
+        );
+    }
+    if let Some(sandbox) = app_server_sandbox(sandbox_mode, full_auto, yolo) {
+        params.insert("sandbox".to_string(), json!(sandbox));
+    }
+    if let Some(policy) = app_server_approval_policy(approval_policy, full_auto, yolo) {
+        params.insert("approvalPolicy".to_string(), json!(policy));
+    }
+    params.insert("serviceName".to_string(), json!("terminal-64"));
+    JsonValue::Object(params)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn app_server_turn_params(
+    thread_id: &str,
+    cwd: &str,
+    prompt: &str,
+    sandbox_mode: &Option<String>,
+    approval_policy: &Option<String>,
+    model: &Option<String>,
+    effort: &Option<String>,
+    full_auto: bool,
+    yolo: bool,
+) -> JsonValue {
+    let mut params = match app_server_thread_params(
+        cwd,
+        sandbox_mode,
+        approval_policy,
+        model,
+        effort,
+        full_auto,
+        yolo,
+    ) {
+        JsonValue::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    params.insert("threadId".to_string(), json!(thread_id));
+    params.insert(
+        "input".to_string(),
+        json!([{ "type": "text", "text": prompt }]),
+    );
+    JsonValue::Object(params)
+}
+
+fn write_json_rpc(stdin: &mut std::process::ChildStdin, value: &JsonValue) -> Result<(), String> {
+    let line = serde_json::to_string(value).map_err(|e| e.to_string())?;
+    stdin
+        .write_all(line.as_bytes())
+        .and_then(|_| stdin.write_all(b"\n"))
+        .and_then(|_| stdin.flush())
+        .map_err(|e| format!("codex app-server write: {}", e))
+}
+
+fn emit_codex_json(app_handle: &AppHandle, session_id: &str, value: JsonValue) {
+    let data = cap_event_size(value.to_string());
+    if let Err(e) = app_handle.emit(
+        "codex-event",
+        CodexEvent {
+            session_id: session_id.to_string(),
+            data,
+        },
+    ) {
+        safe_eprintln!(
+            "[codex:app-server] Failed to emit codex-event for {}: {}",
+            session_id,
+            e
+        );
+    }
+}
+
+fn emit_codex_error(app_handle: &AppHandle, session_id: &str, message: impl Into<String>) {
+    emit_codex_json(
+        app_handle,
+        session_id,
+        json!({
+            "type": "error",
+            "message": message.into(),
+        }),
+    );
+}
+
+fn get_json_str<'a>(value: &'a JsonValue, path: &[&str]) -> Option<&'a str> {
+    let mut cur = value;
+    for key in path {
+        cur = cur.get(*key)?;
+    }
+    cur.as_str()
+}
+
+fn normalize_codex_item(item: &JsonValue) -> JsonValue {
+    let mut out = item.as_object().cloned().unwrap_or_default();
+    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let normalized_type = match item_type {
+        "agentMessage" => "agent_message",
+        "commandExecution" => "command_execution",
+        "fileChange" => "file_change",
+        "mcpToolCall" => "mcp_tool_call",
+        "collabToolCall" => "collab_tool_call",
+        "webSearch" => "web_search",
+        "userMessage" => "user_message",
+        other => other,
+    };
+    out.insert("type".to_string(), json!(normalized_type));
+    if let Some(v) = item.get("aggregatedOutput") {
+        out.insert("output".to_string(), v.clone());
+    }
+    if let Some(v) = item.get("exitCode") {
+        out.insert("exit_code".to_string(), v.clone());
+    }
+    if let Some(v) = item.get("tool") {
+        out.insert("tool_name".to_string(), v.clone());
+    }
+    if normalized_type == "reasoning" {
+        if let Some(summary) = item.get("summary").and_then(|v| v.as_array()) {
+            let text = summary
+                .iter()
+                .filter_map(|part| part.get("text").and_then(|v| v.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !text.is_empty() {
+                out.insert("text".to_string(), json!(text));
+            }
+        }
+    }
+    JsonValue::Object(out)
+}
+
+fn app_server_notification_to_exec_event(method: &str, params: &JsonValue) -> Option<JsonValue> {
+    match method {
+        "thread/started" => {
+            let thread_id = get_json_str(params, &["thread", "id"])?;
+            Some(json!({
+                "type": "thread.started",
+                "thread_id": thread_id,
+                "threadId": thread_id,
+            }))
+        }
+        "turn/started" => Some(json!({ "type": "turn.started" })),
+        "turn/completed" => {
+            let mut out = json!({ "type": "turn.completed" });
+            if let Some(usage) = params
+                .get("usage")
+                .or_else(|| params.get("turn").and_then(|t| t.get("usage")))
+            {
+                out["usage"] = usage.clone();
+            }
+            if let Some(msg) = get_json_str(params, &["turn", "error", "message"]) {
+                out["error"] = json!({ "message": msg });
+            }
+            Some(out)
+        }
+        "error" => {
+            let message = get_json_str(params, &["error", "message"])
+                .or_else(|| get_json_str(params, &["message"]))
+                .unwrap_or("Codex app-server error");
+            Some(json!({ "type": "error", "message": message }))
+        }
+        "item/started" => {
+            let item = params.get("item")?;
+            Some(json!({
+                "type": "item.started",
+                "item": normalize_codex_item(item),
+            }))
+        }
+        "item/completed" => {
+            let item = params.get("item")?;
+            Some(json!({
+                "type": "item.completed",
+                "item": normalize_codex_item(item),
+            }))
+        }
+        "item/agentMessage/delta" => {
+            let item_id = params.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
+            let delta = params.get("delta").and_then(|v| v.as_str()).unwrap_or("");
+            Some(json!({
+                "type": "item.updated",
+                "delta": delta,
+                "item": {
+                    "id": item_id,
+                    "type": "agent_message",
+                    "text": delta,
+                },
+            }))
+        }
+        _ => None,
+    }
+}
+
+fn app_server_thread_id_from_response(value: &JsonValue) -> Option<String> {
+    get_json_str(value, &["result", "thread", "id"]).map(|s| s.to_string())
+}
+
+fn run_app_server_request(cwd: &str, method: &str, params: JsonValue) -> Result<JsonValue, String> {
+    let mut cmd = build_app_server_command(cwd, &None);
+    safe_eprintln!(
+        "[codex:app-server] rpc {} cwd={}",
+        method,
+        if cwd.is_empty() { "<empty>" } else { cwd }
+    );
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn codex app-server: {}", e))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or("Failed to capture app-server stdin")?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Failed to capture app-server stdout")?;
+    let mut reader = std::io::BufReader::new(stdout);
+
+    write_json_rpc(
+        &mut stdin,
+        &json!({
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {
+                    "name": "terminal_64",
+                    "title": "Terminal 64",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+                "capabilities": { "experimentalApi": true },
+            },
+        }),
+    )?;
+    write_json_rpc(
+        &mut stdin,
+        &json!({ "method": "initialized", "params": {} }),
+    )?;
+    write_json_rpc(
+        &mut stdin,
+        &json!({ "id": 2, "method": method, "params": params }),
+    )?;
+
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|e| format!("codex app-server read: {}", e))?;
+        if read == 0 {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Codex app-server exited before responding".to_string());
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let parsed: JsonValue = serde_json::from_str(trimmed)
+            .map_err(|e| format!("codex app-server JSON parse: {}", e))?;
+        if parsed.get("id").and_then(|v| v.as_i64()) != Some(2) {
+            continue;
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        if let Some(msg) = get_json_str(&parsed, &["error", "message"]) {
+            return Err(msg.to_string());
+        }
+        return Ok(parsed.get("result").cloned().unwrap_or_else(|| json!({})));
+    }
 }
 
 fn spawn_and_stream(
@@ -427,6 +774,337 @@ fn spawn_and_stream(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn spawn_app_server_turn(
+    instances: &Arc<Mutex<HashMap<String, CodexInstance>>>,
+    app_handle: &AppHandle,
+    session_id: String,
+    mode: InvokeMode<'_>,
+    cwd: &str,
+    prompt: &str,
+    sandbox_mode: &Option<String>,
+    approval_policy: &Option<String>,
+    model: &Option<String>,
+    effort: &Option<String>,
+    full_auto: bool,
+    yolo: bool,
+    mcp_env: &Option<HashMap<String, String>>,
+) -> Result<(), String> {
+    {
+        let mut inst = instances.lock().map_err(|e| e.to_string())?;
+        if let Some(mut old) = inst.remove(&session_id) {
+            let _ = old.child.kill();
+            let _ = old.child.wait();
+            drop(inst);
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+    }
+
+    let mut cmd = build_app_server_command(cwd, mcp_env);
+    {
+        let prog = cmd.get_program().to_string_lossy().to_string();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        let cwd_display = cmd
+            .get_current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<inherited>".to_string());
+        safe_eprintln!(
+            "[codex:app-server] spawn argv for {}: {} {:?} (cwd={})",
+            session_id,
+            prog,
+            args,
+            cwd_display
+        );
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn codex app-server: {}", e))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or("Failed to capture app-server stdin")?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Failed to capture app-server stdout")?;
+
+    let stderr_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    if let Some(stderr) = child.stderr.take() {
+        let sid_for_stderr = session_id.clone();
+        let buf = stderr_buf.clone();
+        std::thread::spawn(move || {
+            let reader = std::io::BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                safe_eprintln!(
+                    "[codex:app-server:stderr:{}] {}",
+                    &sid_for_stderr[..8.min(sid_for_stderr.len())],
+                    line
+                );
+                if let Ok(mut b) = buf.lock() {
+                    if b.len() < 4000 {
+                        if !b.is_empty() {
+                            b.push('\n');
+                        }
+                        b.push_str(&line);
+                    }
+                }
+            }
+        });
+    }
+
+    let gen = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    instances.lock().map_err(|e| e.to_string())?.insert(
+        session_id.clone(),
+        CodexInstance {
+            child,
+            generation: gen,
+        },
+    );
+
+    let sid = session_id.clone();
+    let handle = app_handle.clone();
+    let instances_clone = instances.clone();
+    let cwd_owned = cwd.to_string();
+    let prompt_owned = prompt.to_string();
+    let sandbox_mode = sandbox_mode.clone();
+    let approval_policy = approval_policy.clone();
+    let model = model.clone();
+    let effort = effort.clone();
+    let resume_thread_id = match mode {
+        InvokeMode::Fresh => None,
+        InvokeMode::Resume(thread_id) => Some(thread_id.to_string()),
+    };
+
+    std::thread::spawn(move || {
+        safe_eprintln!(
+            "[codex:app-server] Worker started for {} (gen {})",
+            sid,
+            gen
+        );
+        let mut reader = std::io::BufReader::new(stdout);
+
+        let initialize = json!({
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {
+                    "name": "terminal_64",
+                    "title": "Terminal 64",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+                "capabilities": {
+                    "experimentalApi": true,
+                },
+            },
+        });
+        let initialized = json!({ "method": "initialized", "params": {} });
+        if let Err(e) = write_json_rpc(&mut stdin, &initialize)
+            .and_then(|_| write_json_rpc(&mut stdin, &initialized))
+        {
+            emit_codex_error(&handle, &sid, e);
+            finish_app_server_turn(&instances_clone, &handle, &sid, gen, true);
+            return;
+        }
+
+        let thread_params = if let Some(thread_id) = resume_thread_id.as_ref() {
+            let mut params = match app_server_thread_params(
+                &cwd_owned,
+                &sandbox_mode,
+                &approval_policy,
+                &model,
+                &effort,
+                full_auto,
+                yolo,
+            ) {
+                JsonValue::Object(map) => map,
+                _ => serde_json::Map::new(),
+            };
+            params.insert("threadId".to_string(), json!(thread_id));
+            JsonValue::Object(params)
+        } else {
+            app_server_thread_params(
+                &cwd_owned,
+                &sandbox_mode,
+                &approval_policy,
+                &model,
+                &effort,
+                full_auto,
+                yolo,
+            )
+        };
+        let thread_method = if resume_thread_id.is_some() {
+            "thread/resume"
+        } else {
+            "thread/start"
+        };
+        if let Err(e) = write_json_rpc(
+            &mut stdin,
+            &json!({ "id": 2, "method": thread_method, "params": thread_params }),
+        ) {
+            emit_codex_error(&handle, &sid, e);
+            finish_app_server_turn(&instances_clone, &handle, &sid, gen, true);
+            return;
+        }
+
+        let mut thread_id: Option<String> = None;
+        let mut turn_started = false;
+        let mut saw_output = false;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let read = match reader.read_line(&mut line) {
+                Ok(n) => n,
+                Err(e) => {
+                    emit_codex_error(&handle, &sid, format!("codex app-server read: {}", e));
+                    break;
+                }
+            };
+            if read == 0 {
+                if !saw_output {
+                    let stderr_msg = stderr_buf.lock().map(|s| s.clone()).unwrap_or_default();
+                    let msg = if stderr_msg.is_empty() {
+                        "Codex app-server exited without output. Install a recent OpenAI Codex CLI or set T64_CODEX_TRANSPORT=exec to use the legacy transport.".to_string()
+                    } else {
+                        stderr_msg
+                    };
+                    emit_codex_error(&handle, &sid, msg);
+                }
+                break;
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            saw_output = true;
+            let parsed: JsonValue = match serde_json::from_str(trimmed) {
+                Ok(v) => v,
+                Err(e) => {
+                    safe_eprintln!("[codex:app-server] JSON parse error for {}: {}", sid, e);
+                    continue;
+                }
+            };
+
+            if parsed.get("error").is_some() && parsed.get("id").is_some() {
+                let msg = get_json_str(&parsed, &["error", "message"])
+                    .unwrap_or("Codex app-server request failed");
+                emit_codex_error(&handle, &sid, msg);
+                break;
+            }
+
+            if parsed.get("id").and_then(|v| v.as_i64()) == Some(2) {
+                thread_id = app_server_thread_id_from_response(&parsed);
+                if let Some(tid) = thread_id.as_ref() {
+                    emit_codex_json(
+                        &handle,
+                        &sid,
+                        json!({
+                            "type": "thread.started",
+                            "thread_id": tid,
+                            "threadId": tid,
+                        }),
+                    );
+                    let turn_params = app_server_turn_params(
+                        tid,
+                        &cwd_owned,
+                        &prompt_owned,
+                        &sandbox_mode,
+                        &approval_policy,
+                        &model,
+                        &effort,
+                        full_auto,
+                        yolo,
+                    );
+                    if let Err(e) = write_json_rpc(
+                        &mut stdin,
+                        &json!({ "id": 3, "method": "turn/start", "params": turn_params }),
+                    ) {
+                        emit_codex_error(&handle, &sid, e);
+                        break;
+                    }
+                    turn_started = true;
+                } else {
+                    emit_codex_error(&handle, &sid, "Codex app-server did not return a thread id");
+                    break;
+                }
+                continue;
+            }
+
+            if parsed.get("id").is_some() && parsed.get("method").is_some() {
+                let request_id = parsed.get("id").cloned().unwrap_or(json!(null));
+                let method = parsed.get("method").and_then(|v| v.as_str()).unwrap_or("");
+                safe_eprintln!(
+                    "[codex:app-server] Auto-declining unsupported server request {} for {}",
+                    method,
+                    sid
+                );
+                let _ = write_json_rpc(
+                    &mut stdin,
+                    &json!({
+                        "id": request_id,
+                        "result": { "decision": "decline" },
+                    }),
+                );
+                continue;
+            }
+
+            if let Some(method) = parsed.get("method").and_then(|v| v.as_str()) {
+                let params = parsed.get("params").cloned().unwrap_or_else(|| json!({}));
+                if let Some(event) = app_server_notification_to_exec_event(method, &params) {
+                    emit_codex_json(&handle, &sid, event);
+                }
+                if method == "turn/completed" {
+                    break;
+                }
+            }
+        }
+
+        if !turn_started && thread_id.is_none() {
+            safe_eprintln!("[codex:app-server] Turn never started for {}", sid);
+        }
+        finish_app_server_turn(&instances_clone, &handle, &sid, gen, false);
+    });
+
+    Ok(())
+}
+
+fn finish_app_server_turn(
+    instances: &Arc<Mutex<HashMap<String, CodexInstance>>>,
+    app_handle: &AppHandle,
+    session_id: &str,
+    generation: u64,
+    suppress_done: bool,
+) {
+    if let Ok(mut inst) = instances.lock() {
+        if let Some(instance) = inst.get(session_id) {
+            if instance.generation != generation {
+                return;
+            }
+        }
+        if let Some(mut instance) = inst.remove(session_id) {
+            let _ = instance.child.kill();
+            let _ = instance.child.wait();
+        }
+    }
+    if !suppress_done {
+        if let Err(e) = app_handle.emit(
+            "codex-done",
+            CodexDone {
+                session_id: session_id.to_string(),
+            },
+        ) {
+            safe_eprintln!(
+                "[codex:app-server] Failed to emit codex-done for {}: {}",
+                session_id,
+                e
+            );
+        }
+    }
+}
+
 fn resolve_session_id(provided: &str) -> String {
     let trimmed = provided.trim();
     if trimmed.is_empty() {
@@ -471,19 +1149,38 @@ impl CodexAdapter {
             req.model,
             req.sandbox_mode
         );
-        let cmd = build_command(
-            InvokeMode::Fresh,
-            &req.cwd,
-            &req.prompt,
-            &req.sandbox_mode,
-            &req.approval_policy,
-            &req.model,
-            &req.effort,
-            req.full_auto.unwrap_or(false),
-            req.yolo.unwrap_or(false),
-            req.skip_git_repo_check.unwrap_or(true),
-        );
-        spawn_and_stream(&self.instances, app_handle, resolved_id.clone(), cmd)?;
+        if codex_transport_is_exec() {
+            let cmd = build_command(
+                InvokeMode::Fresh,
+                &req.cwd,
+                &req.prompt,
+                &req.sandbox_mode,
+                &req.approval_policy,
+                &req.model,
+                &req.effort,
+                req.full_auto.unwrap_or(false),
+                req.yolo.unwrap_or(false),
+                req.skip_git_repo_check.unwrap_or(true),
+                &req.mcp_env,
+            );
+            spawn_and_stream(&self.instances, app_handle, resolved_id.clone(), cmd)?;
+        } else {
+            spawn_app_server_turn(
+                &self.instances,
+                app_handle,
+                resolved_id.clone(),
+                InvokeMode::Fresh,
+                &req.cwd,
+                &req.prompt,
+                &req.sandbox_mode,
+                &req.approval_policy,
+                &req.model,
+                &req.effort,
+                req.full_auto.unwrap_or(false),
+                req.yolo.unwrap_or(false),
+                &req.mcp_env,
+            )?;
+        }
         Ok(resolved_id)
     }
 
@@ -516,19 +1213,38 @@ impl CodexAdapter {
             resume_id_owned,
             req.cwd
         );
-        let cmd = build_command(
-            InvokeMode::Resume(&resume_id_owned),
-            &req.cwd,
-            &req.prompt,
-            &req.sandbox_mode,
-            &req.approval_policy,
-            &req.model,
-            &req.effort,
-            req.full_auto.unwrap_or(false),
-            req.yolo.unwrap_or(false),
-            req.skip_git_repo_check.unwrap_or(true),
-        );
-        spawn_and_stream(&self.instances, app_handle, req.session_id, cmd)
+        if codex_transport_is_exec() {
+            let cmd = build_command(
+                InvokeMode::Resume(&resume_id_owned),
+                &req.cwd,
+                &req.prompt,
+                &req.sandbox_mode,
+                &req.approval_policy,
+                &req.model,
+                &req.effort,
+                req.full_auto.unwrap_or(false),
+                req.yolo.unwrap_or(false),
+                req.skip_git_repo_check.unwrap_or(true),
+                &req.mcp_env,
+            );
+            spawn_and_stream(&self.instances, app_handle, req.session_id, cmd)
+        } else {
+            spawn_app_server_turn(
+                &self.instances,
+                app_handle,
+                req.session_id,
+                InvokeMode::Resume(&resume_id_owned),
+                &req.cwd,
+                &req.prompt,
+                &req.sandbox_mode,
+                &req.approval_policy,
+                &req.model,
+                &req.effort,
+                req.full_auto.unwrap_or(false),
+                req.yolo.unwrap_or(false),
+                &req.mcp_env,
+            )
+        }
     }
 
     pub fn cancel(&self, session_id: &str) -> Result<(), String> {
@@ -543,6 +1259,62 @@ impl CodexAdapter {
 
     pub fn close(&self, session_id: &str) -> Result<(), String> {
         self.cancel(session_id)
+    }
+
+    pub fn rollback_thread(
+        &self,
+        thread_id: &str,
+        cwd: &str,
+        num_turns: u32,
+    ) -> Result<(), String> {
+        if thread_id.trim().is_empty() {
+            return Err("rollback_thread: thread_id is required".to_string());
+        }
+        if num_turns == 0 {
+            return Ok(());
+        }
+        if codex_transport_is_exec() {
+            return Err("Codex native rollback requires app-server transport".to_string());
+        }
+        run_app_server_request(
+            cwd,
+            "thread/rollback",
+            json!({
+                "threadId": thread_id,
+                "numTurns": num_turns,
+            }),
+        )?;
+        Ok(())
+    }
+
+    pub fn fork_thread(
+        &self,
+        thread_id: &str,
+        cwd: &str,
+        drop_turns: u32,
+    ) -> Result<String, String> {
+        if thread_id.trim().is_empty() {
+            return Err("fork_thread: thread_id is required".to_string());
+        }
+        if codex_transport_is_exec() {
+            return Err("Codex native fork requires app-server transport".to_string());
+        }
+        let result = run_app_server_request(
+            cwd,
+            "thread/fork",
+            json!({
+                "threadId": thread_id,
+                "cwd": cwd,
+                "excludeTurns": true,
+            }),
+        )?;
+        let forked = get_json_str(&result, &["thread", "id"])
+            .ok_or("Codex app-server fork did not return a thread id")?
+            .to_string();
+        if drop_turns > 0 {
+            self.rollback_thread(&forked, cwd, drop_turns)?;
+        }
+        Ok(forked)
     }
 }
 

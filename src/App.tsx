@@ -217,6 +217,11 @@ function App() {
         const active = canvas.terminals.find(t => t.terminalId === canvas.activeTerminalId);
         if (active?.panelType === "claude" && active.cwd) {
           canvas.addClaudeTerminal(active.cwd, false);
+          const terminals = useCanvasStore.getState().terminals;
+          const newest = terminals[terminals.length - 1];
+          if (newest?.panelType === "claude") {
+            useClaudeStore.getState().createSession(newest.terminalId, undefined, false, undefined, active.cwd, "openai");
+          }
         }
       },
     });
@@ -470,7 +475,7 @@ function App() {
             }
           }
         }}
-        onReopen={(sessionId, dialogCwd) => {
+        onReopen={(sessionId, dialogCwd, provider) => {
           // Pull the cached name + cwd metadata out of localStorage so we can
           // spawn the panel with the right label + working dir. Messages no
           // longer live here — claudeStore.createSession loads them from JSONL.
@@ -488,6 +493,10 @@ function App() {
           }
           const effectiveCwd = savedCwd || dialogCwd || ".";
           useCanvasStore.getState().addClaudeTerminal(effectiveCwd, false, name || undefined, sessionId);
+          useClaudeStore.getState().createSession(sessionId, name, false, undefined, effectiveCwd, provider);
+          if (provider === "openai") {
+            useClaudeStore.getState().setCodexThreadId(sessionId, sessionId);
+          }
           if (name) linkSessionToDiscord(sessionId, name, effectiveCwd).catch(() => {});
         }}
       />

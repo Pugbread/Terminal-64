@@ -100,7 +100,7 @@ const OPENAI_EFFORTS: EffortOption[] = [
 // `decodeCodexPermission()` below.
 const OPENAI_PERMISSIONS: PermissionOption[] = [
   { id: "read-only", label: "Read", color: "#89b4fa", desc: "No filesystem writes" },
-  { id: "workspace", label: "Workspace", color: "#94e2d5", desc: "Write inside cwd, ask first" },
+  { id: "workspace", label: "Workspace", color: "#94e2d5", desc: "Write inside cwd" },
   { id: "full-auto", label: "Auto", color: "#a6e3a1", desc: "Workspace + auto-approve all" },
   { id: "yolo", label: "YOLO", color: "#f38ba8", desc: "No sandbox, no approvals" },
 ];
@@ -138,8 +138,8 @@ export function isClaudePermissionId(id: string): id is PermissionMode {
  *   sandbox_mode | approval_policy | full_auto | yolo
  *
  * Mapping:
- *   "read-only"    → sandbox=read-only,        policy=on-request
- *   "workspace"    → sandbox=workspace-write,  policy=on-request
+ *   "read-only"    → sandbox=read-only,        policy=never
+ *   "workspace"    → sandbox=workspace-write,  policy=never
  *   "full-auto"    → full_auto=true (CLI implies workspace-write + never-ask)
  *   "yolo"         → yolo=true     (CLI bypasses sandbox AND approvals)
  */
@@ -151,14 +151,14 @@ export function decodeCodexPermission(id: string): {
 } {
   switch (id) {
     case "read-only":
-      return { sandbox_mode: "read-only", approval_policy: "on-request" };
+      return { sandbox_mode: "read-only", approval_policy: "never" };
     case "workspace":
-      return { sandbox_mode: "workspace-write", approval_policy: "on-request" };
+      return { sandbox_mode: "workspace-write", approval_policy: "never" };
     case "full-auto":
       return { full_auto: true };
     case "yolo":
       return { yolo: true };
     default:
-      return { sandbox_mode: "workspace-write", approval_policy: "on-request" };
+      return { sandbox_mode: "workspace-write", approval_policy: "never" };
   }
 }

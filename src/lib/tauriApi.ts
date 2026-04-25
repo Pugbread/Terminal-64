@@ -29,6 +29,7 @@ import type {
   ToolCall,
 } from "./types";
 import { joinPath } from "./platform";
+import { decodeCodexPermission, PROVIDER_CONFIG, type ProviderId } from "./providers";
 
 // PTY terminal commands
 
@@ -123,12 +124,24 @@ export function onClaudeDone(callback: (payload: ClaudeDone) => void): Promise<U
 
 // ── Codex (OpenAI Codex CLI) ──────────────────────────────
 
-export async function createCodexSession(req: CreateCodexRequest): Promise<string> {
-  return invoke<string>("create_codex_session", { req });
+export async function createCodexSession(req: CreateCodexRequest, skipOpenwolf?: boolean): Promise<string> {
+  const ow = resolveOpenwolf(skipOpenwolf);
+  return invoke<string>("create_codex_session", {
+    req,
+    openwolfEnabled: ow.enabled,
+    openwolfAutoInit: ow.autoInit,
+    openwolfDesignQc: ow.designQc,
+  });
 }
 
-export async function sendCodexPrompt(req: SendCodexPromptRequest): Promise<void> {
-  return invoke("send_codex_prompt", { req });
+export async function sendCodexPrompt(req: SendCodexPromptRequest, skipOpenwolf?: boolean): Promise<void> {
+  const ow = resolveOpenwolf(skipOpenwolf);
+  return invoke("send_codex_prompt", {
+    req,
+    openwolfEnabled: ow.enabled,
+    openwolfAutoInit: ow.autoInit,
+    openwolfDesignQc: ow.designQc,
+  });
 }
 
 export async function cancelCodex(sessionId: string): Promise<void> {
@@ -137,6 +150,14 @@ export async function cancelCodex(sessionId: string): Promise<void> {
 
 export async function closeCodexSession(sessionId: string): Promise<void> {
   return invoke("close_codex_session", { sessionId });
+}
+
+export async function rollbackCodexThread(threadId: string, cwd: string, numTurns: number): Promise<void> {
+  return invoke("rollback_codex_thread", { threadId, cwd, numTurns });
+}
+
+export async function forkCodexThread(threadId: string, cwd: string, dropTurns: number): Promise<string> {
+  return invoke<string>("fork_codex_thread", { threadId, cwd, dropTurns });
 }
 
 /// Hydrate a Codex chat from its on-disk rollout JSONL. `threadId` is the
@@ -154,9 +175,9 @@ export async function listCodexDiskSessions(cwd: string): Promise<DiskSession[]>
   return invoke<DiskSession[]>("list_codex_disk_sessions", { cwd });
 }
 
-/// Truncate a Codex rollout to keep only the first `numTurns` completed turns
+/// Truncate a Codex rollout by dropping the last `numTurns` completed turns
 /// (turn-boundary granularity — Codex panics on partial turns). Returns the
-/// number of turns retained after truncation. Used by the rewind flow.
+/// number of turns removed after truncation. Used by the rewind flow.
 export async function truncateCodexRollout(threadId: string, numTurns: number): Promise<number> {
   return invoke<number>("truncate_codex_rollout", { threadId, numTurns });
 }
@@ -300,6 +321,10 @@ export async function writeFile(path: string, content: string): Promise<void> {
 
 export async function listMcpServers(cwd: string): Promise<McpServer[]> {
   return invoke("list_mcp_servers", { cwd });
+}
+
+export async function ensureCodexMcp(cwd: string): Promise<void> {
+  return invoke("ensure_codex_mcp", { cwd });
 }
 
 export async function listDirectory(path: string): Promise<DirEntry[]> {
@@ -540,6 +565,10 @@ export async function ensureSkillsPlugin(): Promise<void> {
   return invoke("ensure_skills_plugin");
 }
 
+export async function ensureCodexSkills(): Promise<void> {
+  return invoke("ensure_codex_skills");
+}
+
 // Proxy fetch (CORS bypass for widgets)
 
 export async function proxyFetch(
@@ -736,9 +765,10 @@ export function spawnClaudeWithPrompt(
     claudeStore: { getState: () => any };
     settingsStore: { getState: () => any };
   },
-  options?: { skipOpenwolf?: boolean },
+  options?: { skipOpenwolf?: boolean; provider?: ProviderId },
 ): void {
   const { canvasStore, claudeStore, settingsStore } = getStores();
+  const provider = options?.provider ?? "anthropic";
   canvasStore.getState().addClaudeTerminal(cwd, false, sessionName);
   const terminals = canvasStore.getState().terminals;
   const claudePanel = terminals[terminals.length - 1];
@@ -746,19 +776,37 @@ export function spawnClaudeWithPrompt(
 
   const sid = claudePanel.terminalId;
   const skip = options?.skipOpenwolf;
-  claudeStore.getState().createSession(sid, sessionName, false, skip);
+  claudeStore.getState().createSession(sid, sessionName, false, skip, cwd, provider);
   claudeStore.getState().addUserMessage(sid, prompt);
-  const permMode = settingsStore.getState().claudePermMode || "default";
   // Small delay so ClaudeChat mounts and event listeners are ready
   setTimeout(() => {
-    createClaudeSession({
-      session_id: sid,
-      cwd,
-      prompt,
-      permission_mode: permMode,
-    }, options?.skipOpenwolf).catch((err: unknown) => {
-      claudeStore.getState().setError(sid, String(err));
-    });
-    claudeStore.getState().incrementPromptCount(sid);
+    if (provider === "openai") {
+      const codexPerm = decodeCodexPermission(PROVIDER_CONFIG.openai.defaultPermission);
+      Promise.allSettled([ensureCodexMcp(cwd), ensureCodexSkills()])
+        .then(() => createCodexSession({
+          session_id: sid,
+          cwd,
+          prompt,
+          ...codexPerm,
+        }, options?.skipOpenwolf))
+        .then(() => {
+          claudeStore.getState().incrementPromptCount(sid);
+        })
+        .catch((err: unknown) => {
+          claudeStore.getState().setError(sid, String(err));
+        });
+    } else {
+      const permMode = settingsStore.getState().claudePermMode || "default";
+      createClaudeSession({
+        session_id: sid,
+        cwd,
+        prompt,
+        permission_mode: permMode,
+      }, options?.skipOpenwolf).then(() => {
+        claudeStore.getState().incrementPromptCount(sid);
+      }).catch((err: unknown) => {
+        claudeStore.getState().setError(sid, String(err));
+      });
+    }
   }, 300);
 }

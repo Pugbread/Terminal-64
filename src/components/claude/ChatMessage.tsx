@@ -442,6 +442,35 @@ function ToolBody({ tc, onEditClick }: { tc: ToolCall; onEditClick?: (tcId: stri
     );
   }
 
+  // Codex file_change — Codex often reports path/change/result rather than
+  // Claude-style old_string/new_string. Render it as an edit card, not raw JSON.
+  if (tc.name === "Edit" && (i.file_path || i.path || i.change || i.changes || i.paths)) {
+    const paths = Array.isArray(i.paths)
+      ? i.paths.filter((path): path is string => typeof path === "string" && path.length > 0)
+      : [];
+    const changes = Array.isArray(i.changes)
+      ? i.changes
+          .filter((change): change is Record<string, unknown> => Boolean(change) && typeof change === "object")
+          .map((change) => {
+            const path = typeof change.path === "string" ? shortPath(change.path) : "";
+            const kind = typeof change.kind === "string" ? change.kind : "update";
+            return path ? `${kind}: ${path}` : kind;
+          })
+      : [];
+    const path = shortPath(i.file_path || i.path || paths[0]);
+    const change = i.change ? String(i.change) : "";
+    const summary = changes.length > 0 ? changes.join("\n") : path ? `File: ${path}` : "File changed";
+    return (
+      <div className="cc-tc-body">
+        <pre className="cc-tc-output">
+          {summary}
+          {change ? `\nChange: ${change}` : ""}
+        </pre>
+        {result && <pre className="cc-tc-result-text">{result}</pre>}
+      </div>
+    );
+  }
+
   // Write — show content preview
   if (tc.name === "Write" && i.content) {
     const content = String(i.content);

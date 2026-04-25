@@ -18,6 +18,31 @@
 use std::collections::HashMap;
 use std::process::Command;
 
+/// PATH used for app-spawned shells and provider CLIs. macOS GUI launches and
+/// embedded tool runners often do not inherit the user's login-shell PATH, so
+/// common Homebrew/npm/Cargo locations need to be restored explicitly.
+pub fn expanded_tool_path() -> String {
+    let existing = std::env::var("PATH").unwrap_or_default();
+    #[cfg(target_os = "windows")]
+    {
+        let home = std::env::var("USERPROFILE").unwrap_or_default();
+        let appdata = std::env::var("APPDATA").unwrap_or_default();
+        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let program_files =
+            std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
+        format!(
+            "{appdata}\\npm;{home}\\.cargo\\bin;{home}\\.npm-global\\bin;{localappdata}\\Programs\\nodejs;{program_files}\\nodejs;{existing}"
+        )
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!(
+            "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:{home}/.local/bin:{home}/.cargo/bin:{home}/.npm-global/bin:/opt/homebrew/lib/node_modules/.bin:{existing}"
+        )
+    }
+}
+
 // --- shim_command ---------------------------------------------------------
 
 /// Build a `Command` for a binary path that may be a Windows `.cmd`/`.bat`

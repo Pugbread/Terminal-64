@@ -19,10 +19,9 @@ export interface PersistedSessionMeta {
   schemaVersion: number;
   provider?: ProviderId;
   codexThreadId?: string | null;
-  // Pre-rendered transcript inherited from a parent session at fork time.
-  // Codex has no native fork; the new thread is seeded with the parent's
-  // history so the first prompt sees the same context. Persisted so a
-  // reload before the first turn doesn't lose the seed.
+  // Pre-rendered transcript inherited from a parent session when native
+  // provider fork is unavailable. Persisted so a reload before the first turn
+  // doesn't lose the seed.
   seedTranscript?: ChatMessage[];
   // Per-session model + reasoning-effort, persisted so flipping models in
   // one chat doesn't bleed into other sessions and so a reload restores the
@@ -187,7 +186,7 @@ interface ClaudeState {
   appendStreamingText: (sessionId: string, text: string) => void;
   clearStreamingText: (sessionId: string) => void;
   finalizeAssistantMessage: (sessionId: string, text: string, toolCalls?: ToolCall[]) => void;
-  updateToolResult: (sessionId: string, toolUseId: string, result: string, isError: boolean) => void;
+  updateToolResult: (sessionId: string, toolUseId: string, result: string, isError: boolean, patch?: Partial<ToolCall>) => void;
   setStreaming: (sessionId: string, streaming: boolean) => void;
   touchLastEvent: (sessionId: string) => void;
   setModel: (sessionId: string, model: string) => void;
@@ -606,7 +605,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
     });
   },
 
-  updateToolResult: (sessionId, toolUseId, result, isError) => {
+  updateToolResult: (sessionId, toolUseId, result, isError, patch) => {
     set((s) => {
       const session = s.sessions[sessionId];
       if (!session) return s;
@@ -619,7 +618,13 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
           if (tcIdx >= 0) {
             const updatedToolCalls = msg.toolCalls.slice();
             const existing = updatedToolCalls[tcIdx]!;
-            updatedToolCalls[tcIdx] = { ...existing, result, isError };
+            updatedToolCalls[tcIdx] = {
+              ...existing,
+              ...patch,
+              input: patch?.input ? { ...existing.input, ...patch.input } : existing.input,
+              result,
+              isError,
+            };
             const messages = msgs.slice();
             messages[i] = { ...msg, toolCalls: updatedToolCalls };
             return { sessions: updateSession(s.sessions, sessionId, { messages }) };
@@ -764,13 +769,21 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
   },
 
   setCodexThreadId: (sessionId, threadId) => {
+    let shouldHydrate = false;
+    let hydrateCwd = "";
     set((s) => {
       const session = s.sessions[sessionId];
       if (!session || session.codexThreadId === threadId) return s;
+      shouldHydrate = session.provider === "openai" && !!threadId && !!session.cwd && session.jsonlLoaded;
+      hydrateCwd = session.cwd;
       const updated = updateSession(s.sessions, sessionId, { codexThreadId: threadId });
       if (!session.ephemeral) debouncedSave();
       return { sessions: updated };
     });
+    if (shouldHydrate && hydrateCwd) {
+      patchSession(sessionId, { jsonlLoaded: false });
+      hydrateFromJsonl(sessionId, hydrateCwd);
+    }
   },
 
   setSeedTranscript: (sessionId, messages) => {

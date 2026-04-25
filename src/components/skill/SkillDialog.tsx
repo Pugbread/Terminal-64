@@ -198,11 +198,15 @@ export default function SkillDialog({ isOpen, onClose }: SkillDialogProps) {
       const projectDir = dir.trim();
       addRecentDir(projectDir);
       const prompt = buildSkillPrompt(skillFolderPath, skillCreatorPath);
+      const activeId = useCanvasStore.getState().activeTerminalId;
+      const activeProvider = activeId
+        ? useClaudeStore.getState().sessions[activeId]?.provider
+        : undefined;
       spawnClaudeWithPrompt(projectDir, `Skill: ${skillName}`, prompt, () => ({
         canvasStore: useCanvasStore,
         claudeStore: useClaudeStore,
         settingsStore: useSettingsStore,
-      }), { skipOpenwolf: true });
+      }), { skipOpenwolf: true, provider: activeProvider ?? "anthropic" });
       onClose();
     } catch (err) {
       console.warn("[skill] Failed to create:", err);
