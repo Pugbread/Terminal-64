@@ -97,3 +97,34 @@
 | 01:17 | audit Codex parity bugs | src-tauri/src/providers/codex.rs, src/lib/codexEventDecoder.ts, src/hooks/useClaudeEvents.ts, src/components/claude/ClaudeChat.tsx, .wolf/buglog.json, .wolf/cerebrum.md | fixed apply_patch history hydration, file-change shape normalization, relative edit preview paths, and turn completion errors | ~2.4k |
 | 01:22 | normalize legacy Codex exec transport | src-tauri/src/providers/codex.rs, src/hooks/useClaudeEvents.ts, .wolf/buglog.json, .wolf/cerebrum.md | exec JSON now translates to app-server-style frontend events | ~1.5k |
 | 01:26 | optimize prompt island open path | src/components/claude/PromptIsland.tsx, src/components/claude/ClaudeChat.css, .wolf/buglog.json, .wolf/cerebrum.md | island renders latest 120 prompts first and appends older rows on scroll | ~700 |
+| 01:39 | integration verification after delegation | src-tauri/src/providers/codex.rs, .wolf/buglog.json, .wolf/cerebrum.md | fixed clippy null fallback warnings and clippy now passes | ~400 |
+| 01:31 | read OpenWolf instructions and team chat before audit | .wolf/OPENWOLF.md .wolf/anatomy.md .wolf/cerebrum.md | ready to inspect delegation/MCP files | ~7200 |
+| 01:31 | Read OpenWolf guidance and searched persistence/history paths | .wolf/OPENWOLF.md, .wolf/anatomy.md, .wolf/cerebrum.md, src/, src-tauri/ | audit started | ~8k |
+| 01:31 | Agent 2 started Codex/Claude event decoding audit and read OpenWolf guidance | .wolf/OPENWOLF.md, .wolf/anatomy.md, .wolf/cerebrum.md | Identified relevant JSONL/Codex event prior learnings | ~7200 |
+| 01:34 | Hardened Codex event decoding/tool rendering parity and ran initial checks | useClaudeEvents.ts, codexEventDecoder.ts, claudeStore.ts, ChatMessage.tsx, codex.rs | Fixed no-op events, cumulative deltas, in-progress tool input updates, apply_patch/MCP display; tsc and cargo fmt passed | ~18000 |
+| 01:36 | Completed verification for Agent 2 event/rendering patch | npx tsc, cargo fmt --check, cargo check, git diff --check, .wolf/buglog.json | All targeted checks passed; buglog/cerebrum updated | ~6000 |
+| 01:31 | read OpenWolf session guidance and team status | .wolf/OPENWOLF.md .wolf/anatomy.md .wolf/cerebrum.md | ready to inspect chat UI paths | ~7k |
+| 01:31 | Started Agent 1 provider lifecycle parity audit; read OpenWolf/anatomy/cerebrum and checked buglog/team chat | .wolf/OPENWOLF.md, .wolf/anatomy.md, .wolf/cerebrum.md, .wolf/buglog.json | in progress | ~3.5k |
+| 01:32 | added missing anatomy entries for chat UI files | .wolf/anatomy.md | OpenWolf navigation can proceed for source inspection | ~200 |
+| 01:36 | Patched Codex first-turn fallback in providerRuntime to avoid bogus local-id resume after create failure | src/lib/providerRuntime.ts | pending verification | ~500 |
+| 01:33 | traced delegation spawn/orchestrator/MCP/shared chat/Discord paths | src/hooks/useDelegationSpawn.ts src/hooks/useDelegationOrchestrator.ts src/lib/tauriApi.ts mcp/*.mjs src-tauri/src/permission_server.rs src-tauri/src/lib.rs src-tauri/src/discord_bot.rs | found per-child label/inheritance and legacy MCP POST bugs | ~30000 |
+| 01:33 | Patched checkpoint path resolution and restore hardening | src/hooks/useChatSend.ts, src-tauri/src/lib.rs | pending verification | ~4k |
+| 01:33 | Ran frontend build and started targeted verification | src/hooks/useChatSend.ts, src-tauri/src/lib.rs | vite build passed, cargo fmt applied | ~1k |
+| 01:34 | Logged Codex first-turn resume fallback bug and cerebrum learning | .wolf/buglog.json, .wolf/cerebrum.md | bug-027 recorded | ~700 |
+| 01:34 | patched delegation child spawn inheritance and legacy MCP POST helper | src/hooks/useDelegationSpawn.ts src/components/claude/ClaudeChat.tsx mcp/delegation-server.mjs | pending verification | ~4000 |
+| 01:34 | Fixed exact optional provider hook inputs | src/hooks/useChatSend.ts, src/hooks/useChatRewind.ts | rerunning tsc/cargo check | ~1k |
+| 01:35 | Fixed provider runtime contract exactOptionalPropertyTypes mismatch exposed by typecheck | src/contracts/providerRuntime.ts | pending recheck | ~300 |
+| 01:34 | ran npm typecheck and MCP JS syntax check | package scripts mcp/delegation-server.mjs | typecheck blocked by pre-existing/parallel useClaudeEvents ClaudeUsage error; JS syntax ok if node command exits clean | ~1000 |
+| 01:35 | Re-ran typecheck; provider contract errors resolved, remaining failure is Agent 2 useClaudeEvents ClaudeUsage issue | src/contracts/providerRuntime.ts, src/hooks/useClaudeEvents.ts | partial verification | ~400 |
+| 01:35 | patched chat scroll intent and prompt island reset | src/components/claude/ClaudeChat.tsx src/components/claude/PromptIsland.tsx src/components/claude/ClaudeChat.css | ready for typecheck | ~1.8k |
+| 01:35 | Logged checkpoint path safety bug and learning | .wolf/buglog.json, .wolf/cerebrum.md | bug-028 recorded | ~700 |
+| 01:35 | Logged exact optional provider input build failure | .wolf/buglog.json, .wolf/cerebrum.md | bug-029 recorded; only useClaudeEvents tsc error remains outside Agent 5 scope | ~500 |
+| 01:36 | Resolved concurrent buglog id collisions after team entries landed | .wolf/buglog.json | bug ids unique in tail | ~200 |
+| 01:37 | Verification passed after concurrent event fix landed | npm run typecheck | PASS | ~100 |
+| 01:36 | recorded chat scroll bug fix and shared typecheck blocker | .wolf/buglog.json .wolf/cerebrum.md | OpenWolf logs updated | ~900 |
+| 01:36 | documented delegation MCP protocol limitations | docs/delegation-mcp-limitations.md .wolf/anatomy.md | limitations captured for future audits | ~900 |
+| 01:36 | final verification for delegation MCP audit | npm typecheck mcp/delegation-server.mjs .wolf/buglog.json | typecheck, node --check, diff --check, buglog JSON all passed | ~1200 |
+| 01:37 | verified chat UI patch with frontend build and full typecheck | package scripts | build and typecheck pass after team updates | ~600 |
+| 01:38 | checked whitespace and resolved buglog id collisions | chat UI files .wolf/buglog.json | git diff --check passed | ~200 |
+| 02:02 | fixed Codex malformed-event UI error and virtual row overlap | src-tauri/src/providers/util.rs, src/hooks/useClaudeEvents.ts, src/components/claude/ClaudeChat.tsx, .wolf/buglog.json, .wolf/cerebrum.md | capper now preserves JSON, frontend drops malformed Codex frames quietly, tool rows get layout signatures | ~1.2k |
+| 02:05 | collapsed consecutive Bash tool calls | src/components/claude/ChatMessage.tsx, .wolf/buglog.json | Bash added to grouped tool renderer as `Ran N commands` | ~300 |

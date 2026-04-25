@@ -186,6 +186,7 @@ interface ClaudeState {
   appendStreamingText: (sessionId: string, text: string) => void;
   clearStreamingText: (sessionId: string) => void;
   finalizeAssistantMessage: (sessionId: string, text: string, toolCalls?: ToolCall[]) => void;
+  updateToolCall: (sessionId: string, toolUseId: string, patch: Partial<ToolCall>) => void;
   updateToolResult: (sessionId: string, toolUseId: string, result: string, isError: boolean, patch?: Partial<ToolCall>) => void;
   setStreaming: (sessionId: string, streaming: boolean) => void;
   touchLastEvent: (sessionId: string) => void;
@@ -602,6 +603,34 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
         ...(toolCalls !== undefined && { toolCalls }),
       };
       return { sessions: updateSession(s.sessions, sessionId, { messages: [...session.messages, msg], streamingText: "" }) };
+    });
+  },
+
+  updateToolCall: (sessionId, toolUseId, patch) => {
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+
+      const msgs = session.messages;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const msg = msgs[i];
+        if (msg && msg.role === "assistant" && msg.toolCalls) {
+          const tcIdx = msg.toolCalls.findIndex((t) => t.id === toolUseId);
+          if (tcIdx >= 0) {
+            const updatedToolCalls = msg.toolCalls.slice();
+            const existing = updatedToolCalls[tcIdx]!;
+            updatedToolCalls[tcIdx] = {
+              ...existing,
+              ...patch,
+              input: patch.input ? { ...existing.input, ...patch.input } : existing.input,
+            };
+            const messages = msgs.slice();
+            messages[i] = { ...msg, toolCalls: updatedToolCalls };
+            return { sessions: updateSession(s.sessions, sessionId, { messages }) };
+          }
+        }
+      }
+      return s;
     });
   },
 

@@ -1,2 +1,2 @@
-mcp_servers = { terminal-64 = { command = "/opt/homebrew/bin/node", args = ["/Users/janislacars/Documents/Terminal-64/src-tauri/target/debug/mcp/t64-server.mjs"], env_vars = ["T64_DELEGATION_PORT", "T64_DELEGATION_SECRET", "T64_GROUP_ID", "T64_AGENT_LABEL"], enabled = true } }
+mcp_servers = { terminal-64 = { command = "/opt/homebrew/bin/node", args = ["/Applications/Terminal 64.app/Contents/Resources/mcp/t64-server.mjs"], env_vars = ["T64_DELEGATION_PORT", "T64_DELEGATION_SECRET", "T64_GROUP_ID", "T64_AGENT_LABEL"], enabled = true } }
 project_doc_fallback_filenames = ["CLAUDE.md", "CLAUDE.MD"]

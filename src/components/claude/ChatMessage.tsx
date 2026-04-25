@@ -389,11 +389,11 @@ export function toolHeader(tc: ToolCall): { icon: string; title: string; detail:
     case "Read":
       return { icon: "◉", title: "Read", detail: shortPath(i.file_path) };
     case "Edit":
-      return { icon: "✎", title: "Edit", detail: shortPath(i.file_path) };
+      return { icon: "✎", title: "Edit", detail: shortPath(i.file_path || i.path) };
     case "Write":
       return { icon: "+", title: "Write", detail: shortPath(i.file_path) };
     case "MultiEdit":
-      return { icon: "✎", title: "MultiEdit", detail: shortPath(i.file_path) };
+      return { icon: "✎", title: "MultiEdit", detail: shortPath(i.file_path || i.path) };
     case "Glob":
       return { icon: "⊛", title: "Glob", detail: String(i.pattern || "") };
     case "Grep":
@@ -411,6 +411,16 @@ export function toolHeader(tc: ToolCall): { icon: string; title: string; detail:
     case "AskUserQuestion":
       return { icon: "?", title: "Question", detail: "" };
     default:
+      if (tc.name === "local_shell" || tc.name === "local_shell_call") {
+        return { icon: "$", title: "Bash", detail: String(i.command || "").slice(0, 80) };
+      }
+      if (tc.name.includes("/") || tc.name.includes("__") || i.server || i.tool_name) {
+        const title = tc.name.includes("__") ? tc.name.replace("__", "/") : tc.name;
+        const args = i.arguments && typeof i.arguments === "object"
+          ? summarizeFallback(i.arguments as Record<string, unknown>)
+          : summarizeFallback(i);
+        return { icon: "⊛", title, detail: args };
+      }
       return { icon: "⚙", title: tc.name, detail: summarizeFallback(i) };
   }
 }
@@ -465,15 +475,20 @@ function ToolBody({ tc, onEditClick }: { tc: ToolCall; onEditClick?: (tcId: stri
       : [];
     const changes = rawChanges
       .map((change) => {
-        const path = typeof change.path === "string" ? shortPath(change.path) : "";
+        const rawPath = typeof change.path === "string"
+          ? change.path
+          : typeof change.file_path === "string"
+            ? change.file_path
+            : "";
+        const path = rawPath ? shortPath(rawPath) : "";
         const kind = typeof change.kind === "string" ? change.kind : "update";
         return path ? `${kind}: ${path}` : kind;
       });
-    const path = String(i.file_path || i.path || paths[0] || rawChanges[0]?.path || "");
+    const path = String(i.file_path || i.path || paths[0] || rawChanges[0]?.file_path || rawChanges[0]?.path || "");
     const short = shortPath(path);
     const change = i.change ? String(i.change) : "";
     const summary = changes.length > 0 ? changes.join("\n") : short ? `File: ${short}` : "File changed";
-    const previewDiff = rawChanges.find((entry) => typeof entry.diff === "string" && entry.diff.trim())?.diff;
+    const previewDiff = rawChanges.find((entry) => typeof entry.diff === "string" && entry.diff.trim())?.diff || i.diff;
     const previewLines = diffLines(previewDiff);
     return (
       <div className="cc-tc-body">
@@ -512,7 +527,11 @@ function ToolBody({ tc, onEditClick }: { tc: ToolCall; onEditClick?: (tcId: stri
     return (
       <div className="cc-tc-body">
         {rawChanges.map((change, idx) => {
-          const path = typeof change.path === "string" ? change.path : "";
+          const path = typeof change.path === "string"
+            ? change.path
+            : typeof change.file_path === "string"
+              ? change.file_path
+              : "";
           const lines = diffLines(change.diff);
           return (
             <div
@@ -607,12 +626,22 @@ function ToolCallCard({ tc, onEditClick }: { tc: ToolCall; onEditClick?: (tcId: 
   );
 }
 
-const GROUPABLE_TOOLS = new Set(["Read", "Grep", "Glob", "WebSearch", "WebFetch"]);
+const GROUPABLE_TOOLS = new Set(["Bash", "Read", "Grep", "Glob", "WebSearch", "WebFetch"]);
 
 function groupLabel(tcs: ToolCall[]): { icon: string; name: string; details: string } {
   const first = tcs[0]?.name;
   if (tcs.every((tc) => tc.name === first)) {
     switch (first) {
+      case "Bash": {
+        const commands = tcs
+          .map((tc) => String(tc.input.command || "").trim())
+          .filter(Boolean);
+        return {
+          icon: "$",
+          name: `Ran ${tcs.length} commands`,
+          details: commands.slice(0, 2).map((cmd) => cmd.slice(0, 40)).join(", "),
+        };
+      }
       case "Read":
         return { icon: "◉", name: `Read ${tcs.length} files`, details: tcs.map((tc) => shortPath(tc.input.file_path)).join(", ") };
       case "Grep":

@@ -26,6 +26,8 @@
 
 ### Delegation
 - `delegationStore.parentToGroup` is single-slot. To get ALL groups for a parent, iterate `Object.values(delState.groups).filter(g => g.parentSessionId === parentId)`.
+- Delegation children are provider-bound but ephemeral. When spawning them, explicitly copy parent session model/effort and Codex permission preset into both the child store row and backend create request; `createSession(..., ephemeral=true)` does not load persisted metadata.
+- Claude delegation MCP labels come from the generated temp MCP config env. Create one config per child if the team chat needs distinct `Agent N` names.
 
 ### Claude CLI events (`useClaudeEvents.ts`)
 - `stream_request_start` fires at start of EACH API call in a multi-turn session. Treat like `message_start`: clear pendingBlocks + assistantFinalized.
@@ -46,6 +48,7 @@
 ### Tauri build config (2026-04-19)
 - Tauri 2 bundle: use explicit `targets: ["app","dmg","deb","appimage","rpm","nsis"]` — `"all"` triggers MSI which needs WiX. Set `bundle.windows.nsis.minimumWebview2Version` (e.g. "110.0.1587.40") for enterprise updates.
 - `env!("CARGO_MANIFEST_DIR")` bakes developer's compile-time path — production crashes on user machines. Use `app_handle.path().resource_dir()` first, fall back to CARGO_MANIFEST_DIR only for dev runs.
+- Rust CI runs clippy with `-D warnings`; prefer direct cheap fallbacks like `unwrap_or(JsonValue::Null)` over lazy `unwrap_or_else(|| json!(null))`.
 
 ### ONNX / ort crate (2026-04-18)
 - `ort` 2.0.0-rc.11 needs `ndarray = "0.17"` (matches fastembed v5 transitive). Pinning 0.16 splits the graph and breaks `Tensor::from_array`.
@@ -58,10 +61,12 @@
 
 ### Session state flow (2026-04-16)
 - Fork first-send MUST branch on `forkParentSessionId` presence alone — NOT `if (forkParent && !started)`. `loadFromDisk(newSessionId, forkedMessages)` sets `hasBeenStarted=true` whenever `promptCount>0`, so the `!started` guard falls through to `--resume <newId>` against a JSONL the CLI hasn't created yet, and the send hangs silently. Store clears `forkParentSessionId` after the `--fork-session` send succeeds.
+- With `exactOptionalPropertyTypes`, provider runtime input objects must omit optional fields when values are undefined. Do not pass `permissionOverride: undefined` or `codexThreadId: undefined`; conditionally add the property.
 
 ### UI rendering / WebKit (2026-04-18)
 - `overflow: hidden` + `border-radius` on a child of a `transform: scale(z)` parent flickers on WebKit at fractional pixel positions — rounded-corner clip repaints non-atomically, invalidating the background paint. Fix by promoting to own compositor layer: `will-change: transform; transform: translateZ(0); backface-visibility: hidden; contain: layout paint; isolation: isolate`.
 - Prompt island can lag with huge histories if it reverses/maps/formats every prompt on open. Render the newest bounded slice first and append older rows in scroll batches.
+- LegendList scroll events are not a reliable proxy for user intent during streaming; growing rows can briefly report not-at-end. Keep bottom stickiness in an intent ref updated by wheel/touch/key/pointer handlers, and use scroll events only for visibility/progress telemetry.
 
 ### Voice pipeline (2026-04-18)
 - VAD with a single hard threshold + 1-frame hangover finalizes whisper early on breaths/soft consonants mid-utterance. Use Silero VADIterator-style hysteresis: activate 0.5, deactivate 0.35, `min_speech_duration_ms=250`, `min_silence_duration_ms=500`, `speech_pad_ms=300`. Tune orchestrator silence-frame counters to match (e.g. dictation `SILENCE_FRAMES_TO_FINALIZE` 25→9).
@@ -81,7 +86,11 @@
 - Codex rollouts can store edits as `custom_tool_call` named `apply_patch`; hydrate these into `Edit`/`MultiEdit` tool calls so refreshed chats preserve Claude-style clickable edit cards.
 - Codex file-change shapes are not stable across live app-server events and rollout/history data: accept `path`, `file_path`, `filePath`, `diff`, `unified_diff`, and `unifiedDiff` when building UI tool-call inputs.
 - Tool edit preview paths can be relative for Codex `apply_patch` history; resolve them against the session cwd before `readFile` so Monaco opens the real file.
+- Checkpoint snapshots must also resolve Codex/Claude modified file paths against the session cwd before `readFile`/manifest persistence; restore must only write absolute manifest targets. Raw relative paths would restore from the Tauri process cwd, not the project cwd.
 - Legacy `T64_CODEX_TRANSPORT=exec` emits rollout-style `session_meta`/`event_msg`/`response_item` JSON. Translate it in Rust to the same provider-neutral event shapes as app-server before emitting to the frontend.
+- Codex app-server/live item updates may use cumulative `item.text`/`output` or delta fields depending on event source. Frontend accumulation must append explicit `delta` values but replace when the new value already includes the previous value; patch-only file-change updates should update tool input without setting `result`, or the UI marks the tool completed too early.
+- Codex runtime has two ids: the Terminal 64 local `sessionId` routes UI/process events, while `codexThreadId` is the external OpenAI thread used for resume/fork/rollback. Fresh first-turn failures must not fall back to `send_codex_prompt` without a thread id; only already-started legacy sessions may attempt local-id resume.
+- With `exactOptionalPropertyTypes`, provider contract fields that callers include explicitly with maybe-undefined values must be typed as `T | undefined`, not just `field?: T`.
 
 ### Permission server bypass + unknown-session race (2026-04-22)
 - `permission_server::handle_connection` must parse `permission_mode` from the hook payload BEFORE the session_map lookup. The request's `secret` in the URL has already proven authenticity, so an unknown `run_token` is just "session unregistered" (rewind cancel+close race, spawned-session timing, or server-restart leftover). On bypassPermissions, always return `permissionDecision: "allow"` even with empty session_id — otherwise the user gets silent `permissionDecision: "deny"` with reason "Unknown session — denied for safety" on skill/widget/MCP/MD edits.
@@ -98,6 +107,8 @@
 ### Claude CLI --resume replay (2026-04-19)
 - If the previous run died mid-tool, the session JSONL can contain an assistant `tool_use` block with no matching user `tool_result`. On `--resume`, the CLI RE-EXECUTES the dangling tool (infinite replay). Before every spawn, scan the JSONL and append synthetic cancelled `tool_result` records (is_error: true) for any unresolved tool_use IDs. See `sanitize_dangling_tool_uses()` in `claude_manager.rs`. Preserve `parentUuid`, `cwd`, `version`, `gitBranch` on the synthetic record so the CLI accepts it.
 - Claude CLI stdout lines can be hundreds of MB for large Bash outputs. Emitting them raw as one Tauri event freezes the renderer (JSON.parse + React render + localStorage persistence on megabytes). Cap lines > 512KB in the reader thread (`cap_event_size()`) — truncate `tool_result`/`text` content to head 96KB + tail 96KB with a marker. The CLI's own JSONL keeps the full output for future turns; only the live UI stream is truncated.
+- `cap_event_size()` is shared by Claude and Codex live streams. If it receives a parsed JSON event, every fallback must preserve valid JSON; raw byte-slice truncation makes the frontend show bogus parse errors while the provider process keeps running. For provider events with arbitrary shapes, recursively truncate oversized string fields and re-serialize.
+- LegendList row keys must change when a row's rendered height can change outside normal message append flow, especially assistant tool cards receiving live output. Include a lightweight layout signature for assistant/tool rows so the virtual list remeasures instead of letting growing cards overlap following rows.
 
 ## Decision Log
 

@@ -16,6 +16,7 @@ import {
   type ClaudeContentBlock,
   type ClaudeQuestion,
   type ClaudeStreamEvent,
+  type ClaudeUsage,
   type PermissionRequestPayload,
 } from "../lib/claudeEventDecoder";
 import {
@@ -76,6 +77,7 @@ const codexPending = new Map<string, Map<string, CodexPendingItem>>();
 // Tracks whether the active turn's assistant message has been finalized
 // (e.g. via item.completed/agent_message), so turn.completed doesn't double up.
 const codexAssistantFinalized = new Set<string>();
+const codexParseErrorCounts = new Map<string, number>();
 
 function getCodexItemMap(sessionId: string): Map<string, CodexPendingItem> {
   let map = codexPending.get(sessionId);
@@ -84,6 +86,37 @@ function getCodexItemMap(sessionId: string): Map<string, CodexPendingItem> {
     codexPending.set(sessionId, map);
   }
   return map;
+}
+
+function appendOrReplaceAccumulated(prev: string, next: string): string {
+  if (!next) return prev;
+  if (!prev) return next;
+  if (next.startsWith(prev)) return next;
+  return prev + next;
+}
+
+function codexChangedPaths(input: Record<string, unknown>): string[] {
+  const paths = new Set<string>();
+  for (const key of ["file_path", "path"]) {
+    const value = input[key];
+    if (typeof value === "string" && value.length > 0) paths.add(value);
+  }
+  if (Array.isArray(input.paths)) {
+    for (const path of input.paths) {
+      if (typeof path === "string" && path.length > 0) paths.add(path);
+    }
+  }
+  if (Array.isArray(input.changes)) {
+    for (const change of input.changes) {
+      if (!change || typeof change !== "object") continue;
+      const row = change as Record<string, unknown>;
+      for (const key of ["file_path", "path"]) {
+        const value = row[key];
+        if (typeof value === "string" && value.length > 0) paths.add(value);
+      }
+    }
+  }
+  return [...paths];
 }
 
 // RAF batching for streaming text — coalesces deltas into one store update per frame
@@ -658,15 +691,15 @@ export function useClaudeEvents() {
         try {
           parsed = JSON.parse(data) as CodexNdjsonEvent;
         } catch (err) {
-          console.warn("[codex] Failed to parse event:", data.slice(0, 200), err);
-          store.setError(
-            session_id,
-            "Failed to parse Codex response — the session may need to be restarted.",
-          );
+          const count = (codexParseErrorCounts.get(session_id) || 0) + 1;
+          codexParseErrorCounts.set(session_id, count);
+          console.warn("[codex] Dropped malformed stream event:", data.slice(0, 200), err);
           return;
         }
+        codexParseErrorCounts.delete(session_id);
 
         const type = parsed.type || "";
+        if (!type) return;
 
         // Mark streaming live + touch last-event whenever non-terminal events
         // flow in, mirroring the Claude path.
@@ -720,6 +753,7 @@ export function useClaudeEvents() {
             kind,
             toolName: codexItemDisplayName(item),
             text: typeof item.text === "string" ? item.text : "",
+            outputText: "",
             inputArgs: codexItemInput(item),
           });
 
@@ -740,16 +774,22 @@ export function useClaudeEvents() {
         //    arrive on `delta`, `text`, or inside `item.text`.
         if (type === "item.updated" || type === "content.delta") {
           const item = parsed.item;
-          const deltaText =
-            (typeof parsed.delta === "string" ? parsed.delta : "") ||
-            (typeof parsed.text === "string" ? parsed.text : "") ||
-            (item && typeof item.text === "string" ? item.text : "");
           if (item?.id) {
             const itemMap = getCodexItemMap(session_id);
             const tracked = itemMap.get(item.id);
             if (tracked && tracked.kind === "agent_message") {
+              const candidateText =
+                (typeof parsed.delta === "string" ? parsed.delta : "") ||
+                (typeof parsed.text === "string" ? parsed.text : "") ||
+                (typeof item.text === "string" ? item.text : "");
+              const deltaText =
+                typeof parsed.delta === "string" || typeof parsed.text === "string"
+                  ? candidateText
+                  : candidateText.startsWith(tracked.text)
+                    ? candidateText.slice(tracked.text.length)
+                    : candidateText;
               if (!deltaText) return;
-              const next = tracked.text + deltaText;
+              const next = appendOrReplaceAccumulated(tracked.text, candidateText || deltaText);
               tracked.text = next;
               // Stream into the same buffer Claude uses; flushPendingText
               // merges these into the session-level streamingText.
@@ -759,11 +799,22 @@ export function useClaudeEvents() {
             } else if (tracked && tracked.kind === "tool") {
               const input = codexItemInput(item);
               tracked.inputArgs = { ...tracked.inputArgs, ...input };
-              const result = codexItemResultText(item);
-              store.updateToolResult(session_id, item.id, result, codexItemIsError(item), {
+              store.updateToolCall(session_id, item.id, {
                 name: codexItemDisplayName(item),
                 input,
               });
+              const resultDelta = codexItemResultText(item);
+              const hasResultDelta = resultDelta.length > 0 || codexItemIsError(item);
+              if (hasResultDelta) {
+                tracked.outputText =
+                  typeof parsed.delta === "string"
+                    ? tracked.outputText + resultDelta
+                    : appendOrReplaceAccumulated(tracked.outputText, resultDelta);
+                store.updateToolResult(session_id, item.id, tracked.outputText, codexItemIsError(item), {
+                  name: codexItemDisplayName(item),
+                  input,
+                });
+              }
             }
           }
           return;
@@ -813,13 +864,17 @@ export function useClaudeEvents() {
               store.clearStreamingText(session_id);
             }
           } else if (kind === "tool") {
-            const result = codexItemResultText(item);
+            const completedResult = codexItemResultText(item);
             const isError = codexItemIsError(item);
             const completedInput = codexItemInput(item);
             const patchedInput = tracked
               ? { ...tracked.inputArgs, ...completedInput }
               : completedInput;
-            const patchedName = tracked?.toolName ?? codexItemDisplayName(item);
+            const completedName = codexItemDisplayName(item);
+            const completedInputIsEmpty = Object.keys(completedInput).length === 0;
+            const patchedName = tracked?.toolName && (completedInputIsEmpty || completedName === "dynamic_tool_call")
+              ? tracked.toolName
+              : completedName || tracked?.toolName || "tool";
             if (!tracked) {
               store.finalizeAssistantMessage(session_id, "", [{
                 id: item.id,
@@ -828,23 +883,14 @@ export function useClaudeEvents() {
               }]);
               codexAssistantFinalized.add(session_id);
             }
+            const result = completedResult || tracked?.outputText || "";
             store.updateToolResult(session_id, item.id, result, isError, {
               name: patchedName,
               input: patchedInput,
             });
-            const itemType = item.item_type ?? item.type;
-            if (itemType === "file_change") {
-              const changedPaths = [
-                item.path,
-                item.file_path,
-                item.filePath,
-                ...(Array.isArray(item.changes)
-                  ? item.changes.map((change) => change?.path || change?.file_path || change?.filePath)
-                  : []),
-              ].filter((path): path is string => typeof path === "string" && path.length > 0);
-              if (changedPaths.length > 0) {
-                store.addModifiedFiles(session_id, changedPaths);
-              }
+            const changedPaths = !isError ? codexChangedPaths(patchedInput) : [];
+            if (changedPaths.length > 0) {
+              store.addModifiedFiles(session_id, changedPaths);
             }
           }
           // reasoning + other item kinds are silent for now.
@@ -966,6 +1012,7 @@ export function useClaudeEvents() {
         store.clearStreamingText(payload.session_id);
         codexPending.delete(payload.session_id);
         codexAssistantFinalized.delete(payload.session_id);
+        codexParseErrorCounts.delete(payload.session_id);
       });
       if (cancelled) { fnCodexDone(); return; }
       unlistenCodexDone = fnCodexDone;

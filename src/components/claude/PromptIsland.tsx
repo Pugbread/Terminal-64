@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UIEvent } from "react";
 
 export interface IslandPrompt {
@@ -28,6 +28,7 @@ function PromptIslandImpl({ prompts, isScrolledUp, progress, open, onOpen, onClo
   const hasPrompts = prompts.length > 0;
   const visible = hasPrompts && (isScrolledUp || open);
   const [visibleCount, setVisibleCount] = useState(INITIAL_PROMPT_ROWS);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (open && !hasPrompts) onClose();
@@ -36,6 +37,9 @@ function PromptIslandImpl({ prompts, isScrolledUp, progress, open, onOpen, onClo
   useEffect(() => {
     if (open) {
       setVisibleCount(Math.min(INITIAL_PROMPT_ROWS, prompts.length));
+      requestAnimationFrame(() => {
+        if (listRef.current) listRef.current.scrollTop = 0;
+      });
     }
   }, [open, prompts.length]);
 
@@ -106,7 +110,7 @@ function PromptIslandImpl({ prompts, isScrolledUp, progress, open, onOpen, onClo
               </svg>
             </button>
           </div>
-          <div className="cc-island-list" onScroll={handleListScroll}>
+          <div ref={listRef} className="cc-island-list" onScroll={handleListScroll}>
             {visiblePrompts.map((p) => {
               return (
                 <button

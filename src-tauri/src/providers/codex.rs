@@ -460,9 +460,9 @@ fn app_server_notification_to_exec_event(method: &str, params: &JsonValue) -> Op
             let last = usage.get("last")?;
             Some(json!({
                 "type": "token_usage.updated",
-                "thread_id": params.get("threadId").cloned().unwrap_or_else(|| json!(null)),
-                "turn_id": params.get("turnId").cloned().unwrap_or_else(|| json!(null)),
-                "context_window": usage.get("modelContextWindow").cloned().unwrap_or_else(|| json!(null)),
+                "thread_id": params.get("threadId").cloned().unwrap_or(JsonValue::Null),
+                "turn_id": params.get("turnId").cloned().unwrap_or(JsonValue::Null),
+                "context_window": usage.get("modelContextWindow").cloned().unwrap_or(JsonValue::Null),
                 "usage": {
                     "input_tokens": last.get("inputTokens").cloned().unwrap_or_else(|| json!(0)),
                     "cached_input_tokens": last.get("cachedInputTokens").cloned().unwrap_or_else(|| json!(0)),
@@ -607,7 +607,7 @@ fn codex_exec_envelope_to_frontend_events(envelope: &JsonValue) -> Vec<JsonValue
                     };
                     vec![json!({
                         "type": "token_usage.updated",
-                        "context_window": info.get("model_context_window").cloned().unwrap_or_else(|| json!(null)),
+                        "context_window": info.get("model_context_window").cloned().unwrap_or(JsonValue::Null),
                         "usage": usage,
                     })]
                 }
@@ -673,7 +673,7 @@ fn codex_exec_envelope_to_frontend_events(envelope: &JsonValue) -> Vec<JsonValue
                             "type": tool_type,
                             "name": name,
                             "arguments": codex_function_input(payload, ptype),
-                            "action": payload.get("action").cloned().unwrap_or_else(|| json!(null)),
+                            "action": payload.get("action").cloned().unwrap_or(JsonValue::Null),
                         },
                     })];
                 }
@@ -724,7 +724,7 @@ fn codex_exec_envelope_to_frontend_events(envelope: &JsonValue) -> Vec<JsonValue
                     let (output, is_error) = codex_tool_output(payload);
                     let tool_type = match ptype {
                         "local_shell_call_output" => "local_shell_call",
-                        "custom_tool_call_output" => "file_change",
+                        "custom_tool_call_output" => "dynamic_tool_call",
                         _ => "dynamic_tool_call",
                     };
                     return vec![json!({
@@ -2169,7 +2169,7 @@ pub fn load_codex_history_by_thread(thread_id: &str) -> Vec<HistoryMessage> {
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| {
                         if ptype == "local_shell_call" {
-                            "local_shell".to_string()
+                            "Bash".to_string()
                         } else {
                             "function".to_string()
                         }
@@ -2318,7 +2318,7 @@ pub fn load_codex_history_by_thread(thread_id: &str) -> Vec<HistoryMessage> {
                 let server = payload.get("server").and_then(|v| v.as_str()).unwrap_or("");
                 let tool = payload.get("tool").and_then(|v| v.as_str()).unwrap_or("");
                 let name = if !server.is_empty() && !tool.is_empty() {
-                    format!("{}__{}", server, tool)
+                    format!("{}/{}", server, tool)
                 } else if !tool.is_empty() {
                     tool.to_string()
                 } else {

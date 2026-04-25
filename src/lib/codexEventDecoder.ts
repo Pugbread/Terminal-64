@@ -10,6 +10,9 @@ export interface CodexItem {
   file_path?: string;
   filePath?: string;
   change?: string;
+  diff?: string;
+  unified_diff?: string;
+  unifiedDiff?: string;
   changes?: Array<{
     path?: string;
     file_path?: string;
@@ -61,6 +64,7 @@ export interface CodexPendingItem {
   kind: "agent_message" | "reasoning" | "tool" | "other";
   toolName: string;
   text: string;
+  outputText: string;
   inputArgs: Record<string, unknown>;
 }
 
@@ -74,6 +78,7 @@ export function classifyCodexItem(itemType: string | undefined): CodexPendingIte
     itemType === "file_change" ||
     itemType === "mcp_tool_call" ||
     itemType === "collab_tool_call" ||
+    itemType === "custom_tool_call" ||
     itemType === "web_search" ||
     itemType === "web_search_call" ||
     itemType === "dynamic_tool_call"
@@ -109,12 +114,19 @@ export function codexItemDisplayName(item: CodexItem): string {
     return "Bash";
   }
   if (kind === "file_change") {
-    if (Array.isArray(item.changes) && item.changes.length > 1) return "MultiEdit";
+    const paths = Array.isArray(item.changes)
+      ? item.changes.map(codexChangePath).filter(Boolean)
+      : [];
+    const allPaths = [item.path || item.file_path || item.filePath, ...paths].filter(Boolean);
+    if (new Set(allPaths).size > 1) return "MultiEdit";
     return "Edit";
   }
   if (kind === "mcp_tool_call") {
     if (item.server && item.tool_name) return `${item.server}/${item.tool_name}`;
     return item.tool_name || item.name || "mcp_tool";
+  }
+  if (kind === "custom_tool_call" && item.name === "apply_patch") {
+    return "Edit";
   }
   if (kind === "web_search" || kind === "web_search_call") {
     return "WebSearch";
@@ -143,7 +155,7 @@ export function codexItemInput(item: CodexItem): Record<string, unknown> {
     }
     if (changes.length > 0) {
       out.changes = changes.map((change) => ({
-        path: change.path,
+        path: codexChangePath(change),
         file_path: codexChangePath(change),
         kind: typeof change.kind === "string" ? change.kind : change.kind?.type,
         move_path: typeof change.kind === "object" ? change.kind.move_path : undefined,
@@ -151,10 +163,17 @@ export function codexItemInput(item: CodexItem): Record<string, unknown> {
       }));
     }
     if (item.change) out.change = item.change;
+    const diff = item.diff || item.unified_diff || item.unifiedDiff;
+    if (diff) out.diff = diff;
   } else if (kind === "mcp_tool_call") {
     if (item.tool_name) out.tool_name = item.tool_name;
     if (item.server) out.server = item.server;
     if (item.arguments && typeof item.arguments === "object") out.arguments = item.arguments;
+  } else if (kind === "custom_tool_call") {
+    if (item.name) out.tool_name = item.name;
+    if (item.arguments && typeof item.arguments === "object") {
+      Object.assign(out, item.arguments as Record<string, unknown>);
+    }
   } else if (kind === "web_search" || kind === "web_search_call") {
     const q = item.action?.query || item.query;
     if (q) out.query = q;

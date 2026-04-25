@@ -514,6 +514,230 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-027",
+      "timestamp": "2026-04-26T01:33:36+02:00",
+      "error_message": "A first-turn Codex create failure falls through to send_codex_prompt without a Codex thread id, so the backend tries to resume the local Terminal 64 session id as if it were an OpenAI thread.",
+      "file": "src/lib/providerRuntime.ts",
+      "root_cause": "runProviderTurn used the same create-then-send fallback for fresh Codex sessions and legacy started sessions. On a true first turn there is no external codexThreadId yet, so sendCodexPrompt can only resume the local UUID, which is not a valid Codex thread id.",
+      "fix": "Guarded the fallback so fresh Codex sessions throw a visible start error instead of attempting a bogus resume. The old local-id resume fallback remains only for already-started sessions whose metadata predates codexThreadId persistence.",
+      "tags": [
+        "codex",
+        "provider-runtime",
+        "first-turn",
+        "resume",
+        "session-lifecycle",
+        "error-handling"
+      ],
+      "related_bugs": [
+        "bug-025"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-030",
+      "timestamp": "2026-04-26T01:35:00+02:00",
+      "error_message": "npm run typecheck failed under exactOptionalPropertyTypes because ProviderTurnInput and ProviderHistoryTruncateInput did not accept explicitly passed undefined values from existing call sites.",
+      "file": "src/contracts/providerRuntime.ts",
+      "root_cause": "The provider runtime contracts used optional properties without `| undefined`, but callers construct object literals with properties like permissionOverride and codexThreadId whose values can be undefined. With exactOptionalPropertyTypes, an explicit undefined value is not assignable to an optional property unless undefined is included in the property type.",
+      "fix": "Expanded provider runtime optional input fields to include `undefined`, matching the existing call-site behavior without relaxing tsconfig strictness.",
+      "tags": [
+        "typescript",
+        "exactOptionalPropertyTypes",
+        "provider-runtime",
+        "typecheck"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-028",
+      "timestamp": "2026-04-26T01:35:00+02:00",
+      "error_message": "Codex file-change paths can be relative, so checkpoint snapshots may read an empty process-relative file and checkpoint restore may later write that raw relative path from the app process working directory.",
+      "file": "src/hooks/useChatSend.ts, src-tauri/src/lib.rs",
+      "root_cause": "Codex live/history edit data can store workspace-relative paths. The checkpoint path captured sess.modifiedFiles verbatim, while restore_checkpoint trusted manifest paths with only a substring '..' check. Relative paths therefore crossed from model/workspace semantics into process-relative filesystem writes.",
+      "fix": "Resolved checkpoint snapshot paths against the session cwd/effective cwd before readFile/createCheckpoint. Hardened checkpoint directory construction against path-like session ids and made restore_checkpoint reject crafted snapshot filenames, relative restore targets, and restore targets containing parent-directory components.",
+      "tags": [
+        "checkpoint",
+        "rewind",
+        "codex",
+        "relative-path",
+        "data-loss",
+        "path-traversal"
+      ],
+      "related_bugs": [
+        "bug-002",
+        "bug-003"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-029",
+      "timestamp": "2026-04-26T01:38:00+02:00",
+      "error_message": "Delegated child sessions did not fully inherit parent provider settings, and the standalone delegation MCP server sent POST requests without Content-Length.",
+      "file": "src/hooks/useDelegationSpawn.ts, src/components/claude/ClaudeChat.tsx, mcp/delegation-server.mjs",
+      "root_cause": "Delegation spawn copied the provider but dropped selected model/effort and forced Codex children to yolo regardless of the parent Codex permission preset. Claude delegation also reused one MCP config labelled Agent for every child. The legacy delegation MCP server wrote JSON bodies using chunked transfer, but the Rust permission server only reads Content-Length bodies.",
+      "fix": "Threaded active model/effort/Codex permission into useDelegationSpawn, stamped them onto ephemeral child sessions, sent them in child create requests, created per-Claude-child MCP config files with Agent N labels, and added Content-Length plus HTTP error handling to mcp/delegation-server.mjs.",
+      "tags": [
+        "delegation",
+        "mcp",
+        "codex",
+        "claude",
+        "provider-inheritance",
+        "team-chat"
+      ],
+      "related_bugs": [
+        "bug-004"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-031",
+      "timestamp": "2026-04-26T01:35:30+02:00",
+      "error_message": "npx tsc --noEmit failed under exactOptionalPropertyTypes because provider hook call objects explicitly passed possibly-undefined optional fields.",
+      "file": "src/hooks/useChatSend.ts, src/hooks/useChatRewind.ts",
+      "root_cause": "ProviderTurnInput.permissionOverride and ProviderHistoryTruncateInput.codexThreadId are optional properties. With exactOptionalPropertyTypes, assigning a present property whose value can be undefined is not equivalent to omitting that property.",
+      "fix": "Built typed provider input objects and only assigned permissionOverride/codexThreadId when the values were not undefined.",
+      "tags": [
+        "typescript",
+        "exactOptionalPropertyTypes",
+        "provider-runtime",
+        "build"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-034",
+      "timestamp": "2026-04-26T01:35:39+02:00",
+      "error_message": "Chat bottom-stickiness and jump-to-bottom visibility can flicker during streaming even when the user has not scrolled away from the bottom.",
+      "file": "src/components/claude/ClaudeChat.tsx, src/components/claude/PromptIsland.tsx, src/components/claude/ClaudeChat.css",
+      "root_cause": "ClaudeChat treated every LegendList scroll event as bottom-stickiness intent. Streaming row layout growth can briefly report not-at-end and flip stickyRef false, which stops auto-follow and shows the prompt island/jump button incorrectly. PromptIsland also retained its previous internal scroll position when reopened.",
+      "fix": "Moved stickyRef changes to explicit user-intent handlers, throttled scroll telemetry through requestAnimationFrame, added a small streaming-row layout follow pump while sticky, reset the prompt island list to the newest prompts on open, and promoted floating controls to their own compositor layers.",
+      "tags": [
+        "chat-ui",
+        "scroll",
+        "streaming",
+        "legend-list",
+        "prompt-island",
+        "performance"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-035",
+      "timestamp": "2026-04-26T01:35:39+02:00",
+      "error_message": "npm run typecheck failed with src/hooks/useClaudeEvents.ts(152,34): error TS2304: Cannot find name 'ClaudeUsage'.",
+      "file": "src/hooks/useClaudeEvents.ts",
+      "root_cause": "The current shared worktree has an unresolved type reference in useClaudeEvents.ts, which is outside the chat-scroll files patched by Agent 3 and overlaps the event-decoding lane.",
+      "fix": "Not fixed by Agent 3; reported in MCP team chat and left for the agent editing useClaudeEvents.ts. Agent 3 verified the frontend bundle with npm run build -- --mode development.",
+      "tags": [
+        "typescript",
+        "typecheck",
+        "useClaudeEvents",
+        "team-chat"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-032",
+      "timestamp": "2026-04-26T01:36:00+02:00",
+      "error_message": "Codex live event/rendering parity gaps could make empty events revive spinners, cumulative item text duplicate previews, in-progress file-change deltas look completed, and apply_patch/MCP/local-shell tools render differently after refresh.",
+      "file": "src/hooks/useClaudeEvents.ts, src/lib/codexEventDecoder.ts, src/stores/claudeStore.ts, src/components/claude/ChatMessage.tsx, src-tauri/src/providers/codex.rs",
+      "root_cause": "The Codex listener treated any parsed event with an empty type as activity, assumed item.text was always a delta, used updateToolResult for patch-only updates, and did not preserve tracked tool identity across output-only completions. The decoder/renderer/history loader also had inconsistent names and path/diff fields for file_change, apply_patch, MCP, and local shell calls.",
+      "fix": "Ignored empty Codex event objects, handled cumulative text/output with append-or-replace semantics, added a store helper to patch tool-card input without marking completion, extracted modified files from normalized Codex edit inputs, normalized file-change diff/path fields, and aligned local-shell/MCP/custom tool names between live events and JSONL hydration.",
+      "tags": [
+        "codex",
+        "claude-parity",
+        "event-decoding",
+        "tool-rendering",
+        "jsonl-refresh",
+        "modified-files"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-033",
+      "timestamp": "2026-04-26T01:36:30+02:00",
+      "error_message": "A local verification rg command failed with `zsh:1: unmatched \"` because the search pattern mixed nested quotes incorrectly.",
+      "file": "n/a",
+      "root_cause": "The shell command used a double-quoted rg pattern containing unescaped double quotes.",
+      "fix": "Reran the verification search with a single-quoted pattern and confirmed the intended references.",
+      "tags": [
+        "verification",
+        "shell",
+        "quoting"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-027",
+      "timestamp": "2026-04-26",
+      "error_message": "cargo clippy --all-targets -- -D warnings failed with clippy::unnecessary-lazy-evaluations in src-tauri/src/providers/codex.rs for unwrap_or_else(|| json!(null)) fallbacks.",
+      "file": "src-tauri/src/providers/codex.rs",
+      "root_cause": "The Codex app-server/exec event translator used lazy closures for cheap null JSON fallbacks. Project CI treats clippy warnings as errors, so these style warnings block the build.",
+      "fix": "Replaced the lazy null closures with direct JsonValue::Null fallbacks and reran cargo fmt --check plus cargo clippy --all-targets -- -D warnings successfully.",
+      "tags": [
+        "rust",
+        "clippy",
+        "ci",
+        "codex",
+        "event-decoder"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-036",
+      "timestamp": "2026-04-26",
+      "error_message": "Codex chat displayed `Failed to parse Codex response` mid-stream and virtualized chat rows could visually overlap while tool cards grew.",
+      "file": "src-tauri/src/providers/util.rs, src/hooks/useClaudeEvents.ts, src/components/claude/ClaudeChat.tsx",
+      "root_cause": "The shared event size capper could fall back to a raw byte slice for oversized JSON events, producing invalid JSON for the frontend. The Codex listener surfaced that recoverable malformed event as a session error. LegendList rows also used stable message ids even when assistant tool-card output changed row height.",
+      "fix": "Made cap_event_size recursively truncate large JSON string fields and always re-serialize valid JSON for parsed events, changed malformed Codex events to be dropped with a console warning instead of a visible session error, and added layout signatures to assistant/tool rows so the virtual list remeasures growing tool cards.",
+      "tags": [
+        "codex",
+        "streaming",
+        "event-decoding",
+        "legend-list",
+        "tool-rendering"
+      ],
+      "related_bugs": [
+        "bug-032"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-037",
+      "timestamp": "2026-04-26",
+      "error_message": "Consecutive Bash tool calls spammed the chat as separate rows, making assistant messages difficult to read.",
+      "file": "src/components/claude/ChatMessage.tsx",
+      "root_cause": "The tool-row grouping set only included read/search/fetch tools, so shell command tool calls bypassed the existing collapsed group renderer.",
+      "fix": "Added Bash to the groupable tool set and gave Bash groups a compact `Ran N commands` label with command previews in the collapsed header.",
+      "tags": [
+        "chat-ui",
+        "tool-rendering",
+        "bash",
+        "readability"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
     }
   ]
 }

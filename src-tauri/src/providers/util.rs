@@ -108,6 +108,34 @@ fn truncate_text_field(s: &str) -> String {
     )
 }
 
+fn truncate_large_json_strings(value: &mut serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => {
+            if s.len() > TRUNCATE_HEAD_BYTES + TRUNCATE_TAIL_BYTES {
+                *s = truncate_text_field(s);
+                true
+            } else {
+                false
+            }
+        }
+        serde_json::Value::Array(items) => {
+            let mut changed = false;
+            for item in items {
+                changed |= truncate_large_json_strings(item);
+            }
+            changed
+        }
+        serde_json::Value::Object(map) => {
+            let mut changed = false;
+            for value in map.values_mut() {
+                changed |= truncate_large_json_strings(value);
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
 pub fn cap_event_size(line: String) -> String {
     if line.len() <= MAX_EVENT_LINE_BYTES {
         return line;
@@ -117,12 +145,7 @@ pub fn cap_event_size(line: String) -> String {
     let mut val: serde_json::Value = match serde_json::from_str(&line) {
         Ok(v) => v,
         Err(_) => {
-            let head = char_boundary_floor(&line, TRUNCATE_HEAD_BYTES);
-            return format!(
-                "{}\n[Terminal 64: truncated {} bytes of non-JSON event]",
-                &line[..head],
-                line.len() - head
-            );
+            return json_string_event("Terminal64TruncatedNonJsonEvent", &line);
         }
     };
 
@@ -168,18 +191,32 @@ pub fn cap_event_size(line: String) -> String {
         }
     }
 
-    match serde_json::to_string(&val) {
-        Ok(s) if s.len() < line.len() => s,
-        _ => {
-            // Truncation didn't help (structure unexpected) — hard cap.
-            let head = char_boundary_floor(&line, TRUNCATE_HEAD_BYTES);
-            format!(
-                "{}\n[Terminal 64: truncated {} bytes of oversized event]",
-                &line[..head],
-                line.len() - head
-            )
+    if truncate_large_json_strings(&mut val) {
+        if let Ok(s) = serde_json::to_string(&val) {
+            return s;
         }
     }
+
+    match serde_json::to_string(&val) {
+        Ok(s) => s,
+        Err(_) => {
+            // Last-resort fallback for unexpected serialization failures.
+            json_string_event("Terminal64TruncatedEvent", &line)
+        }
+    }
+}
+
+fn json_string_event(event_type: &str, original: &str) -> String {
+    let head = char_boundary_floor(original, TRUNCATE_HEAD_BYTES);
+    serde_json::json!({
+        "type": event_type,
+        "message": format!(
+            "Terminal 64 truncated {} bytes of oversized non-JSON event",
+            original.len().saturating_sub(head)
+        ),
+        "preview": &original[..head],
+    })
+    .to_string()
 }
 
 // --- sanitize_dangling_tool_uses (Claude-specific, lives here for now) ----

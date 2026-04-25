@@ -8,15 +8,15 @@ export interface ProviderTurnInput {
   prompt: string;
   started: boolean;
   threadId?: string | null;
-  selectedModel?: string | null;
-  selectedEffort?: string | null;
-  selectedCodexPermission?: string | null;
-  permissionMode?: PermissionMode;
-  permissionOverride?: PermissionMode;
-  skipOpenwolf?: boolean;
-  seedTranscript?: ChatMessage[] | null;
-  resumeAtUuid?: string | null;
-  forkParentSessionId?: string | null;
+  selectedModel?: string | null | undefined;
+  selectedEffort?: string | null | undefined;
+  selectedCodexPermission?: string | null | undefined;
+  permissionMode?: PermissionMode | undefined;
+  permissionOverride?: PermissionMode | undefined;
+  skipOpenwolf?: boolean | undefined;
+  seedTranscript?: ChatMessage[] | null | undefined;
+  resumeAtUuid?: string | null | undefined;
+  forkParentSessionId?: string | null | undefined;
 }
 
 export interface ProviderTurnResult {
@@ -31,7 +31,7 @@ export interface ProviderHistoryTruncateInput {
   cwd: string;
   keepMessages: number;
   preMessages: ChatMessage[];
-  codexThreadId?: string | null;
+  codexThreadId?: string | null | undefined;
 }
 
 export interface ProviderHistoryTruncateResult {

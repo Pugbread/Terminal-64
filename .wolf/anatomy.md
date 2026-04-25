@@ -20,6 +20,26 @@
 - `tsconfig.node.json` (~67 tok)
 - `vite.config.ts` — Vite build configuration (~140 tok)
 
+## Agent 4 delegation audit entries (2026-04-26)
+
+- `docs/delegation-mcp-limitations.md` — Documents current delegation MCP bridge behavior and known protocol limitations. (~300 tok)
+- `src/hooks/useDelegationSpawn.ts` — Spawns delegated child sessions, creates shared chat panel, wires provider-specific MCP/env config, and starts Claude/Codex child processes. (~1900 tok)
+- `src/hooks/useDelegationOrchestrator.ts` — Tracks delegation child progress, report_done/idle completion, merge prompts, shared chat cleanup, and ephemeral child purging. (~4100 tok)
+- `src/components/claude/SharedChat.tsx` — Shared delegation team chat panel; hydrates messages and listens for `delegation-message` events. (~1200 tok)
+- `src/components/claude/ClaudeChat.tsx` — Main chat surface including `/delegate` planning, Discord prompt routing, and delegation spawn call site. (~36000 tok)
+- `src/lib/tauriApi.ts` — Frontend IPC wrappers for Claude/Codex sessions, MCP config helpers, delegation messages, and Discord commands. (~10000 tok)
+- `mcp/t64-server.mjs` — Built-in MCP stdio server exposing delegation tools when delegation env vars are present. (~1700 tok)
+- `mcp/delegation-server.mjs` — Standalone delegation MCP stdio server for team chat/report_done over permission-server HTTP endpoints. (~1500 tok)
+- `src-tauri/src/permission_server.rs` — Permission HTTP server and delegation message endpoints backing MCP team chat. (~10500 tok)
+- `src-tauri/src/discord_bot.rs` — Discord bot gateway/API sync for named sessions and frontend-routed Discord prompts. (~31000 tok)
+
+## src/components/claude/
+
+- `ClaudeChat.tsx` — Main chat container: session controls, LegendList message virtualization, sticky scroll state, prompt island, jump-to-bottom, rewind/fork/history, editor overlay, drag/drop, send/cancel orchestration (~43208 tok)
+- `PromptIsland.tsx` — Prompt picker island for recent user prompts with incremental older-row reveal and jump callbacks (~2661 tok)
+- `ChatMessage.tsx` — Render individual chat messages, markdown, grouped tool calls, tool actions, permission status, and per-message controls (~19242 tok)
+- `ClaudeChat.css` — Chat UI, message list, tool-call groups, prompt island, jump button, editor/rewind overlays, input/menu styling (~55367 tok)
+
 ## .claude/
 
 - `settings.json` (~441 tok)

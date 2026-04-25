@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState, useMemo } from "react";
+import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -65,6 +65,24 @@ const REWIND_ACTION_META: Record<string, { label: string; color: string }> = {
   U: { label: "U", color: "#89b4fa" },
 };
 const REWIND_ACTION_FALLBACK = { label: "?", color: "#89b4fa" };
+
+function toolLayoutSignature(toolCalls: ToolCall[] | undefined): string {
+  if (!toolCalls?.length) return "0";
+  return toolCalls
+    .map((tc) => {
+      const resultLen = typeof tc.result === "string" ? tc.result.length : 0;
+      const inputLen = JSON.stringify(tc.input ?? {}).length;
+      return `${tc.id}:${tc.name}:${resultLen}:${inputLen}:${tc.isError ? 1 : 0}`;
+    })
+    .join("|");
+}
+
+function messageLayoutKey(msg: ChatMessageData): string {
+  if (msg.role === "assistant" && msg.toolCalls?.length) {
+    return `${msg.id}:${msg.content?.length ?? 0}:${toolLayoutSignature(msg.toolCalls)}`;
+  }
+  return msg.id;
+}
 
 interface AffectedFile {
   path: string;
@@ -186,11 +204,20 @@ function RewindPromptDialog({ affectedFiles, toolSummary, onConfirm, onCancel }:
 }
 
 /** Streaming bubble body — owns its own `.cc-row` gutter so renderRow can
- *  return it directly without the standard wrapper. Rendered as a virtuoso
- *  item (not inside the Footer) — that keeps Virtuoso from shrinking
- *  scrollTop on every token to anchor the last "real" item. */
-function StreamingBubbleBody({ sessionId }: { sessionId: string }) {
+ *  return it directly without the standard wrapper. Rendered as a list item
+ *  (not inside the Footer) so growing token text participates in row layout
+ *  without constantly remeasuring the footer. */
+function StreamingBubbleBody({
+  sessionId,
+  onStreamUpdate,
+}: {
+  sessionId: string;
+  onStreamUpdate: () => void;
+}) {
   const text = useClaudeStore((s) => s.sessions[sessionId]?.streamingText);
+  useLayoutEffect(() => {
+    if (text) onStreamUpdate();
+  }, [text, onStreamUpdate]);
   if (!text) return null;
   return (
     <div className="cc-row">
@@ -204,10 +231,10 @@ function StreamingBubbleBody({ sessionId }: { sessionId: string }) {
   );
 }
 
-/** Chat body footer. Lives below the last virtuoso item and renders the
+/** Chat body footer. Lives below the last virtualized item and renders the
  *  streaming bubble + pending-question prompt + error bar + bottom spacer.
  *  Extracted from ClaudeChat's render so its identity is stable across
- *  parent re-renders (Virtuoso otherwise re-measures its footer on every
+ *  parent re-renders (the list otherwise re-measures its footer on every
  *  keystroke, which is the main source of scroll jitter during streaming).
  *  Subscribes only to the fine-grained store slices it actually needs. */
 function ChatFooter({
@@ -330,10 +357,9 @@ function ChatFooter({
           </div>
         </div>
       )}
-      {/* No bottom spacer here — the bottomSpacer virtuoso row handles it
-          inside the list now, which is where Virtuoso's scroll math can
-          see it. A Footer-level spacer would sit BELOW the list items
-          and recreate the unreachable-zone bug. */}
+      {/* No bottom spacer here; the LegendList footer owns the breathing
+          room so the list's scroll math can see it. A second footer-level
+          spacer below this component would recreate the unreachable-zone bug. */}
     </>
   );
 }
@@ -426,7 +452,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const setDraftPrompt = useClaudeStore((s) => s.setDraftPrompt);
   // Kept around for jumpToPrompt's data-msg-id flash + edit-overlay's
   // scroll-restore. LegendList no longer feeds us a separate scroller
-  // ref (Virtuoso's `scrollerRef` callback was specific to that lib);
+  // ref (the old `scrollerRef` callback was specific to Virtuoso);
   // we read the live scroll element from LegendList's API instead.
   const chatBodyRef = useRef<HTMLDivElement | null>(null);
   const getScrollEl = useCallback((): HTMLDivElement | null => {
@@ -435,16 +461,16 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   }, []);
   const containerRef = useRef<HTMLDivElement>(null);
   const loopTimerRef = useRef<number | null>(null);
-  // Virtuoso ref — used for programmatic scrolling (scrollToBottom, jumpToPrompt).
+  // List ref — used for programmatic scrolling (scrollToBottom, jumpToPrompt).
   const virtuosoRef = useRef<LegendListRef | null>(null);
   // Prompt island: pill at top that expands into a picker of past user prompts.
   // Scroll state owned by `useChatScrollState`, which binds to the live
   // `.cc-messages` element via its React state (not a ref) so it reattaches
   // deterministically across editOverlay/showPlanViewer round-trips.
   const [islandOpen, setIslandOpen] = useState(false);
-  // Scroll state is sourced from Virtuoso's own callbacks (atBottomStateChange
-  // + rangeChanged) so we don't run a parallel ResizeObserver/MutationObserver
-  // that fights Virtuoso during streaming. isScrolledUp drives island/
+  // Scroll state is sourced from LegendList callbacks so we don't run a
+  // parallel ResizeObserver/MutationObserver that fights virtualization during
+  // streaming. isScrolledUp drives island/
   // jump-bottom visibility; scrollProgress drives the prompt island ring.
   const [isScrolledUp, setIsScrolledUp] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
@@ -596,13 +622,13 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     document.documentElement.style.setProperty("--claude-font", fontStack(useSettingsStore.getState().claudeFont || "system"));
   }, []);
   // ── Scroll management ──────────────────────────────────────────────
-  // Virtuoso handles the hard parts (anchoring during markdown/KaTeX reflow,
+  // LegendList handles the hard parts (anchoring during markdown/KaTeX reflow,
   // virtualization of the off-screen items, scrollTo*) internally. We only
   // track whether the user is currently pinned to the bottom so other code
   // (reveal-gates, jumpToPrompt) can branch on it, and we expose a few
-  // imperative helpers that delegate to Virtuoso via `virtuosoRef`.
+  // imperative helpers that delegate to LegendList via `virtuosoRef`.
   //
-  // We own the stick-to-bottom state here, NOT Virtuoso. Virtuoso's
+  // We own the stick-to-bottom state here, not the list's derived at-end flag. LegendList's
   // atBottomStateChange flips false mid-stream every time a new item
   // grows scrollHeight past the threshold, even if the user hasn't
   // moved — which made every previous iteration of the pump abort
@@ -611,6 +637,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   // wheel-up / touch-drag-up, and back to true when the user brings
   // themselves back near the bottom.
   const stickyRef = useRef(true);
+  const scrollStateRaf = useRef<number | null>(null);
   const isRawNearBottom = useCallback(() => {
     const el = getScrollEl();
     if (!el) return true;
@@ -621,7 +648,7 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const scrollToBottom = useCallback(() => {
     // LegendList's `maintainScrollAtEnd` re-engages once we mark sticky
     // and tell it to scroll to end. The old el.scrollTop=el.scrollHeight
-    // bypassed the library — fine for Virtuoso, but here we want the
+    // bypassed the library — here we want the
     // library's anchor logic to know we want to be at end so it stays
     // there as new content arrives.
     stickyRef.current = true;
@@ -637,11 +664,53 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
     });
   }, [isRawNearBottom]);
 
+  const followStreamingToBottom = useCallback(() => {
+    if (!stickyRef.current) return;
+    const list = virtuosoRef.current;
+    list?.scrollToEnd?.({ animated: false });
+    requestAnimationFrame(() => {
+      if (!stickyRef.current) return;
+      list?.scrollToEnd?.({ animated: false });
+      const el = getScrollEl();
+      if (el) el.scrollTop = el.scrollHeight;
+      setIsScrolledUp(false);
+      setScrollProgress(0);
+    });
+  }, [getScrollEl]);
+
+  const handleUserWheel = useCallback((event: React.WheelEvent) => {
+    if (event.deltaY < -1) {
+      stickyRef.current = false;
+      return;
+    }
+    if (event.deltaY > 1 && isRawNearBottom()) {
+      stickyRef.current = true;
+    }
+  }, [isRawNearBottom]);
+
+  const touchStartY = useRef<number | null>(null);
+  const handleUserTouchStart = useCallback((event: React.TouchEvent) => {
+    touchStartY.current = event.touches[0]?.clientY ?? null;
+  }, []);
+
+  const handleUserTouchMove = useCallback((event: React.TouchEvent) => {
+    const prevY = touchStartY.current;
+    const nextY = event.touches[0]?.clientY ?? null;
+    if (prevY === null || nextY === null) return;
+    const delta = nextY - prevY;
+    touchStartY.current = nextY;
+    if (delta > 1) {
+      stickyRef.current = false;
+    } else if (delta < -1 && isRawNearBottom()) {
+      stickyRef.current = true;
+    }
+  }, [isRawNearBottom]);
+
   // Session switch → snap to bottom, close island.
   useEffect(() => {
     setIslandOpen(false);
     stickyRef.current = true;
-    // Defer one frame so Virtuoso has the new data.
+    // Defer one frame so LegendList has the new data.
     requestAnimationFrame(() => scrollToBottom());
   }, [sessionId, scrollToBottom]);
 
@@ -1441,6 +1510,9 @@ Rules:
     effectiveCwd,
     selectedProvider,
     permissionMode: permMode.id,
+    selectedModel,
+    selectedEffort,
+    selectedCodexPermission,
     addUserMessage,
   });
 
@@ -1476,7 +1548,7 @@ Rules:
   }, [hasSideContent]);
 
   // Flat virtualized row descriptors — one entry per rendered line. Building a
-  // descriptor list (rather than pre-rendered React elements) lets Virtuoso
+  // descriptor list (rather than pre-rendered React elements) lets LegendList
   // reach in by index, map each entry to JSX on demand, and skip rendering
   // off-screen rows entirely. Every row carries its own stable key via `kind`
   // + a message id.
@@ -1497,6 +1569,14 @@ Rules:
     if (!session) return [];
     const rows: VisualRow[] = [];
     const msgs = session.messages;
+    let lastCompactUserIndex = -1;
+    for (let idx = msgs.length - 1; idx >= 0; idx--) {
+      const m = msgs[idx];
+      if (m?.role === "user" && /^\/compact\b/i.test(m.content || "")) {
+        lastCompactUserIndex = idx;
+        break;
+      }
+    }
     let i = 0;
     let lastUserTs: number | null = null;
     while (i < msgs.length) {
@@ -1537,16 +1617,14 @@ Rules:
           } else break;
         }
         if (j > i + 1) {
-          rows.push({ kind: "group", key: `rg-${msg.id}`, msgId: msg.id, tcs: groupTcs });
+          rows.push({ kind: "group", key: `rg-${msg.id}:${toolLayoutSignature(groupTcs)}`, msgId: msg.id, tcs: groupTcs });
           i = j;
           continue;
         }
       }
-      rows.push({ kind: "message", key: msg.id, msg });
+      rows.push({ kind: "message", key: messageLayoutKey(msg), msg });
       if (msg.role === "user" && /^\/compact\b/i.test(msg.content || "")) {
-        const isLastCompact = !msgs
-          .slice(i + 1)
-          .some((m) => m.role === "user" && /^\/compact\b/i.test(m.content || ""));
+        const isLastCompact = i === lastCompactUserIndex;
         if (isLastCompact && session.autoCompactStatus !== "idle") {
           rows.push({
             kind: "compact",
@@ -1573,11 +1651,10 @@ Rules:
         rows.push({ kind: "finishedTail", key: `fin-tail-${lastMsg.id}`, dur });
       }
     }
-    // Streaming bubble rides as a terminal virtuoso item (not in the Footer).
-    // Virtuoso measures growing Footer content by *shrinking* scrollTop to
-    // keep the last item pinned — which is exactly the "snap up on every
-    // token" jitter users see. As a regular list item, Virtuoso treats its
-    // growth like normal list growth and stops fighting our auto-follow.
+    // Streaming bubble rides as a terminal list item (not in the Footer).
+    // Growing footer content can make the list shrink scrollTop to keep the
+    // last item pinned — exactly the "snap up on every token" jitter users
+    // see. As a regular list item, its growth follows normal list layout.
     // Keyed on `hasStreamingText` (boolean) rather than the live streamingText
     // string so visualRows doesn't reallocate per token — StreamingBubbleBody
     // subscribes to the text itself.
@@ -1635,41 +1712,63 @@ Rules:
         case "streaming":
           // Streaming bubble keeps its own gutter via StreamingBubbleBody's
           // .cc-row class; returning early skips the wrapper so the margin
-          // growth isn't part of the virtuoso size measurement each tick.
-          return <StreamingBubbleBody sessionId={sessionId} />;
+          // growth isn't part of the footer size measurement each tick.
+          return <StreamingBubbleBody sessionId={sessionId} onStreamUpdate={followStreamingToBottom} />;
       }
-      // Virtuoso strips our old flex gap; wrap each row so the 10px rhythm
+      // LegendList strips our old flex gap; wrap each row so the 10px rhythm
       // can live on `.cc-row + .cc-row`.
       return <div className="cc-row">{inner}</div>;
     },
-    [onRewindClick, handleFork, handleEditClick, sessionId],
+    [onRewindClick, handleFork, handleEditClick, sessionId, followStreamingToBottom],
   );
 
   // ── LegendList adapters ────────────────────────────────────────────
-  // LegendList's API differs from Virtuoso's: data + keyExtractor +
-  // renderItem({item}). Forward to the existing renderRow.
+  // LegendList's API is data + keyExtractor + renderItem({item}). Forward to
+  // the existing renderRow.
   const legendKey = useCallback((row: VisualRow) => row.key, []);
   const legendRenderItem = useCallback(
     ({ item, index }: { item: VisualRow; index: number }) => renderRow(index, item),
     [renderRow],
   );
-  // onScroll fires on every scroll tick. LegendList's getState().isAtEnd is
-  // the source of truth for whether the user is pinned to bottom — we mirror
-  // it into stickyRef and isScrolledUp so the prompt island + jump button
-  // react correctly.
+  // onScroll fires on every scroll tick. Treat it as visibility telemetry
+  // only: user-intent handlers own stickyRef, because LegendList can emit
+  // non-user scrolls while a streaming row grows and briefly reports not-at-end.
   const onLegendScroll = useCallback(() => {
-    const state = virtuosoRef.current?.getState?.();
-    const rawAtEnd = isRawNearBottom();
-    if (state) {
-      const atEnd = !!state.isAtEnd || rawAtEnd;
-      stickyRef.current = atEnd;
-      setIsScrolledUp(!atEnd);
+    if (scrollStateRaf.current !== null) return;
+    scrollStateRaf.current = requestAnimationFrame(() => {
+      scrollStateRaf.current = null;
+      const rawAtEnd = isRawNearBottom();
+      if (rawAtEnd) stickyRef.current = true;
+      setIsScrolledUp(!rawAtEnd);
+      const el = getScrollEl();
+      if (!el) return;
+      const maxScroll = el.scrollHeight - el.clientHeight;
+      const progress = maxScroll > 1 ? Math.max(0, Math.min(1, 1 - el.scrollTop / maxScroll)) : 0;
+      setScrollProgress(rawAtEnd ? 0 : progress);
+    });
+  }, [getScrollEl, isRawNearBottom]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollStateRaf.current !== null) {
+        cancelAnimationFrame(scrollStateRaf.current);
+        scrollStateRaf.current = null;
+      }
+    };
+  }, []);
+
+  const handleListKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (event.key === "PageUp" || event.key === "Home" || event.key === "ArrowUp") {
+      stickyRef.current = false;
+    } else if (event.key === "End") {
+      stickyRef.current = true;
     }
+  }, []);
+
+  const handleListPointerDown = useCallback(() => {
     const el = getScrollEl();
     if (!el) return;
-    const maxScroll = el.scrollHeight - el.clientHeight;
-    const progress = maxScroll > 1 ? Math.max(0, Math.min(1, 1 - el.scrollTop / maxScroll)) : 0;
-    setScrollProgress(rawAtEnd ? 0 : progress);
+    if (!isRawNearBottom()) stickyRef.current = false;
   }, [getScrollEl, isRawNearBottom]);
 
   // After mount / session swap, LegendList does its initialScrollAtEnd pass
@@ -1732,7 +1831,7 @@ Rules:
 
   const jumpToPrompt = useCallback(
     (msgId: string) => {
-      // Find the visual row index for this message. Virtuoso scrolls by row,
+      // Find the visual row index for this message. LegendList scrolls by row,
       // not by message id — the row kinds are a superset of messages.
       const rowIdx = visualRows.findIndex(
         (r) => (r.kind === "message" && r.msg.id === msgId) || (r.kind === "group" && r.msgId === msgId),
@@ -2145,6 +2244,11 @@ Rules:
             maintainScrollAtEndThreshold={0.1}
             maintainVisibleContentPosition
             onScroll={onLegendScroll}
+            onWheel={handleUserWheel}
+            onTouchStart={handleUserTouchStart}
+            onTouchMove={handleUserTouchMove}
+            onKeyDown={handleListKeyDown}
+            onPointerDown={handleListPointerDown}
             ListFooterComponent={legendFooter}
           />
           )}

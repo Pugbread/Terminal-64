@@ -55,20 +55,27 @@ const TOOLS = [
 
 function httpRequest(method, path, body) {
   return new Promise((resolve, reject) => {
+    const encoded = body ? JSON.stringify(body) : null;
+    const headers = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${SECRET}`,
+    };
+    if (encoded) headers["Content-Length"] = Buffer.byteLength(encoded);
     const options = {
       hostname: "127.0.0.1",
       port: PORT,
       path,
       method,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${SECRET}`,
-      },
+      headers,
     };
     const req = http.request(options, (res) => {
       let data = "";
       res.on("data", (chunk) => (data += chunk));
       res.on("end", () => {
+        if (res.statusCode >= 400) {
+          reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+          return;
+        }
         try {
           resolve(JSON.parse(data));
         } catch {
@@ -80,7 +87,7 @@ function httpRequest(method, path, body) {
     req.setTimeout(10000, () => {
       req.destroy(new Error("Request timeout"));
     });
-    if (body) req.write(JSON.stringify(body));
+    if (encoded) req.write(encoded);
     req.end();
   });
 }

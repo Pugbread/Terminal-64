@@ -4658,15 +4658,26 @@ fn checkpoints_base_dir() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".terminal64").join("checkpoints"))
 }
 
+fn checkpoint_turn_dir(session_id: &str, turn: usize) -> Result<std::path::PathBuf, String> {
+    if session_id.is_empty()
+        || session_id.contains('/')
+        || session_id.contains('\\')
+        || std::path::Path::new(session_id).components().count() != 1
+    {
+        return Err("invalid checkpoint session id".to_string());
+    }
+    Ok(checkpoints_base_dir()?
+        .join(session_id)
+        .join(format!("turn-{}", turn)))
+}
+
 #[tauri::command]
 fn create_checkpoint(
     session_id: String,
     turn: usize,
     files: Vec<FileSnapshot>,
 ) -> Result<(), String> {
-    let dir = checkpoints_base_dir()?
-        .join(&session_id)
-        .join(format!("turn-{}", turn));
+    let dir = checkpoint_turn_dir(&session_id, turn)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {}", e))?;
     // Write manifest (original paths) and file contents
     let mut manifest = Vec::new();
@@ -4689,9 +4700,7 @@ fn create_checkpoint(
 
 #[tauri::command]
 fn restore_checkpoint(session_id: String, turn: usize) -> Result<Vec<String>, String> {
-    let dir = checkpoints_base_dir()?
-        .join(&session_id)
-        .join(format!("turn-{}", turn));
+    let dir = checkpoint_turn_dir(&session_id, turn)?;
     if !dir.exists() {
         return Ok(vec![]); // no checkpoint for this turn — nothing to restore
     }
@@ -4709,13 +4718,25 @@ fn restore_checkpoint(session_id: String, turn: usize) -> Result<Vec<String>, St
         }
         let snap_file = parts[0];
         let original_path = parts[1];
-        // Block path traversal in crafted manifests
-        if original_path.contains("..") || snap_file.contains("..") {
+        let snap_path = std::path::Path::new(snap_file);
+        if snap_path.is_absolute()
+            || snap_path.file_name().and_then(|n| n.to_str()) != Some(snap_file)
+            || snap_path
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
             return Err("restore_checkpoint blocked: path traversal detected".to_string());
         }
-        let content = std::fs::read_to_string(dir.join(snap_file))
-            .map_err(|e| format!("read snap {}: {}", snap_file, e))?;
         let dest = std::path::Path::new(original_path);
+        if !dest.is_absolute()
+            || dest
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err("restore_checkpoint blocked: unsafe restore path".to_string());
+        }
+        let content = std::fs::read_to_string(dir.join(snap_path))
+            .map_err(|e| format!("read snap {}: {}", snap_file, e))?;
         if let Some(parent) = dest.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -4733,6 +4754,13 @@ fn restore_checkpoint(session_id: String, turn: usize) -> Result<Vec<String>, St
 
 #[tauri::command]
 fn cleanup_checkpoints(session_id: String, keep_up_to_turn: usize) -> Result<(), String> {
+    if session_id.is_empty()
+        || session_id.contains('/')
+        || session_id.contains('\\')
+        || std::path::Path::new(&session_id).components().count() != 1
+    {
+        return Err("invalid checkpoint session id".to_string());
+    }
     let base = checkpoints_base_dir()?.join(&session_id);
     if !base.exists() {
         return Ok(());

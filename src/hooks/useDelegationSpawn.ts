@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { createClaudeSession, createCodexSession, createMcpConfigFile, ensureCodexMcp, ensureCodexSkills, getDelegationPort, getDelegationSecret } from "../lib/tauriApi";
 import type { PermissionMode } from "../lib/types";
-import type { ProviderId } from "../lib/providers";
+import { decodeCodexPermission, PROVIDER_CONFIG, type ProviderId } from "../lib/providers";
 import { useCanvasStore } from "../stores/canvasStore";
 import { useClaudeStore } from "../stores/claudeStore";
 import { useDelegationStore } from "../stores/delegationStore";
@@ -12,6 +12,9 @@ interface UseDelegationSpawnOptions {
   effectiveCwd: string;
   selectedProvider: ProviderId;
   permissionMode: PermissionMode;
+  selectedModel: string;
+  selectedEffort: string;
+  selectedCodexPermission: string;
   addUserMessage: (sessionId: string, text: string) => void;
 }
 
@@ -20,6 +23,9 @@ export function useDelegationSpawn({
   effectiveCwd,
   selectedProvider,
   permissionMode,
+  selectedModel,
+  selectedEffort,
+  selectedCodexPermission,
   addUserMessage,
 }: UseDelegationSpawnOptions) {
   return useCallback(
@@ -57,15 +63,11 @@ export function useDelegationSpawn({
           : "";
       const inheritSkipOpenwolf = !!parentSess?.skipOpenwolf;
       const childProvider = parentSess?.provider ?? selectedProvider;
-
-      let mcpConfigPath = "";
-      if (childProvider === "anthropic" && delegationPort > 0 && delegationSecret) {
-        try {
-          mcpConfigPath = await createMcpConfigFile(delegationPort, delegationSecret, group.id, "Agent");
-        } catch (err) {
-          console.warn("[delegation] Failed to create MCP config:", err);
-        }
-      }
+      const childModel = parentSess?.selectedModel ?? selectedModel;
+      const childEffort = parentSess?.selectedEffort ?? selectedEffort;
+      const childCodexPermission = parentSess?.selectedCodexPermission
+        ?? selectedCodexPermission
+        ?? PROVIDER_CONFIG.openai.defaultPermission;
 
       group.tasks.forEach((task, i) => {
         const childSessionId = uuidv4();
@@ -101,6 +103,11 @@ Coordinate actively. If another agent is working on a file you need, mention it 
           : undefined;
 
         useClaudeStore.getState().createSession(childSessionId, childName, true, inheritSkipOpenwolf, appDir, childProvider);
+        useClaudeStore.getState().setSelectedModel(childSessionId, childModel);
+        useClaudeStore.getState().setSelectedEffort(childSessionId, childEffort);
+        if (childProvider === "openai") {
+          useClaudeStore.getState().setSelectedCodexPermission(childSessionId, childCodexPermission);
+        }
         addUserMessage(childSessionId, initialPrompt);
 
         setTimeout(() => {
@@ -110,7 +117,9 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                 session_id: childSessionId,
                 cwd: appDir,
                 prompt: initialPrompt,
-                yolo: true,
+                ...(childModel ? { model: childModel } : {}),
+                ...(childEffort ? { effort: childEffort } : {}),
+                ...decodeCodexPermission(childCodexPermission),
                 skip_git_repo_check: true,
                 ...(mcpEnv ? { mcp_env: mcpEnv } : {}),
               }, true))
@@ -119,14 +128,28 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                 delStore.updateTaskStatus(group.id, task.id, "failed", String(err));
               });
           } else {
-            createClaudeSession({
-              session_id: childSessionId,
-              cwd: appDir,
-              prompt: initialPrompt,
-              permission_mode: "bypass_all",
-              ...(mcpConfigPath ? { mcp_config: mcpConfigPath } : {}),
-              no_session_persistence: true,
-            }, inheritSkipOpenwolf).catch((err) => {
+            const startClaudeChild = async () => {
+              let mcpConfigPath = "";
+              if (delegationPort > 0 && delegationSecret) {
+                mcpConfigPath = await createMcpConfigFile(
+                  delegationPort,
+                  delegationSecret,
+                  group.id,
+                  `Agent ${i + 1}`,
+                );
+              }
+              await createClaudeSession({
+                session_id: childSessionId,
+                cwd: appDir,
+                prompt: initialPrompt,
+                permission_mode: "bypass_all",
+                ...(childModel ? { model: childModel } : {}),
+                ...(childEffort ? { effort: childEffort } : {}),
+                ...(mcpConfigPath ? { mcp_config: mcpConfigPath } : {}),
+                no_session_persistence: true,
+              }, inheritSkipOpenwolf);
+            };
+            startClaudeChild().catch((err) => {
               console.warn(`[delegation] Failed to start child ${childSessionId}:`, err);
               delStore.updateTaskStatus(group.id, task.id, "failed", String(err));
             });
@@ -134,6 +157,15 @@ Coordinate actively. If another agent is working on a file you need, mention it 
         }, i * 500);
       });
     },
-    [sessionId, effectiveCwd, selectedProvider, permissionMode, addUserMessage],
+    [
+      sessionId,
+      effectiveCwd,
+      selectedProvider,
+      permissionMode,
+      selectedModel,
+      selectedEffort,
+      selectedCodexPermission,
+      addUserMessage,
+    ],
   );
 }

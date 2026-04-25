@@ -1,8 +1,10 @@
 import { useCallback } from "react";
 import { createCheckpoint, readFile } from "../lib/tauriApi";
 import { runProviderTurn } from "../lib/providerRuntime";
+import { isAbsolutePath, joinPath } from "../lib/platform";
 import { useClaudeStore } from "../stores/claudeStore";
 import type { PermissionMode } from "../lib/types";
+import type { ProviderTurnInput } from "../contracts/providerRuntime";
 
 interface UseChatSendOptions {
   sessionId: string;
@@ -31,10 +33,14 @@ export function useChatSend({
       const provider = sess?.provider ?? "anthropic";
       try {
         if (sess && sess.modifiedFiles.length > 0) {
+          const snapshotBase = sess.cwd || effectiveCwd;
+          const resolveSnapshotPath = (fp: string) =>
+            fp && !isAbsolutePath(fp) && snapshotBase ? joinPath(snapshotBase, fp) : fp;
           const results = await Promise.allSettled(
             sess.modifiedFiles.map(async (fp) => {
-              try { return { path: fp, content: await readFile(fp) }; }
-              catch { return { path: fp, content: "" }; }
+              const path = resolveSnapshotPath(fp);
+              try { return { path, content: await readFile(path) }; }
+              catch { return { path, content: "" }; }
             }),
           );
           const snapshots = results.map((r) => (r as PromiseFulfilledResult<{ path: string; content: string }>).value);
@@ -48,7 +54,7 @@ export function useChatSend({
           store.setCwd(sessionId, effectiveCwd);
         }
 
-        const result = await runProviderTurn({
+        const turnInput: ProviderTurnInput = {
           provider,
           sessionId,
           cwd: effectiveCwd,
@@ -59,12 +65,16 @@ export function useChatSend({
           selectedEffort,
           selectedCodexPermission,
           permissionMode,
-          permissionOverride,
           skipOpenwolf: sess?.skipOpenwolf || false,
           seedTranscript: sess?.seedTranscript ?? null,
           resumeAtUuid: sess?.resumeAtUuid ?? null,
           forkParentSessionId: sess?.forkParentSessionId ?? null,
-        });
+        };
+        if (permissionOverride !== undefined) {
+          turnInput.permissionOverride = permissionOverride;
+        }
+
+        const result = await runProviderTurn(turnInput);
 
         if (result.clearSeedTranscript) store.clearSeedTranscript(sessionId);
         if (result.clearResumeAtUuid) store.setResumeAtUuid(sessionId, null);

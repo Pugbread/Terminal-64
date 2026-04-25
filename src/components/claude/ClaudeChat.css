@@ -429,16 +429,16 @@
 .cc-messages {
   flex: 1;
   overflow-y: auto;
-  /* Virtuoso positions its items internally and ignores flex/gap on its
+  /* LegendList positions its items internally and ignores flex/gap on its
      root, so we drop `display: flex` + `gap` here. Horizontal scroll is
      suppressed explicitly — without it, any message with a wide code block
      or table lets the whole list pan sideways. */
   overflow-x: hidden;
   /* Top padding only. Bottom breathing room is supplied by an invisible
-     Virtuoso row (kind: "bottomSpacer") so it's part of the list's scroll
+     list footer so it's part of the virtual list's scroll
      content — scrollToIndex(LAST, 'end') or raw scrollTop=scrollHeight
      both land in the same place, which is what we want. Scroller padding
-     sits BELOW the last item's end, so with Virtuoso's follow it'd cause
+     sits BELOW the last item's end, so with auto-follow it'd cause
      a 64px snap-up every time a non-streaming row was appended. */
   padding: 64px 0 0;
   min-height: 0;
@@ -463,19 +463,19 @@
   margin-right: 0;
 }
 
-/* Virtuoso renders each item wrapped in our own `.cc-row` div. The old
+/* LegendList renders each item wrapped in our own `.cc-row` div. The old
    `.cc-messages { display: flex }` implicitly gave every child
    `width: 100%` on the cross axis, so messages with long code blocks or
-   tool output were forced to shrink. Virtuoso's items are plain blocks,
+   tool output were forced to shrink. LegendList's items are plain blocks,
    so we need to pin the row to the scroller width ourselves — otherwise a
    wide message stretches the row past the viewport and the whole list
    becomes horizontally clipped. `min-width: 0` lets descendants (e.g. a
    `<pre>` inside `.cc-bubble`) actually collapse instead of propagating
    their intrinsic width back up.
-   Horizontal gutter lives here (not on `.cc-messages`) so virtuoso's
+   Horizontal gutter lives here (not on `.cc-messages`) so LegendList's
    item-list — which sometimes ignores scroller padding — can't push
    content past the viewport. `margin-bottom` (not `+ .cc-row`) because
-   virtuoso sticks its own item wrappers between siblings, so `+` never
+   LegendList sticks its own item wrappers between siblings, so `+` never
    matches. */
 .cc-row {
   width: 100%;
@@ -486,7 +486,7 @@
   margin-bottom: 14px;
 }
 
-/* Zero height — any space below the last item confuses Virtuoso's
+/* Zero height — any space below the last item confuses the list's
    at-bottom measurement vs our raw-scroll pump, and the user sees the
    chat refusing to scroll the last 60-100px. Breathing room below the
    last message comes from that row's own margin. */
@@ -609,7 +609,7 @@
   flex-direction: column;
   /* The old `.cc-messages { display: flex }` gave every `.cc-message` a
      stretched cross-axis width — which is what `.cc-bubble { max-width: 88% }`
-     resolves against. Virtuoso rows are plain blocks, so without pinning the
+     resolves against. LegendList rows are plain blocks, so without pinning the
      message to full row width the flex-column sizes to its content and the
      user bubble (align-items: flex-end) ends up right-aligned *past* the
      viewport for long prompts. */
@@ -2587,6 +2587,10 @@
   border-radius: 999px;
   transform: translate(-50%, 0) scale(1);
   transform-origin: bottom center;
+  will-change: transform, opacity, width, height;
+  backface-visibility: hidden;
+  contain: layout paint;
+  isolation: isolate;
   opacity: 1;
   transition-property: width, height, border-radius, box-shadow, background-color, opacity, transform;
   transition-duration: 0.28s;
@@ -2671,6 +2675,9 @@
      button stays at a fixed spot in the viewport (not riding the scroll
      flow or bouncing with zoom). */
   transform: translateY(-50%) scale(1);
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+  contain: layout paint;
   z-index: 11;
   width: 30px;
   height: 30px;

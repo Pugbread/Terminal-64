@@ -90,6 +90,12 @@ export async function runProviderTurn(input: ProviderTurnInput): Promise<Provide
       try {
         await createCodexSession(codexCreate, input.skipOpenwolf);
       } catch {
+        if (!input.started) {
+          throw new Error("Codex session failed to start before a thread id was created.");
+        }
+        // Legacy metadata from early Codex builds did not persist the external
+        // thread id. Only already-started sessions get the old local-id resume
+        // fallback; a true first turn would otherwise resume the wrong id.
         await sendCodexPrompt(codexSend, input.skipOpenwolf);
       }
     }
