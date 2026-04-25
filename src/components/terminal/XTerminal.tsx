@@ -66,31 +66,32 @@ export default function XTerminal({
     onFocus?.(terminalId);
   }, [terminalId, onFocus]);
 
-  // Keep fontSize in sync with the canvas zoom. xterm rasterizes glyphs onto
-  // its own canvas at options.fontSize, so CSS transforms on the container
-  // don't affect rendered text size — our counter-scale trick pins the net
-  // CSS transform to 1 (for correct selection math), which means without
-  // this the terminal text stays the same on-screen size regardless of
-  // canvas zoom. Scaling fontSize with zoom gives visual zoom back, and
-  // because layout-cellWidth scales with fontSize, cols stay constant and
-  // selection math (visual_offset / layout_cellWidth) remains correct.
-  const canvasZoom = useCanvasStore((s) => s.zoom);
+  // Keep fontSize in lock-step with --canvas-zoom. xterm rasterizes glyphs
+  // at options.fontSize on its own canvas, so CSS transforms on the container
+  // don't affect rendered text size. The counter-scale (XTerminal.css) pins
+  // the net visual transform to 1 so selection math stays correct; scaling
+  // fontSize by the same factor keeps layout cellWidth proportional, so cols
+  // stay constant across zoom levels. Subscribe to the store imperatively
+  // (not via React's useCanvasStore hook) so fontSize updates fire in the
+  // same microtask as Canvas.tsx's --canvas-zoom variable assignment — React
+  // batching would delay fontSize behind the CSS variable, and the
+  // ResizeObserver would fit() with stale cellWidth in between, emitting a
+  // wrong-cols PTY resize that then snaps back.
   useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
-    const targetSize = Math.max(6, Math.round(BASE_FONT_SIZE * canvasZoom));
-    if (term.options.fontSize === targetSize) return;
-    // Debounce — mid-zoom ticks fire many times per second and each fontSize
-    // change triggers xterm to re-measure + reflow. Let the user settle before
-    // applying.
-    const t = setTimeout(() => {
-      if (termRef.current && termRef.current.options.fontSize !== targetSize) {
-        termRef.current.options.fontSize = targetSize;
-        fitAddonRef.current?.fit();
-      }
-    }, 60);
-    return () => clearTimeout(t);
-  }, [canvasZoom]);
+    const applyZoom = (z: number) => {
+      const term = termRef.current;
+      if (!term) return;
+      // Fractional fontSize — Math.round produced visible pops at integer
+      // boundaries (zoom 1.04 → 14px, 1.07 → 15px). xterm accepts fractional
+      // sizes and measureText handles subpixel metrics cleanly.
+      const targetSize = Math.max(6, BASE_FONT_SIZE * z);
+      if (term.options.fontSize === targetSize) return;
+      term.options.fontSize = targetSize;
+      fitAddonRef.current?.fit();
+    };
+    applyZoom(useCanvasStore.getState().zoom);
+    return useCanvasStore.subscribe((s) => applyZoom(s.zoom));
+  }, []);
 
   // Apply theme + alpha changes to xterm
   useEffect(() => {

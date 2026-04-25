@@ -25,9 +25,17 @@ import { useCanvasStore } from "../../stores/canvasStore";
 import { v4 as uuidv4 } from "uuid";
 import { formatDuration } from "../../lib/constants";
 import { baseName, dirName } from "../../lib/platform";
-import { Tooltip } from "../ui/Tooltip";
-import Particles from "../ui/Particles";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "../ui/DropdownMenu";
+import { AnthropicLogo, OpenAILogo } from "../ui/BrandLogos";
 import "./ClaudeChat.css";
+import "../ui/DropdownMenu.css";
 
 let monacoThemeForBg = "";
 
@@ -410,7 +418,12 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   const [scrollProgress, setScrollProgress] = useState(0);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [configMcpServers, setConfigMcpServers] = useState<McpServer[]>([]);
-  const [showMcpDrop, setShowMcpDrop] = useState(false);
+  // Single source of truth for which topbar dropdown is open — guarantees
+  // only one is visible at a time without depending on Radix's internal state.
+  type TopMenu = "provider" | "mcp" | "model" | "effort" | null;
+  const [openMenu, setOpenMenu] = useState<TopMenu>(null);
+  // Provider dropdown — visuals only, no logic wired yet.
+  const [selectedProvider, setSelectedProvider] = useState<"anthropic" | "openai">("anthropic");
   const liveMcp = useClaudeStore((s) => s.sessions[sessionId]?.mcpServers);
   const mcpServers: McpDisplayServer[] = (liveMcp && liveMcp.length > 0) ? liveMcp : configMcpServers;
   const [showFileTree, setShowFileTree] = useState(false);
@@ -437,8 +450,6 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   });
   const autoCompactEnabled = useSettingsStore((s) => s.autoCompactEnabled);
   const autoCompactThreshold = useSettingsStore((s) => s.autoCompactThreshold);
-  const [showModelDrop, setShowModelDrop] = useState(false);
-  const [showEffortDrop, setShowEffortDrop] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [filePreviews, setFilePreviews] = useState<Record<string, string>>({});
   const [isDragOver, setIsDragOver] = useState(false);
@@ -544,11 +555,6 @@ export default function ClaudeChat({ sessionId, cwd, skipPermissions, isActive }
   useEffect(() => {
     if (editOverlay || showPlanViewer) setIslandOpen(false);
   }, [editOverlay, showPlanViewer]);
-  useEffect(() => {
-    const handler = () => { setShowModelDrop(false); setShowEffortDrop(false); setShowMcpDrop(false); };
-    window.addEventListener("click", handler);
-    return () => window.removeEventListener("click", handler);
-  }, []);
 
   // Shift+Tab cycles permission mode
   useEffect(() => {
@@ -1751,6 +1757,24 @@ Coordinate actively. If another agent is working on a file you need, mention it 
     const progress = maxScroll > 1 ? Math.max(0, Math.min(1, 1 - el.scrollTop / maxScroll)) : 0;
     setScrollProgress(progress);
   }, [getScrollEl]);
+
+  // After mount / session swap, LegendList does its initialScrollAtEnd pass
+  // but never fires onScroll for the resting-at-bottom state, so isScrolledUp
+  // stays at whatever a transient scroll event left it as. Re-sync once the
+  // list has settled so the prompt island + jump button don't flash on
+  // startup when the session is already at bottom.
+  useEffect(() => {
+    let cancelled = false;
+    const sync = () => {
+      if (cancelled) return;
+      const atEnd = !!virtuosoRef.current?.getState?.()?.isAtEnd;
+      stickyRef.current = atEnd;
+      setIsScrolledUp(!atEnd);
+    };
+    const r1 = requestAnimationFrame(() => requestAnimationFrame(sync));
+    const t = setTimeout(sync, 120);
+    return () => { cancelled = true; cancelAnimationFrame(r1); clearTimeout(t); };
+  }, [sessionId]);
   const legendFooter = useMemo(
     () => (
       <>
@@ -1838,44 +1862,92 @@ Coordinate actively. If another agent is working on a file you need, mention it 
     >
       {/* Topbar */}
       <div className="cc-topbar">
-        <Tooltip content={showFileTree ? "Hide file browser" : "Show file browser"} side="bottom" align="start">
-          <button className={`cc-filetree-toggle ${showFileTree ? "cc-filetree-toggle--open" : ""}`} onClick={() => setShowFileTree((v) => !v)} aria-label="Toggle file browser">
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1L7 5L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          </button>
-        </Tooltip>
+        <button className={`cc-filetree-toggle ${showFileTree ? "cc-filetree-toggle--open" : ""}`} onClick={() => setShowFileTree((v) => !v)} title="Toggle file browser">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1L7 5L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
         <div className="cc-topbar-center">
+          {/* Provider — visuals only (no logic wired) */}
+          <DropdownMenu open={openMenu === "provider"} onOpenChange={(o) => setOpenMenu(o ? "provider" : null)}>
+            <DropdownMenuTrigger asChild>
+              <button className="shadcn-trigger" aria-label="Provider">
+                <span className="shadcn-trigger-logo">
+                  {selectedProvider === "anthropic"
+                    ? <AnthropicLogo size={12} />
+                    : <OpenAILogo size={12} />}
+                </span>
+                {selectedProvider === "anthropic" ? "Anthropic" : "OpenAI"}
+                <span className="shadcn-trigger-chev">▾</span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuLabel>Provider</DropdownMenuLabel>
+              <DropdownMenuItem
+                active={selectedProvider === "anthropic"}
+                onSelect={() => setSelectedProvider("anthropic")}
+              >
+                <span className="shadcn-menu-icon"><AnthropicLogo size={14} /></span>
+                <span className="shadcn-menu-text">Anthropic</span>
+                <span className="shadcn-menu-check">{selectedProvider === "anthropic" ? "✓" : ""}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                active={selectedProvider === "openai"}
+                onSelect={() => setSelectedProvider("openai")}
+              >
+                <span className="shadcn-menu-icon"><OpenAILogo size={14} /></span>
+                <span className="shadcn-menu-text">OpenAI</span>
+                <span className="shadcn-menu-check">{selectedProvider === "openai" ? "✓" : ""}</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel style={{ fontSize: 9, textTransform: "none", letterSpacing: 0, color: "var(--fg-muted, #6c7086)" }}>
+                wip · backend not wired
+              </DropdownMenuLabel>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           {/* MCP servers — t64 built-in excluded from count but shown in dropdown */}
-          <div className="cc-dropdown-wrap" onClick={(e) => e.stopPropagation()}>
-            {(() => {
-              const userMcp = mcpServers.filter((s) => s.name !== "terminal-64");
-              const hasError = mcpServers.some((s) => "status" in s && ((s as McpServerStatus).status === "failed" || (s as McpServerStatus).status === "error"));
-              return (
-                <Tooltip content={`MCP servers${userMcp.length > 0 ? ` — ${userMcp.length} active` : ""}${hasError ? " (has errors)" : ""}`} side="bottom">
-                  <button className={`cc-dropdown-trigger cc-mcp-btn ${userMcp.length > 0 ? "cc-mcp-btn--active" : ""} ${hasError ? "cc-mcp-btn--error" : ""}`} onClick={() => { if (!showMcpDrop && effectiveCwd) listMcpServers(effectiveCwd).then(setConfigMcpServers).catch(() => {}); setShowMcpDrop((v) => !v); setShowModelDrop(false); setShowEffortDrop(false); }}>
-                    MCP{userMcp.length > 0 ? ` (${userMcp.length})` : ""}<span className="cc-chevron">▾</span>
+          {(() => {
+            const userMcp = mcpServers.filter((s) => s.name !== "terminal-64");
+            const hasError = mcpServers.some((s) => "status" in s && ((s as McpServerStatus).status === "failed" || (s as McpServerStatus).status === "error"));
+            return (
+              <DropdownMenu open={openMenu === "mcp"} onOpenChange={(o) => {
+                setOpenMenu(o ? "mcp" : null);
+                if (o && effectiveCwd) listMcpServers(effectiveCwd).then(setConfigMcpServers).catch(() => {});
+              }}>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className={`shadcn-trigger ${userMcp.length > 0 ? "cc-mcp-btn--active" : ""} ${hasError ? "cc-mcp-btn--error" : ""}`}
+                    aria-label="MCP servers"
+                  >
+                    MCP{userMcp.length > 0 ? ` (${userMcp.length})` : ""}
+                    <span className="shadcn-trigger-chev">▾</span>
                   </button>
-                </Tooltip>
-              );
-            })()}
-            {showMcpDrop && (
-              <div className="cc-dropdown cc-mcp-dropdown">
-                {mcpServers.length === 0 ? (
-                  <div className="cc-mcp-empty">No MCP servers configured</div>
-                ) : (
-                  mcpServers.map((s) => {
-                    const isLive = "status" in s;
-                    const status = (isLive ? (s as McpServerStatus).status : undefined) || "configured";
-                    const isError = status === "failed" || status === "error";
-                    const isConnected = status === "connected";
-                    const isBuiltIn = s.name === "terminal-64";
-                    const liveServer = isLive ? s as McpServerStatus : undefined;
-                    const toolCount = liveServer?.toolCount ?? liveServer?.tools?.length;
-                    return (
-                      <div key={s.name} className={`cc-mcp-item ${isBuiltIn ? "cc-mcp-item--builtin" : ""}`}>
-                        <span className={`cc-mcp-dot ${isError ? "cc-mcp-dot--error" : isConnected ? "cc-mcp-dot--ok" : "cc-mcp-dot--idle"}`} />
-                        <div className="cc-mcp-info">
-                          <span className="cc-mcp-name">{isBuiltIn ? "T64" : s.name}</span>
-                          <span className="cc-mcp-meta">
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="cc-mcp-menu">
+                  <DropdownMenuLabel>MCP Servers</DropdownMenuLabel>
+                  {mcpServers.length === 0 ? (
+                    <div className="cc-mcp-empty" style={{ padding: "6px 10px", fontSize: 10, color: "var(--fg-muted, #6c7086)" }}>
+                      No MCP servers configured
+                    </div>
+                  ) : (
+                    mcpServers.map((s) => {
+                      const isLive = "status" in s;
+                      const status = (isLive ? (s as McpServerStatus).status : undefined) || "configured";
+                      const isError = status === "failed" || status === "error";
+                      const isConnected = status === "connected";
+                      const isBuiltIn = s.name === "terminal-64";
+                      const liveServer = isLive ? (s as McpServerStatus) : undefined;
+                      const toolCount = liveServer?.toolCount ?? liveServer?.tools?.length;
+                      return (
+                        <DropdownMenuItem
+                          key={s.name}
+                          className={`shadcn-menu-item--mcp ${isBuiltIn ? "cc-mcp-item--builtin" : ""}`}
+                          onSelect={(e) => e.preventDefault()}
+                        >
+                          <div className="shadcn-mcp-row">
+                            <span className={`shadcn-mcp-dot ${isError ? "shadcn-mcp-dot--error" : isConnected ? "shadcn-mcp-dot--ok" : "shadcn-mcp-dot--idle"}`} />
+                            <span className="shadcn-mcp-name">{isBuiltIn ? "T64" : s.name}</span>
+                          </div>
+                          <span className="shadcn-mcp-meta">
                             {status}
                             {isBuiltIn ? " · built-in" : ""}
                             {s.transport ? ` · ${s.transport}` : ""}
@@ -1883,52 +1955,68 @@ Coordinate actively. If another agent is working on a file you need, mention it 
                             {toolCount != null ? ` · ${toolCount} tool${toolCount !== 1 ? "s" : ""}` : ""}
                           </span>
                           {isError && liveServer?.error && (
-                            <span className="cc-mcp-error">{liveServer.error}</span>
+                            <span className="shadcn-mcp-error">{liveServer.error}</span>
                           )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            )}
-          </div>
+                        </DropdownMenuItem>
+                      );
+                    })
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            );
+          })()}
 
           {/* Model dropdown */}
-          <div className="cc-dropdown-wrap" onClick={(e) => e.stopPropagation()}>
-            <Tooltip content="Select Claude model" side="bottom">
-              <button className="cc-dropdown-trigger" onClick={() => { setShowModelDrop((v) => !v); setShowEffortDrop(false); setShowMcpDrop(false); }}>
-                {currentModel.label}<span className="cc-chevron">▾</span>
+          <DropdownMenu open={openMenu === "model"} onOpenChange={(o) => setOpenMenu(o ? "model" : null)}>
+            <DropdownMenuTrigger asChild>
+              <button className="shadcn-trigger" aria-label="Model">
+                {currentModel.label}
+                <span className="shadcn-trigger-chev">▾</span>
               </button>
-            </Tooltip>
-            {showModelDrop && (
-              <div className="cc-dropdown">
-                {MODELS.map((m) => (
-                  <button key={m.id} className={`cc-dropdown-item ${m.id === selectedModel ? "cc-dropdown-item--active" : ""}`}
-                    onClick={() => { setSelectedModel(m.id); useSettingsStore.getState().set({ claudeModel: m.id }); setShowModelDrop(false); }}>{m.label}</button>
-                ))}
-              </div>
-            )}
-          </div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuLabel>Model</DropdownMenuLabel>
+              {MODELS.map((m) => (
+                <DropdownMenuItem
+                  key={m.id}
+                  active={m.id === selectedModel}
+                  onSelect={() => {
+                    setSelectedModel(m.id);
+                    useSettingsStore.getState().set({ claudeModel: m.id });
+                  }}
+                >
+                  <span className="shadcn-menu-text">{m.label}</span>
+                  <span className="shadcn-menu-check">{m.id === selectedModel ? "✓" : ""}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           {/* Effort dropdown */}
-          <div className="cc-dropdown-wrap" onClick={(e) => e.stopPropagation()}>
-            <Tooltip content="Reasoning effort / thinking budget" side="bottom">
-              <button className="cc-dropdown-trigger" onClick={() => { setShowEffortDrop((v) => !v); setShowModelDrop(false); setShowMcpDrop(false); }}>
-                {currentEffort.label}<span className="cc-chevron">▾</span>
+          <DropdownMenu open={openMenu === "effort"} onOpenChange={(o) => setOpenMenu(o ? "effort" : null)}>
+            <DropdownMenuTrigger asChild>
+              <button className="shadcn-trigger" aria-label="Reasoning effort">
+                {currentEffort.label}
+                <span className="shadcn-trigger-chev">▾</span>
               </button>
-            </Tooltip>
-            {showEffortDrop && (
-              <div className="cc-dropdown">
-                {EFFORTS.map((e) => (
-                  <button key={e.id} className={`cc-dropdown-item ${e.id === selectedEffort ? "cc-dropdown-item--active" : ""}`}
-                    onClick={() => { setSelectedEffort(e.id); useSettingsStore.getState().set({ claudeEffort: e.id }); setShowEffortDrop(false); }}>{e.label}</button>
-                ))}
-              </div>
-            )}
-          </div>
-
-
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuLabel>Effort</DropdownMenuLabel>
+              {EFFORTS.map((e) => (
+                <DropdownMenuItem
+                  key={e.id}
+                  active={e.id === selectedEffort}
+                  onSelect={() => {
+                    setSelectedEffort(e.id);
+                    useSettingsStore.getState().set({ claudeEffort: e.id });
+                  }}
+                >
+                  <span className="shadcn-menu-text">{e.label}</span>
+                  <span className="shadcn-menu-check">{e.id === selectedEffort ? "✓" : ""}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         <div className="cc-topbar-right">
@@ -1943,60 +2031,54 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             </span>
           )}
           {/* Context % moved to bottom-right status line in ChatInput */}
-          <Tooltip content={showHookLog ? "Hide hook activity log" : "Show hook activity log"} side="bottom">
-            <button
-              className={`ch-log-toggle ${showHookLog ? "ch-log-toggle--active" : ""}`}
-              onClick={() => setShowHookLog((v) => !v)}
-              aria-label="Toggle hook activity log"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M2 3h8M2 6h6M2 9h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-              </svg>
-              {hookEventLog.length > 0 && <span className="ch-log-count">{hookEventLog.length}</span>}
-            </button>
-          </Tooltip>
+          <button
+            className={`ch-log-toggle ${showHookLog ? "ch-log-toggle--active" : ""}`}
+            onClick={() => setShowHookLog((v) => !v)}
+            title="Toggle hook activity log"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 3h8M2 6h6M2 9h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+            </svg>
+            {hookEventLog.length > 0 && <span className="ch-log-count">{hookEventLog.length}</span>}
+          </button>
           {hasSideContent && (
-            <Tooltip content={sidePanelOpen ? "Hide tasks / plan panel" : "Show tasks / plan panel"} side="bottom">
-              <button
-                className={`cc-panel-toggle ${sidePanelOpen ? "cc-panel-toggle--active" : ""}`}
-                onClick={() => setSidePanelOpen((v) => !v)}
-                aria-label="Toggle side panel"
-              >
-                ☰
-              </button>
-            </Tooltip>
-          )}
-          <Tooltip content="Refresh chat — cancel in-flight request, merge latest JSONL" side="bottom" align="end">
             <button
-              className="cc-refresh-btn"
-              onClick={() => {
-                // Cancel running process + reset UI state, then pull just the
-                // last slice of JSONL and merge in any new messages we missed.
-                // Loading the full history on every click re-parses the entire
-                // file and pumps thousands of messages over IPC; we only need
-                // the tail to catch up.
-                cancelClaude(sessionId).catch(() => {});
-                closeClaudeSession(sessionId).catch(() => {});
-                const store = useClaudeStore.getState();
-                store.setStreaming(sessionId, false);
-                store.setError(sessionId, null);
-                store.clearStreamingText(sessionId);
-                if (effectiveCwd) {
-                  loadSessionHistoryTail(sessionId, effectiveCwd, 50).then((history) => {
-                    if (history?.length) {
-                      store.mergeFromDisk(sessionId, mapHistoryMessages(history) as ChatMessageData[]);
-                    }
-                  }).catch(() => {});
-                }
-              }}
-              aria-label="Refresh chat"
+              className={`cc-panel-toggle ${sidePanelOpen ? "cc-panel-toggle--active" : ""}`}
+              onClick={() => setSidePanelOpen((v) => !v)}
+              title="Toggle side panel"
             >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M1.5 6A4.5 4.5 0 0 1 10 3.5M10.5 6A4.5 4.5 0 0 1 2 8.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-                <path d="M10 1v3h-3M2 11V8h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
+              ☰
             </button>
-          </Tooltip>
+          )}
+          <button
+            className="cc-refresh-btn"
+            onClick={() => {
+              // Cancel running process + reset UI state, then pull just the
+              // last slice of JSONL and merge in any new messages we missed.
+              // Loading the full history on every click re-parses the entire
+              // file and pumps thousands of messages over IPC; we only need
+              // the tail to catch up.
+              cancelClaude(sessionId).catch(() => {});
+              closeClaudeSession(sessionId).catch(() => {});
+              const store = useClaudeStore.getState();
+              store.setStreaming(sessionId, false);
+              store.setError(sessionId, null);
+              store.clearStreamingText(sessionId);
+              if (effectiveCwd) {
+                loadSessionHistoryTail(sessionId, effectiveCwd, 50).then((history) => {
+                  if (history?.length) {
+                    store.mergeFromDisk(sessionId, mapHistoryMessages(history) as ChatMessageData[]);
+                  }
+                }).catch(() => {});
+              }
+            }}
+            title="Refresh chat (cancel in-flight request, merge recent JSONL)"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M1.5 6A4.5 4.5 0 0 1 10 3.5M10.5 6A4.5 4.5 0 0 1 2 8.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+              <path d="M10 1v3h-3M2 11V8h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -2140,16 +2222,13 @@ Coordinate actively. If another agent is working on a file you need, mention it 
           {!hasMessages ? (
             <div className="cc-messages">
               <div className="cc-empty">
-                <Particles className="cc-empty-particles" count={30} />
-                <div className="cc-empty-inner">
-                  <div className="cc-empty-icon">
-                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-                      <path d="M5 24L13 8L21 18L27 10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  </div>
-                  <span className="cc-empty-text">Claude Code</span>
-                  <span className="cc-empty-sub">Send a message, type / for commands, or drop files</span>
+                <div className="cc-empty-icon">
+                  <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                    <path d="M5 24L13 8L21 18L27 10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
                 </div>
+                <span className="cc-empty-text">Claude Code</span>
+                <span className="cc-empty-sub">Send a message, type / for commands, or drop files</span>
               </div>
             </div>
           ) : (
@@ -2184,17 +2263,16 @@ Coordinate actively. If another agent is working on a file you need, mention it 
             onClose={() => setIslandOpen(false)}
             onJump={jumpToPrompt}
           />
-          <Tooltip content="Jump to latest message" side="left">
-            <button
-              className={`cc-jump-bottom${isScrolledUp && userPrompts.length > 0 ? "" : " cc-jump-bottom--hidden"}`}
-              onClick={() => scrollToBottom()}
-              aria-label="Scroll to bottom"
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M7 2V11M7 11L3 7M7 11L11 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </button>
-          </Tooltip>
+          <button
+            className={`cc-jump-bottom${isScrolledUp && userPrompts.length > 0 ? "" : " cc-jump-bottom--hidden"}`}
+            onClick={() => scrollToBottom()}
+            aria-label="Scroll to bottom"
+            title="Scroll to bottom"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 2V11M7 11L3 7M7 11L11 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
           </div>
           )}
 

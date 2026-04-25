@@ -483,7 +483,7 @@
   min-width: 0;
   box-sizing: border-box;
   padding: 0 14px;
-  margin-bottom: 10px;
+  margin-bottom: 14px;
 }
 
 /* Zero height — any space below the last item confuses Virtuoso's
@@ -630,13 +630,14 @@
 
 .cc-bubble {
   max-width: 88%;
-  padding: 10px 14px;
+  padding: 12px 16px;
   border-radius: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: break-word;
   min-width: 0;
+  box-sizing: border-box;
 }
 
 .cc-bubble--user {
@@ -711,6 +712,14 @@
   z-index: 9999;
 }
 
+.cc-ctx-menu--portal {
+  position: fixed;
+  right: auto;
+  bottom: auto;
+  min-width: 130px;
+  z-index: 100000;
+}
+
 .cc-ctx-item {
   display: flex;
   align-items: center;
@@ -738,10 +747,11 @@
 }
 
 .cc-bubble--assistant {
-  background: var(--bg-secondary, #181825);
+  background: color-mix(in srgb, var(--bg-secondary, #181825) 92%, #ffffff 4%);
   border: 1px solid var(--border, #313244);
   border-bottom-left-radius: 4px;
   max-width: 95%;
+  padding: 12px 16px;
 }
 
 .cc-bubble--streaming {
@@ -1080,9 +1090,15 @@
 .cc-tc-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: 6px;
+  gap: 6px;
+  margin-top: 10px;
   max-width: 95%;
+}
+
+/* When a tool list directly follows an assistant bubble, give the bubble
+   a clearly larger gap so the two visually separate. */
+.cc-bubble--assistant + .cc-tc-list {
+  margin-top: 12px;
 }
 
 .cc-tc {

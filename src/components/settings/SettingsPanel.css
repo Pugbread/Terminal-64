@@ -1,53 +1,35 @@
-/* ---- Vaul Drawer Shell (bottom sheet) ---- */
+/* ---- Overlay & Panel Shell ---- */
 
 .settings-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: flex-end;
   z-index: 210;
+  animation: sp-fade-in 0.15s ease-out;
+}
+
+@keyframes sp-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .settings-panel {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 220;
-  height: 85vh;
-  max-height: 85vh;
+  width: clamp(290px, 85vw, 340px);
+  height: 100%;
   background: var(--bg-secondary, #181825);
-  border-top: 1px solid var(--ft-border, #cba6f7);
-  border-top-left-radius: 12px;
-  border-top-right-radius: 12px;
-  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.45);
+  border-left: 1px solid var(--border, #313244);
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
   display: flex;
   flex-direction: column;
-  outline: none;
+  animation: sp-slide-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.settings-drawer-handle {
-  align-self: center;
-  margin-top: 8px;
-  margin-bottom: 4px;
-  width: 42px;
-  height: 4px;
-  border-radius: 999px;
-  background: var(--fg-muted, #6c7086);
-  opacity: 0.55;
-  flex-shrink: 0;
-}
-
-.sp-visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+@keyframes sp-slide-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
 }
 
 .settings-header {

@@ -13,7 +13,6 @@ import SharedChat from "../claude/SharedChat";
 import WidgetPanel from "../widget/WidgetPanel";
 import BrowserPanel from "../widget/BrowserPanel";
 import TextEditor from "./TextEditor";
-import { Tooltip } from "../ui/Tooltip";
 import "./FloatingTerminal.css";
 
 /** Block iframes from stealing mouse events during drag/resize */
@@ -258,10 +257,10 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
   const isSharedChat = term.panelType === "shared-chat";
   const isWidget = term.panelType === "widget";
   const isBrowser = term.panelType === "browser";
-  const { claudeSessionName, claudeCwd, claudeStreaming } = useClaudeStore(useShallow((s) => {
-    if (!isClaude) return { claudeSessionName: undefined, claudeCwd: undefined, claudeStreaming: false };
+  const { claudeSessionName, claudeCwd } = useClaudeStore(useShallow((s) => {
+    if (!isClaude) return { claudeSessionName: undefined, claudeCwd: undefined };
     const sess = s.sessions[term.terminalId];
-    return { claudeSessionName: sess?.name, claudeCwd: sess?.cwd, claudeStreaming: sess?.isStreaming ?? false };
+    return { claudeSessionName: sess?.name, claudeCwd: sess?.cwd };
   }));
 
   const claudeTitle = (() => {
@@ -287,7 +286,7 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
 
   return (
     <div
-      className={`floating-terminal ${isWorking ? "floating-terminal--working" : ""} ${isWidget ? "floating-terminal--widget" : ""} ${isClaude && claudeStreaming ? "floating-terminal--streaming" : ""}`}
+      className={`floating-terminal ${isWorking ? "floating-terminal--working" : ""} ${isWidget ? "floating-terminal--widget" : ""}`}
       style={{
         left: term.x,
         top: term.y,
@@ -329,64 +328,55 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
                 spellCheck={false}
                 autoFocus
               />
-              <Tooltip content="Save name" side="bottom">
-                <button className="ft-btn ft-btn--accept" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => {
-                  e.stopPropagation();
-                  const name = nameDraft.trim();
-                  useClaudeStore.getState().setName(term.terminalId, name);
-                  setEditingName(false);
-                  const cwd = useClaudeStore.getState().sessions[term.terminalId]?.cwd || "";
-                  renameDiscordSession(term.terminalId, name, cwd).catch(() => {});
-                }} aria-label="Save name">
-                  <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                </button>
-              </Tooltip>
-              <Tooltip content="Cancel rename" side="bottom">
-                <button className="ft-btn ft-btn--cancel" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => {
-                  e.stopPropagation();
-                  setEditingName(false);
-                }} aria-label="Cancel rename">
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 1L7 7M7 1L1 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-                </button>
-              </Tooltip>
+              <button className="ft-btn ft-btn--accept" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => {
+                e.stopPropagation();
+                const name = nameDraft.trim();
+                useClaudeStore.getState().setName(term.terminalId, name);
+                setEditingName(false);
+                const cwd = useClaudeStore.getState().sessions[term.terminalId]?.cwd || "";
+                renameDiscordSession(term.terminalId, name, cwd).catch(() => {});
+              }} title="Save">
+                <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+              <button className="ft-btn ft-btn--cancel" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => {
+                e.stopPropagation();
+                setEditingName(false);
+              }} title="Cancel">
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 1L7 7M7 1L1 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+              </button>
             </>
           ) : (
             <>
               <span className="ft-title">{claudeTitle}</span>
-              <Tooltip content="Rename session" side="bottom">
-                <button className="ft-btn ft-btn--edit" onClick={(e) => {
-                  e.stopPropagation();
-                  setNameDraft(claudeSessionName || "");
-                  setEditingName(true);
-                }} aria-label="Rename session">
-                  <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M5.5 1.5L7.5 3.5M1 8L1.5 6L6.5 1L8 2.5L3 7.5L1 8Z" stroke="currentColor" strokeWidth="1" strokeLinejoin="round"/></svg>
-                </button>
-              </Tooltip>
+              <button className="ft-btn ft-btn--edit" onClick={(e) => {
+                e.stopPropagation();
+                setNameDraft(claudeSessionName || "");
+                setEditingName(true);
+              }} title="Rename">
+                <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M5.5 1.5L7.5 3.5M1 8L1.5 6L6.5 1L8 2.5L3 7.5L1 8Z" stroke="currentColor" strokeWidth="1" strokeLinejoin="round"/></svg>
+              </button>
             </>
           )
         ) : (
           <span className="ft-title">{term.title}</span>
         )}
         {!isClaude && !isSharedChat && !isWidget && !isBrowser && (
-          <Tooltip content="Pop out to a native window" side="bottom">
-            <button
-              className="ft-btn"
-              onClick={(e) => { e.stopPropagation(); handlePopOut(); }}
-              aria-label="Pop out to new window"
-            >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <path d="M4 1H1V9H9V6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M6 1H9V4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M9 1L5 5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-              </svg>
-            </button>
-          </Tooltip>
+          <button
+            className="ft-btn"
+            onClick={(e) => { e.stopPropagation(); handlePopOut(); }}
+            title="Pop out to new window"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <path d="M4 1H1V9H9V6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M6 1H9V4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M9 1L5 5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+            </svg>
+          </button>
         )}
         {isWidget && term.widgetId && (
-          <Tooltip content="Open this widget's Claude chat" side="bottom">
-            <button
-              className="ft-btn"
-              onClick={(e) => {
+          <button
+            className="ft-btn"
+            onClick={(e) => {
               e.stopPropagation();
               const wid = term.widgetId!;
               const widgetPath = `/.terminal64/widgets/${wid}`;
@@ -422,39 +412,34 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
                 }
               }
             }}
-              aria-label="Show widget chat"
-            >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <path d="M1 1.5H9V7.5H5L3 9.5V7.5H1Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
-              </svg>
-            </button>
-          </Tooltip>
+            title="Show widget chat"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <path d="M1 1.5H9V7.5H5L3 9.5V7.5H1Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+            </svg>
+          </button>
         )}
         {!isSharedChat && !isWidget && (
-          <Tooltip content="Change border color" side="bottom">
-            <button
-              className="ft-btn ft-btn--settings"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowColors((v) => !v);
-              }}
-              aria-label="Border color"
-            >
-              <div
-                className="ft-color-dot"
-                style={{ background: term.borderColor }}
-              />
-            </button>
-          </Tooltip>
+          <button
+            className="ft-btn ft-btn--settings"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowColors((v) => !v);
+            }}
+            title="Border color"
+          >
+            <div
+              className="ft-color-dot"
+              style={{ background: term.borderColor }}
+            />
+          </button>
         )}
         {!isSharedChat && (
-          <Tooltip content="Close panel" side="bottom" align="end">
-            <button className="ft-btn" onClick={handleClose} aria-label="Close">
-              <svg width="9" height="9" viewBox="0 0 9 9">
-                <path d="M1 1L8 8M8 1L1 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            </button>
-          </Tooltip>
+          <button className="ft-btn" onClick={handleClose} title="Close">
+            <svg width="9" height="9" viewBox="0 0 9 9">
+              <path d="M1 1L8 8M8 1L1 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
         )}
       </div>
 
@@ -529,18 +514,16 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
             />
           )}
           {/* Editor toggle button */}
-          <Tooltip content="Text editor — compose & paste" side="left">
-            <button
-              className="ft-editor-toggle"
-              onClick={() => setEditorOpen((v) => !v)}
-              aria-label="Toggle text editor"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M2 10L1 11L1.5 11.5L11 2L9.5 0.5L0 10L2 10Z" stroke="currentColor" strokeWidth="1" strokeLinejoin="round"/>
-                <path d="M8.5 1.5L10 3" stroke="currentColor" strokeWidth="1"/>
-              </svg>
-            </button>
-          </Tooltip>
+          <button
+            className="ft-editor-toggle"
+            onClick={() => setEditorOpen((v) => !v)}
+            title="Text Editor (compose & paste)"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 10L1 11L1.5 11.5L11 2L9.5 0.5L0 10L2 10Z" stroke="currentColor" strokeWidth="1" strokeLinejoin="round"/>
+              <path d="M8.5 1.5L10 3" stroke="currentColor" strokeWidth="1"/>
+            </svg>
+          </button>
         </div>
       )}
 

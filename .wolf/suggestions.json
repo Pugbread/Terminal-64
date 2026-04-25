@@ -1,4 +1,31 @@
 {
-  "suggestions": [],
-  "generated_at": null
+  "generated_at": "2026-04-20T02:00:32.994Z",
+  "achievements": [
+    "Voice pipeline shipped: whisper.cpp dictation with Metal pre-warm, LocalAgreement-2 two-span render (committed/tentative), windowed 15s decode with watchdog, VAD hysteresis tuning",
+    "Jarvis wake/command flow: 'jarvis' as boundary token, command-mode pause-then-speak, trim 'jarvis...' from live partial display",
+    "Windows compatibility pass across backend (PATHEXT/cmd shims, reserved names), frontend (platform.ts), and bundle config (NSIS lzma, webview2 install)",
+    "Stability fixes: bash replay loop sanitization, heavy-output cap, rewind/fork JSONL audit (filtered leaf candidates, malformed-line tolerance), event parser ghost-spinner fix",
+    "UX polish: Escape closes dialogs, Settings z-index over widgets, Jarvis send snapshot-before-clear, chat bg flicker fix via compositor promotion"
+  ],
+  "improvements": [
+    "Voice testkit (voice/testkit.rs) exists but no CI hook — wire voice_run_selftest + voice_run_fixtures into a smoke test target",
+    "scripts/ folder is untracked and contains a 9000+ file .wake-venv — add scripts/.wake-venv to .gitignore before it gets committed accidentally",
+    "/tmp/sanitize-jsonl.mjs has been 'session-end' written 9 times in a row (00:00–00:08) — likely a runaway hook or loop, investigate .wolf/hooks/_session.json",
+    "Anti-hallucination reconciliation in whisper.rs is load-bearing per CLAUDE.md but lacks regression tests — add fixture-based tests via testkit",
+    "docs/wake-training.md exists but train_wake.py/.sh are untracked — decide if wake-word custom training ships or stays internal"
+  ],
+  "next_tasks": [
+    "Commit or stash the 14 modified voice-related files (voice/adapters.rs, models.rs, testkit.rs, voice_manager.rs, ChatInput.tsx, VoiceLivePanel.tsx, useVoiceControl.ts, voiceApi.ts, voiceStore.ts) — currently dirty on master",
+    "Add scripts/.wake-venv/ and any python venv artifacts to .gitignore",
+    "Diagnose the repeating 00:00–00:08 'sanitize-jsonl.mjs' session-end log entries — possible daemon misfire",
+    "Document the Jarvis voice protocol (wake → command mode → keywords) in README or docs/ now that the UX is settled",
+    "Run voice_run_selftest at startup and surface a status badge if models fail to load (whisper, silero, wake)"
+  ],
+  "risks": [
+    "Untracked scripts/ directory (~5MB venv) risks being added via 'git add .' — large repo bloat",
+    "Voice features ship behind voice-dictation feature flag but it's on by default — Linux/Windows builds may break since whisper-rs Metal is macOS-only; verify CI matrix covers cfg-gated paths",
+    "Release signing still TODO (Apple notarytool, Azure Trusted Signing) per CLAUDE.md — every tagged release ships unsigned; users hit Gatekeeper",
+    "Live-work files (whisper.rs, useVoiceControl.ts) have been edited heavily this week — high risk of a subtle regression in the snapshot-before-clear or anti-hallucination logic",
+    "buglog.json shows bug-002 (fork regression from hasBeenStarted ordering) — pattern of state-flag ordering bugs; audit other started/loaded guards in claudeStore"
+  ]
 }
