@@ -10,6 +10,7 @@ export interface CreateCodexRequest {
   yolo?: boolean;
   skip_git_repo_check?: boolean;
   mcp_env?: Record<string, string>;
+  collaboration_mode?: "plan" | "default";
 }
 
 export interface SendCodexPromptRequest {
@@ -25,4 +26,5 @@ export interface SendCodexPromptRequest {
   yolo?: boolean;
   skip_git_repo_check?: boolean;
   mcp_env?: Record<string, string>;
+  collaboration_mode?: "plan" | "default";
 }

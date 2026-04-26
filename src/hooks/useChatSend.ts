@@ -26,7 +26,11 @@ export function useChatSend({
   incrementPromptCount,
 }: UseChatSendOptions) {
   return useCallback(
-    async (prompt: string, permissionOverride?: PermissionMode) => {
+    async (
+      prompt: string,
+      permissionOverride?: PermissionMode,
+      opts?: { codexCollaborationMode?: "plan" | "default" },
+    ) => {
       const store = useClaudeStore.getState();
       const sess = store.sessions[sessionId];
       const started = sess?.hasBeenStarted ?? false;
@@ -54,11 +58,21 @@ export function useChatSend({
           store.setCwd(sessionId, effectiveCwd);
         }
 
+        let providerPrompt = prompt;
+        let codexCollaborationMode = opts?.codexCollaborationMode;
+        if (provider === "openai" && !codexCollaborationMode) {
+          const codexPlanMatch = prompt.match(/^\/plan(?:\s+([\s\S]*))?$/i);
+          if (codexPlanMatch) {
+            codexCollaborationMode = "plan";
+            providerPrompt = codexPlanMatch[1]?.trim() || "Create a plan.";
+          }
+        }
+
         const turnInput: ProviderTurnInput = {
           provider,
           sessionId,
           cwd: effectiveCwd,
-          prompt,
+          prompt: providerPrompt,
           started,
           threadId: sess?.codexThreadId ?? null,
           selectedModel,
@@ -69,6 +83,7 @@ export function useChatSend({
           seedTranscript: sess?.seedTranscript ?? null,
           resumeAtUuid: sess?.resumeAtUuid ?? null,
           forkParentSessionId: sess?.forkParentSessionId ?? null,
+          codexCollaborationMode,
         };
         if (permissionOverride !== undefined) {
           turnInput.permissionOverride = permissionOverride;

@@ -96,6 +96,7 @@ interface CanvasState {
   removeTerminal: (id: string) => void;
   moveTerminal: (id: string, x: number, y: number) => void;
   resizeTerminal: (id: string, width: number, height: number) => void;
+  setTerminalFrame: (id: string, x: number, y: number, width: number, height: number) => void;
   bringToFront: (id: string) => void;
   setTitle: (id: string, title: string) => void;
   setCwd: (id: string, cwd: string) => void;
@@ -326,23 +327,56 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     moveTerminal: (id: string, x: number, y: number) => {
+      const nx = Math.round(x);
+      const ny = Math.round(y);
+      const current = get().terminals.find((t) => t.id === id);
+      if (!current || (current.x === nx && current.y === ny)) return;
       set((s) => ({
         terminals: s.terminals.map((t) =>
-          t.id === id ? { ...t, x: Math.round(x), y: Math.round(y) } : t
+          t.id === id ? { ...t, x: nx, y: ny } : t
         ),
       }));
       markDirty();
     },
 
     resizeTerminal: (id: string, width: number, height: number) => {
+      const nextWidth = Math.round(Math.max(MIN_TERMINAL_WIDTH, width));
+      const nextHeight = Math.round(Math.max(MIN_TERMINAL_HEIGHT, height));
+      const current = get().terminals.find((t) => t.id === id);
+      if (!current || (current.width === nextWidth && current.height === nextHeight)) return;
       set((s) => ({
         terminals: s.terminals.map((t) =>
           t.id === id
             ? {
                 ...t,
-                width: Math.round(Math.max(MIN_TERMINAL_WIDTH, width)),
-                height: Math.round(Math.max(MIN_TERMINAL_HEIGHT, height)),
+                width: nextWidth,
+                height: nextHeight,
               }
+            : t
+        ),
+      }));
+      markDirty();
+    },
+
+    setTerminalFrame: (id: string, x: number, y: number, width: number, height: number) => {
+      const nx = Math.round(x);
+      const ny = Math.round(y);
+      const nextWidth = Math.round(Math.max(MIN_TERMINAL_WIDTH, width));
+      const nextHeight = Math.round(Math.max(MIN_TERMINAL_HEIGHT, height));
+      const current = get().terminals.find((t) => t.id === id);
+      if (
+        !current ||
+        (current.x === nx &&
+          current.y === ny &&
+          current.width === nextWidth &&
+          current.height === nextHeight)
+      ) {
+        return;
+      }
+      set((s) => ({
+        terminals: s.terminals.map((t) =>
+          t.id === id
+            ? { ...t, x: nx, y: ny, width: nextWidth, height: nextHeight }
             : t
         ),
       }));

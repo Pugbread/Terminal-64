@@ -34,7 +34,7 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
   const isActive = useCanvasStore((s) => s.activeTerminalId === term.terminalId);
   // Stable action refs — won't cause re-renders
   const moveTerminal = useCanvasStore((s) => s.moveTerminal);
-  const resizeTerminal = useCanvasStore((s) => s.resizeTerminal);
+  const setTerminalFrame = useCanvasStore((s) => s.setTerminalFrame);
   const removeTerminal = useCanvasStore((s) => s.removeTerminal);
   const bringToFront = useCanvasStore((s) => s.bringToFront);
   const setActive = useCanvasStore((s) => s.setActive);
@@ -169,8 +169,7 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
           newH = Math.max(200, newH);
           if (newW === 300 && edge.includes("w")) newX = origX + origW - 300;
           if (newH === 200 && edge.includes("n")) newY = origY + origH - 200;
-          resizeTerminal(term.id, newW, newH);
-          moveTerminal(term.id, newX, newY);
+          setTerminalFrame(term.id, newX, newY, newW, newH);
           return;
         }
 
@@ -185,8 +184,7 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
         if (snap.width === 300 && edge.includes("w")) snap.x = origX + origW - 300;
         if (snap.height === 200 && edge.includes("n")) snap.y = origY + origH - 200;
 
-        resizeTerminal(term.id, snap.width, snap.height);
-        moveTerminal(term.id, snap.x, snap.y);
+        setTerminalFrame(term.id, snap.x, snap.y, snap.width, snap.height);
         useCanvasStore.getState().setSnapGuides(snap.guides);
       };
       const onUp = () => {
@@ -200,7 +198,7 @@ export default memo(function FloatingTerminal({ term }: FloatingTerminalProps) {
       window.addEventListener("mouseup", onUp);
       cleanupFns.current.add(onUp);
     },
-    [term.id, resizeTerminal, moveTerminal, bringToFront]
+    [term.id, setTerminalFrame, bringToFront]
   );
 
   const handleClose = useCallback(() => {

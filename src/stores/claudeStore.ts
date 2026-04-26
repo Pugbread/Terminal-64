@@ -372,8 +372,34 @@ interface HydrationCacheEntry {
   mtimeMs: number;
   size: number;
   messages: ChatMessage[];
+  lastUsedAt: number;
 }
 const hydrationCache = new Map<string, HydrationCacheEntry>();
+const MAX_HYDRATION_CACHE_ENTRIES = 6;
+const MAX_HYDRATION_CACHE_MESSAGES = 30000;
+
+function trimHydrationCache() {
+  let totalMessages = 0;
+  for (const entry of hydrationCache.values()) totalMessages += entry.messages.length;
+  if (hydrationCache.size <= MAX_HYDRATION_CACHE_ENTRIES && totalMessages <= MAX_HYDRATION_CACHE_MESSAGES) return;
+
+  const oldest = [...hydrationCache.entries()].sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
+  for (const [sessionId, entry] of oldest) {
+    if (hydrationCache.size <= MAX_HYDRATION_CACHE_ENTRIES && totalMessages <= MAX_HYDRATION_CACHE_MESSAGES) break;
+    hydrationCache.delete(sessionId);
+    totalMessages -= entry.messages.length;
+  }
+}
+
+function rememberHydration(sessionId: string, mtimeMs: number, size: number, messages: ChatMessage[]) {
+  hydrationCache.set(sessionId, {
+    mtimeMs,
+    size,
+    messages,
+    lastUsedAt: Date.now(),
+  });
+  trimHydrationCache();
+}
 
 // Async JSONL hydration. Fire-and-forget — errors are logged but non-fatal so
 // the user can still interact with a session whose history hasn't loaded yet.
@@ -411,6 +437,7 @@ function hydrateFromJsonl(sessionId: string, cwd: string) {
       if (stat) {
         const cached = hydrationCache.get(sessionId);
         if (cached && cached.mtimeMs === stat.mtime_ms && cached.size === stat.size) {
+          cached.lastUsedAt = Date.now();
           useClaudeStore.getState().loadFromDisk(sessionId, cached.messages);
           return;
         }
@@ -424,11 +451,7 @@ function hydrateFromJsonl(sessionId: string, cwd: string) {
         if (history.length > 0) {
           const messages = mapHistoryMessages(history);
           if (stat) {
-            hydrationCache.set(sessionId, {
-              mtimeMs: stat.mtime_ms,
-              size: stat.size,
-              messages,
-            });
+            rememberHydration(sessionId, stat.mtime_ms, stat.size, messages);
           }
           useClaudeStore.getState().loadFromDisk(sessionId, messages);
         } else {
@@ -545,6 +568,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
   },
 
   removeSession: (sessionId) => {
+    hydrationCache.delete(sessionId);
     set((s) => {
       const removed = s.sessions[sessionId];
       const { [sessionId]: _, ...rest } = s.sessions;
@@ -978,6 +1002,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
   },
 
   deleteSession: (sessionId) => {
+    hydrationCache.delete(sessionId);
     set((s) => {
       const { [sessionId]: _, ...rest } = s.sessions;
       try {
@@ -1009,6 +1034,7 @@ export const useClaudeStore = create<ClaudeState>((set, get) => ({
   },
 
   truncateFromMessage: (sessionId, messageId) => {
+    hydrationCache.delete(sessionId);
     set((s) => {
       const session = s.sessions[sessionId];
       if (!session) return s;

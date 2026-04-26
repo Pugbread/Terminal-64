@@ -50,36 +50,13 @@
 | 21:30 | Agent 4: frontend two-span render — committed in textarea, tentative as dimmed italic span via overlay | src/stores/voiceStore.ts, src/hooks/useVoiceControl.ts, src/lib/voiceApi.ts, src/components/claude/ChatInput.tsx, src/components/claude/ClaudeChat.css | tsc --noEmit clean | ~1500 |
 
 ## Session: 2026-04-19 03:00
-
-| Time | Action | File(s) | Outcome | ~Tokens |
-|------|--------|---------|---------|--------|
-| 18:33 | UX fixes: Settings z-index 100→210; global Escape handlers on Settings/Claude/Skill/Widget dialogs; round resize width/height | SettingsPanel.css, SettingsPanel.tsx, ClaudeDialog.tsx, SkillDialog.tsx, WidgetDialog.tsx, canvasStore.ts | done | ~1800 |
+> Consolidated session (1 actions)
 
 ## Session: 2026-04-19 23:21
-
-| Time | Action | File(s) | Outcome | ~Tokens |
-|------|--------|---------|---------|--------|
-| 23:32 | Edited src-tauri/src/claude_manager.rs | modified spawn_and_stream() | ~326 |
-| 23:32 | Edited src-tauri/src/claude_manager.rs | modified send_prompt() | ~57 |
-| 23:32 | Edited src-tauri/src/claude_manager.rs | modified cancel() | ~68 |
-| 23:32 | Edited src-tauri/src/claude_manager.rs | modified lines() | ~276 |
-| 23:33 | Edited src-tauri/src/claude_manager.rs | modified session_jsonl_path() | ~2752 |
+> Consolidated session (5 actions)
 
 ## Session: 2026-04-19 23:34
-
-| Time | Action | File(s) | Outcome | ~Tokens |
-|------|--------|---------|---------|--------|
-| 23:36 | Fix Bash replay loop + heavy-output freeze | src-tauri/src/claude_manager.rs | sanitize_dangling_tool_uses() before spawn + cap_event_size() in stdout reader; cargo fmt/clippy/check clean | ~3k |
-| 23:42 | Created ../../../../tmp/sanitize-jsonl.mjs | — | ~701 |
-| 23:43 | Session end: 1 writes across 1 files (sanitize-jsonl.mjs) | 1 reads | ~11110 tok |
-| 23:44 | Session end: 1 writes across 1 files (sanitize-jsonl.mjs) | 1 reads | ~11110 tok |
-| 23:48 | Session end: 1 writes across 1 files (sanitize-jsonl.mjs) | 1 reads | ~11110 tok |
-| 23:55 | Session end: 1 writes across 1 files (sanitize-jsonl.mjs) | 1 reads | ~11110 tok |
-| 00:00 | Session end: 1 writes across 1 files (sanitize-jsonl.mjs) | 1 reads | ~11110 tok |
-| 00:03 | Session end: 1 writes across 1 files (sanitize-jsonl.mjs) | 1 reads | ~11110 tok |
-| 00:05 | Session end: 1 writes across 1 files (sanitize-jsonl.mjs) | 1 reads | ~11110 tok |
-| 00:06 | Session end: 1 writes across 1 files (sanitize-jsonl.mjs) | 1 reads | ~11110 tok |
-| 00:08 | Session end: 1 writes across 1 files (sanitize-jsonl.mjs) | 1 reads | ~11110 tok |
+> Consolidated session (11 actions)
 
 ## Session: 2026-04-20 04:00
 
@@ -128,3 +105,11 @@
 | 01:38 | checked whitespace and resolved buglog id collisions | chat UI files .wolf/buglog.json | git diff --check passed | ~200 |
 | 02:02 | fixed Codex malformed-event UI error and virtual row overlap | src-tauri/src/providers/util.rs, src/hooks/useClaudeEvents.ts, src/components/claude/ClaudeChat.tsx, .wolf/buglog.json, .wolf/cerebrum.md | capper now preserves JSON, frontend drops malformed Codex frames quietly, tool rows get layout signatures | ~1.2k |
 | 02:05 | collapsed consecutive Bash tool calls | src/components/claude/ChatMessage.tsx, .wolf/buglog.json | Bash added to grouped tool renderer as `Ran N commands` | ~300 |
+| 02:10 | fixed plain assistant row overlap in LegendList | src/components/claude/ClaudeChat.tsx, .wolf/buglog.json | all assistant rows and finished-tail dividers now carry layout signatures, resync depends on row keys | ~500 |
+| 02:17 | researched and wired Codex app-server plan mode | src-tauri/src/providers/codex.rs, src-tauri/src/types.rs, src/contracts/providerIpc.ts, src/contracts/providerRuntime.ts, src/hooks/useChatSend.ts, src/lib/providerRuntime.ts, src/components/claude/ClaudeChat.tsx, .wolf/cerebrum.md | /plan on Codex sends collaborationMode=plan and plan deltas render as assistant text | ~2.2k |
+| 02:24 | normalized Codex JSONL shell tool names | src-tauri/src/providers/codex.rs, src/lib/codexEventDecoder.ts, .wolf/buglog.json, .wolf/cerebrum.md | refresh-from-jsonl now maps exec_command/write_stdin to Bash-style grouped cards | ~900 |
+| 02:37 | Loaded OpenWolf protocol, anatomy, cerebrum, and buglog before source inspection | .wolf/OPENWOLF.md, .wolf/anatomy.md, .wolf/cerebrum.md, .wolf/buglog.json | Ready to target performance hot paths | ~9400 |
+| 02:38 | Identified terminal event fanout and canvas frame-update churn as primary lag culprits | src/lib/tauriApi.ts, src/components/terminal/XTerminal.tsx, src/stores/canvasStore.ts | Planning scoped optimizations | ~13500 |
+| 02:41 | Implemented terminal event dispatch, canvas frame batching, browser sync, and hydration cache cap; production frontend build passed | src/lib/tauriApi.ts, src/components/terminal/XTerminal.tsx, src/stores/canvasStore.ts, src/components/canvas/FloatingTerminal.tsx, src/components/widget/BrowserPanel.tsx, src/stores/claudeStore.ts | Build OK with existing Vite chunk warnings | ~5200 |
+| 02:41 | Frontend typecheck passed after performance optimizations | package.json scripts, npm run typecheck | TypeScript OK | ~100 |
+| 02:41 | Updated OpenWolf cerebrum and buglog for big-workflow performance fix | .wolf/cerebrum.md, .wolf/buglog.json | Records appended | ~900 |

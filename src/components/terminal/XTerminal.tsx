@@ -6,8 +6,8 @@ import {
   createTerminal,
   writeTerminal,
   resizeTerminal,
-  onTerminalOutput,
-  onTerminalExit,
+  onTerminalOutputForId,
+  onTerminalExitForId,
 } from "../../lib/tauriApi";
 import { useThemeStore } from "../../stores/themeStore";
 import { useCanvasStore } from "../../stores/canvasStore";
@@ -303,22 +303,18 @@ export default function XTerminal({
     let autoCommandTimer: ReturnType<typeof setTimeout> | null = null;
 
     (async () => {
-      unlistenOutput = await onTerminalOutput((payload) => {
-        if (payload.id === terminalId) {
-          term.write(payload.data);
-          onActivity?.(terminalId);
-          const psMatch = payload.data.match(/PS ([A-Z]:\\[^>]*?)>/);
-          if (psMatch && psMatch[1]) onCwdChange?.(terminalId, psMatch[1]);
-          const oscMatch = payload.data.match(/\x1b\]7;file:\/\/[^/]*\/(.*?)(?:\x07|\x1b\\)/);
-          if (oscMatch && oscMatch[1]) onCwdChange?.(terminalId, decodeURIComponent(oscMatch[1]));
-        }
+      unlistenOutput = await onTerminalOutputForId(terminalId, (payload) => {
+        term.write(payload.data);
+        onActivity?.(terminalId);
+        const psMatch = payload.data.match(/PS ([A-Z]:\\[^>]*?)>/);
+        if (psMatch && psMatch[1]) onCwdChange?.(terminalId, psMatch[1]);
+        const oscMatch = payload.data.match(/\x1b\]7;file:\/\/[^/]*\/(.*?)(?:\x07|\x1b\\)/);
+        if (oscMatch && oscMatch[1]) onCwdChange?.(terminalId, decodeURIComponent(oscMatch[1]));
       });
 
-      unlistenExit = await onTerminalExit((payload) => {
-        if (payload.id === terminalId) {
-          term.write("\r\n\x1b[38;5;242m[Process exited]\x1b[0m\r\n");
-          onExit?.(terminalId);
-        }
+      unlistenExit = await onTerminalExitForId(terminalId, () => {
+        term.write("\r\n\x1b[38;5;242m[Process exited]\x1b[0m\r\n");
+        onExit?.(terminalId);
       });
 
       if (disposed) return;

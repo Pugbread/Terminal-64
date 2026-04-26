@@ -57,6 +57,93 @@ export function onTerminalExit(callback: (payload: TerminalExit) => void): Promi
   return listen<TerminalExit>("terminal-exit", (event) => callback(event.payload));
 }
 
+type TerminalOutputCallback = (payload: TerminalOutput) => void;
+type TerminalExitCallback = (payload: TerminalExit) => void;
+
+const terminalOutputSubscribers = new Map<string, Set<TerminalOutputCallback>>();
+let terminalOutputUnlisten: UnlistenFn | null = null;
+let terminalOutputListenPromise: Promise<UnlistenFn> | null = null;
+
+function ensureTerminalOutputListener(): Promise<UnlistenFn> {
+  if (!terminalOutputListenPromise) {
+    terminalOutputListenPromise = listen<TerminalOutput>("terminal-output", (event) => {
+      const callbacks = terminalOutputSubscribers.get(event.payload.id);
+      if (!callbacks) return;
+      for (const callback of callbacks) callback(event.payload);
+    }).then((unlisten) => {
+      terminalOutputUnlisten = unlisten;
+      return unlisten;
+    });
+  }
+  return terminalOutputListenPromise;
+}
+
+export async function onTerminalOutputForId(id: string, callback: TerminalOutputCallback): Promise<UnlistenFn> {
+  let callbacks = terminalOutputSubscribers.get(id);
+  if (!callbacks) {
+    callbacks = new Set();
+    terminalOutputSubscribers.set(id, callbacks);
+  }
+  callbacks.add(callback);
+  await ensureTerminalOutputListener();
+
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    const current = terminalOutputSubscribers.get(id);
+    current?.delete(callback);
+    if (current && current.size === 0) terminalOutputSubscribers.delete(id);
+    if (terminalOutputSubscribers.size === 0 && terminalOutputUnlisten) {
+      terminalOutputUnlisten();
+      terminalOutputUnlisten = null;
+      terminalOutputListenPromise = null;
+    }
+  };
+}
+
+const terminalExitSubscribers = new Map<string, Set<TerminalExitCallback>>();
+let terminalExitUnlisten: UnlistenFn | null = null;
+let terminalExitListenPromise: Promise<UnlistenFn> | null = null;
+
+function ensureTerminalExitListener(): Promise<UnlistenFn> {
+  if (!terminalExitListenPromise) {
+    terminalExitListenPromise = listen<TerminalExit>("terminal-exit", (event) => {
+      const callbacks = terminalExitSubscribers.get(event.payload.id);
+      if (!callbacks) return;
+      for (const callback of callbacks) callback(event.payload);
+    }).then((unlisten) => {
+      terminalExitUnlisten = unlisten;
+      return unlisten;
+    });
+  }
+  return terminalExitListenPromise;
+}
+
+export async function onTerminalExitForId(id: string, callback: TerminalExitCallback): Promise<UnlistenFn> {
+  let callbacks = terminalExitSubscribers.get(id);
+  if (!callbacks) {
+    callbacks = new Set();
+    terminalExitSubscribers.set(id, callbacks);
+  }
+  callbacks.add(callback);
+  await ensureTerminalExitListener();
+
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    const current = terminalExitSubscribers.get(id);
+    current?.delete(callback);
+    if (current && current.size === 0) terminalExitSubscribers.delete(id);
+    if (terminalExitSubscribers.size === 0 && terminalExitUnlisten) {
+      terminalExitUnlisten();
+      terminalExitUnlisten = null;
+      terminalExitListenPromise = null;
+    }
+  };
+}
+
 // Claude session commands
 
 /** Read OpenWolf settings from persisted store (avoids circular imports). */

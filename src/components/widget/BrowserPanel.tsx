@@ -90,20 +90,46 @@ export default function BrowserPanel({ browserId, initialUrl }: BrowserPanelProp
     };
   }, [browserId]);
 
-  // Position sync loop — runs every frame to keep the overlay aligned
+  // Position sync — native webviews sit outside the DOM, so they need explicit
+  // bounds updates when the canvas or panel geometry changes. Coalesce those
+  // changes into one RAF instead of polling layout every frame while idle.
   useEffect(() => {
     if (!created) return;
+    const el = contentRef.current;
+    if (!el) return;
 
-    const loop = () => {
-      syncBounds();
-      rafRef.current = requestAnimationFrame(loop);
+    const scheduleSync = () => {
+      if (rafRef.current) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = 0;
+        syncBounds();
+      });
     };
-    rafRef.current = requestAnimationFrame(loop);
+
+    scheduleSync();
+    const unsubscribeCanvas = useCanvasStore.subscribe(scheduleSync);
+    const observer = new ResizeObserver(scheduleSync);
+    observer.observe(el);
+    window.addEventListener("resize", scheduleSync);
 
     return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      unsubscribeCanvas();
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleSync);
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
     };
   }, [created, syncBounds]);
+
+  // Final immediate sync after layout-affecting React commits that do not touch
+  // canvas state, e.g. URL bar loading state.
+  useEffect(() => {
+    if (created) {
+      syncBounds();
+    }
+  }, [created, loading, syncBounds]);
 
   // Listen for URL changes from the native webview (link clicks, redirects)
   useEffect(() => {

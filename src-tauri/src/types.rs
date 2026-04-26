@@ -89,6 +89,7 @@ pub struct CreateCodexRequest {
     pub yolo: Option<bool>,
     pub skip_git_repo_check: Option<bool>,
     pub mcp_env: Option<std::collections::HashMap<String, String>>,
+    pub collaboration_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +112,7 @@ pub struct SendCodexPromptRequest {
     pub yolo: Option<bool>,
     pub skip_git_repo_check: Option<bool>,
     pub mcp_env: Option<std::collections::HashMap<String, String>>,
+    pub collaboration_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -95,6 +95,15 @@ function codexCommandString(item: CodexItem): string {
   return "";
 }
 
+function codexRawToolName(item: CodexItem): string {
+  return String(item.name || item.tool_name || "");
+}
+
+function codexIsShellTool(item: CodexItem): boolean {
+  const raw = codexRawToolName(item);
+  return raw === "exec_command" || raw === "write_stdin" || raw === "local_shell" || raw === "shell";
+}
+
 function codexBasename(p: string): string {
   const m = p.split(/[/\\]/).filter(Boolean);
   return m.length > 0 ? m[m.length - 1]! : p;
@@ -127,6 +136,9 @@ export function codexItemDisplayName(item: CodexItem): string {
   }
   if (kind === "custom_tool_call" && item.name === "apply_patch") {
     return "Edit";
+  }
+  if ((kind === "custom_tool_call" || kind === "dynamic_tool_call") && codexIsShellTool(item)) {
+    return "Bash";
   }
   if (kind === "web_search" || kind === "web_search_call") {
     return "WebSearch";
@@ -174,6 +186,16 @@ export function codexItemInput(item: CodexItem): Record<string, unknown> {
     if (item.arguments && typeof item.arguments === "object") {
       Object.assign(out, item.arguments as Record<string, unknown>);
     }
+    if (codexIsShellTool(item)) {
+      const command = typeof out.cmd === "string"
+        ? out.cmd
+        : typeof out.command === "string"
+          ? out.command
+          : typeof out.chars === "string"
+            ? `stdin: ${out.chars.slice(0, 80)}`
+            : codexRawToolName(item);
+      out.command = command;
+    }
   } else if (kind === "web_search" || kind === "web_search_call") {
     const q = item.action?.query || item.query;
     if (q) out.query = q;
@@ -182,6 +204,16 @@ export function codexItemInput(item: CodexItem): Record<string, unknown> {
     if (item.command !== undefined) out.command = codexCommandString(item) || item.command;
     if (item.arguments && typeof item.arguments === "object") {
       Object.assign(out, item.arguments as Record<string, unknown>);
+    }
+    if (codexIsShellTool(item)) {
+      const command = typeof out.cmd === "string"
+        ? out.cmd
+        : typeof out.command === "string"
+          ? out.command
+          : typeof out.chars === "string"
+            ? `stdin: ${out.chars.slice(0, 80)}`
+            : codexRawToolName(item);
+      out.command = command;
     }
   }
   return out;

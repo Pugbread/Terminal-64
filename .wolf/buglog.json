@@ -708,7 +708,7 @@
       "error_message": "Codex chat displayed `Failed to parse Codex response` mid-stream and virtualized chat rows could visually overlap while tool cards grew.",
       "file": "src-tauri/src/providers/util.rs, src/hooks/useClaudeEvents.ts, src/components/claude/ClaudeChat.tsx",
       "root_cause": "The shared event size capper could fall back to a raw byte slice for oversized JSON events, producing invalid JSON for the frontend. The Codex listener surfaced that recoverable malformed event as a session error. LegendList rows also used stable message ids even when assistant tool-card output changed row height.",
-      "fix": "Made cap_event_size recursively truncate large JSON string fields and always re-serialize valid JSON for parsed events, changed malformed Codex events to be dropped with a console warning instead of a visible session error, and added layout signatures to assistant/tool rows so the virtual list remeasures growing tool cards.",
+      "fix": "Made cap_event_size recursively truncate large JSON string fields and always re-serialize valid JSON for parsed events, changed malformed Codex events to be dropped with a console warning instead of a visible session error, and added layout signatures to every assistant row plus finished-tail divider so the virtual list remeasures growing text/tool cards.",
       "tags": [
         "codex",
         "streaming",
@@ -734,6 +734,45 @@
         "tool-rendering",
         "bash",
         "readability"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-038",
+      "timestamp": "2026-04-26",
+      "error_message": "Refreshing Codex chats from JSONL rendered raw tool names like `exec_command` and `write_stdin`, making the refreshed chat look different from the live stream.",
+      "file": "src-tauri/src/providers/codex.rs, src/lib/codexEventDecoder.ts",
+      "root_cause": "Live app-server command events were normalized to Terminal 64's Claude-like `Bash` shape, but rollout/JSONL hydration preserved raw Codex function-call names. The renderer then used the generic tool-card path instead of the Bash grouping/rendering path.",
+      "fix": "Normalized Codex raw shell tool names (`exec_command`, `write_stdin`, `local_shell`, `shell`) into `Bash` and synthesized a `command` field during both Rust history hydration and frontend live decoding.",
+      "tags": [
+        "codex",
+        "jsonl-refresh",
+        "tool-rendering",
+        "claude-parity"
+      ],
+      "related_bugs": [
+        "bug-032",
+        "bug-037"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-04-26"
+    },
+    {
+      "id": "bug-039",
+      "timestamp": "2026-04-26",
+      "error_message": "Big workflows with many open terminals/browser panels risk renderer lag and high memory from per-terminal global event listeners, idle browser RAF polling, duplicate resize store writes, and an unbounded JSONL hydration cache.",
+      "file": "src/lib/tauriApi.ts, src/components/terminal/XTerminal.tsx, src/components/widget/BrowserPanel.tsx, src/stores/canvasStore.ts, src/components/canvas/FloatingTerminal.tsx, src/stores/claudeStore.ts",
+      "root_cause": "Every terminal registered its own global Tauri output/exit listener, so each PTY event woke all terminal listeners. Browser panels ran getBoundingClientRect in a requestAnimationFrame loop while idle. Resize updated position and size through separate canvas-store writes. Parsed full-history hydration arrays were cached without a cap.",
+      "fix": "Added keyed terminal output/exit dispatchers backed by one Tauri listener, switched XTerminal to per-id subscriptions, replaced browser polling with coalesced canvas/resize-driven sync, added a combined no-op guarded setTerminalFrame path for resize, and capped the hydration cache by least-recently-used entries/message count.",
+      "tags": [
+        "performance",
+        "big-workflows",
+        "terminal-output",
+        "browser-panel",
+        "memory",
+        "hydration-cache"
       ],
       "related_bugs": [],
       "occurrences": 1,

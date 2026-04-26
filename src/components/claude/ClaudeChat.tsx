@@ -78,7 +78,7 @@ function toolLayoutSignature(toolCalls: ToolCall[] | undefined): string {
 }
 
 function messageLayoutKey(msg: ChatMessageData): string {
-  if (msg.role === "assistant" && msg.toolCalls?.length) {
+  if (msg.role === "assistant") {
     return `${msg.id}:${msg.content?.length ?? 0}:${toolLayoutSignature(msg.toolCalls)}`;
   }
   return msg.id;
@@ -1049,9 +1049,17 @@ Rules:
       }
 
       let prompt = text;
+      let displayPrompt = text;
+      let codexCollaborationMode: "plan" | "default" | undefined;
+      const codexPlanMatch = text.match(/^\/plan(?:\s+([\s\S]*))?$/i);
+      if (sessionProviderFor(sessionId) === "openai" && codexPlanMatch) {
+        codexCollaborationMode = "plan";
+        prompt = codexPlanMatch[1]?.trim() || "Create a plan.";
+      }
       if (attachedFiles.length > 0) {
         const fileList = attachedFiles.map((f) => `[Attached file: ${f}]`).join("\n");
-        prompt = fileList + "\n\n" + text;
+        prompt = fileList + "\n\n" + prompt;
+        displayPrompt = fileList + "\n\n" + text;
         setAttachedFiles([]);
         // Clean up preview URLs
         Object.values(filePreviews).forEach((url) => URL.revokeObjectURL(url));
@@ -1061,7 +1069,7 @@ Rules:
       const isCurrentlyStreaming = useClaudeStore.getState().sessions[sessionId]?.isStreaming;
       if (isCurrentlyStreaming) {
         // Queue the prompt instead of sending mid-thinking
-        useClaudeStore.getState().enqueuePrompt(sessionId, prompt);
+        useClaudeStore.getState().enqueuePrompt(sessionId, displayPrompt);
         setQueueExpanded(true);
         return;
       }
@@ -1070,9 +1078,9 @@ Rules:
         useClaudeStore.getState().setAutoCompactStatus(sessionId, "compacting");
       }
 
-      addUserMessage(sessionId, prompt);
-      if (!fromDiscord) emit("gui-message", { session_id: sessionId, content: prompt }).catch(() => {});
-      await actualSend(prompt, permissionOverride);
+      addUserMessage(sessionId, displayPrompt);
+      if (!fromDiscord) emit("gui-message", { session_id: sessionId, content: displayPrompt }).catch(() => {});
+      await actualSend(prompt, permissionOverride, codexCollaborationMode ? { codexCollaborationMode } : undefined);
     },
     [sessionId, attachedFiles, addUserMessage, actualSend, reloadCommands, slashCommands, effectiveCwd]
   );
@@ -1648,7 +1656,7 @@ Rules:
     ) {
       const dur = lastMsg.timestamp - lastUserTs;
       if (dur > 2000) {
-        rows.push({ kind: "finishedTail", key: `fin-tail-${lastMsg.id}`, dur });
+        rows.push({ kind: "finishedTail", key: `fin-tail-${messageLayoutKey(lastMsg)}`, dur });
       }
     }
     // Streaming bubble rides as a terminal list item (not in the Footer).
@@ -1730,6 +1738,10 @@ Rules:
     ({ item, index }: { item: VisualRow; index: number }) => renderRow(index, item),
     [renderRow],
   );
+  const visualLayoutSignature = useMemo(
+    () => visualRows.map((row) => row.key).join("\n"),
+    [visualRows],
+  );
   // onScroll fires on every scroll tick. Treat it as visibility telemetry
   // only: user-intent handlers own stickyRef, because LegendList can emit
   // non-user scrolls while a streaming row grows and briefly reports not-at-end.
@@ -1788,7 +1800,7 @@ Rules:
     const r1 = requestAnimationFrame(() => requestAnimationFrame(sync));
     const t = setTimeout(sync, 120);
     return () => { cancelled = true; cancelAnimationFrame(r1); clearTimeout(t); };
-  }, [sessionId, visualRows.length, isRawNearBottom]);
+  }, [sessionId, visualLayoutSignature, isRawNearBottom]);
   const legendFooter = useMemo(
     () => (
       <>

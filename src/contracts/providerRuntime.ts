@@ -17,6 +17,7 @@ export interface ProviderTurnInput {
   seedTranscript?: ChatMessage[] | null | undefined;
   resumeAtUuid?: string | null | undefined;
   forkParentSessionId?: string | null | undefined;
+  codexCollaborationMode?: "plan" | "default" | undefined;
 }
 
 export interface ProviderTurnResult {

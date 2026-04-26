@@ -325,6 +325,7 @@ fn app_server_turn_params(
     approval_policy: &Option<String>,
     model: &Option<String>,
     effort: &Option<String>,
+    collaboration_mode: &Option<String>,
     full_auto: bool,
     yolo: bool,
 ) -> JsonValue {
@@ -345,6 +346,28 @@ fn app_server_turn_params(
         "input".to_string(),
         json!([{ "type": "text", "text": prompt }]),
     );
+    if let Some(mode) = collaboration_mode
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| matches!(*s, "plan" | "default"))
+    {
+        let mode_model = model
+            .as_ref()
+            .filter(|m| !m.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "gpt-5.3-codex".to_string());
+        params.insert(
+            "collaborationMode".to_string(),
+            json!({
+                "mode": mode,
+                "settings": {
+                    "model": mode_model,
+                    "reasoning_effort": effort.as_ref().filter(|e| !e.is_empty()),
+                    "developer_instructions": null,
+                },
+            }),
+        );
+    }
     JsonValue::Object(params)
 }
 
@@ -404,6 +427,7 @@ fn normalize_codex_item(item: &JsonValue) -> JsonValue {
         "collabToolCall" => "collab_tool_call",
         "webSearch" => "web_search",
         "userMessage" => "user_message",
+        "plan" => "agent_message",
         other => other,
     };
     out.insert("type".to_string(), json!(normalized_type));
@@ -545,6 +569,19 @@ fn app_server_notification_to_exec_event(method: &str, params: &JsonValue) -> Op
                 },
             }))
         }
+        "item/plan/delta" => {
+            let item_id = params.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
+            let delta = params.get("delta").and_then(|v| v.as_str()).unwrap_or("");
+            Some(json!({
+                "type": "item.updated",
+                "delta": delta,
+                "item": {
+                    "id": item_id,
+                    "type": "agent_message",
+                    "text": delta,
+                },
+            }))
+        }
         _ => None,
     }
 }
@@ -577,6 +614,35 @@ fn codex_function_input(payload: &JsonValue, ptype: &str) -> JsonValue {
         payload.get("command").cloned().unwrap_or_else(|| json!({}))
     } else {
         JsonValue::Null
+    }
+}
+
+fn normalize_codex_history_tool(name: &str, input: JsonValue) -> (String, JsonValue) {
+    match name {
+        "exec_command" | "write_stdin" | "local_shell" | "shell" => {
+            let mut normalized = input;
+            if let Some(obj) = normalized.as_object_mut() {
+                if !obj.contains_key("command") {
+                    if let Some(cmd) = obj.get("cmd").cloned() {
+                        obj.insert("command".to_string(), cmd);
+                    } else if let Some(chars) = obj.get("chars").and_then(|v| v.as_str()) {
+                        obj.insert(
+                            "command".to_string(),
+                            json!(format!(
+                                "stdin: {}",
+                                chars.chars().take(80).collect::<String>()
+                            )),
+                        );
+                    } else {
+                        obj.insert("command".to_string(), json!(name));
+                    }
+                }
+            } else {
+                normalized = json!({ "command": name });
+            }
+            ("Bash".to_string(), normalized)
+        }
+        other => (other.to_string(), input),
     }
 }
 
@@ -1073,6 +1139,7 @@ fn spawn_app_server_turn(
     approval_policy: &Option<String>,
     model: &Option<String>,
     effort: &Option<String>,
+    collaboration_mode: &Option<String>,
     full_auto: bool,
     yolo: bool,
     mcp_env: &Option<HashMap<String, String>>,
@@ -1161,6 +1228,7 @@ fn spawn_app_server_turn(
     let approval_policy = approval_policy.clone();
     let model = model.clone();
     let effort = effort.clone();
+    let collaboration_mode = collaboration_mode.clone();
     let resume_thread_id = match mode {
         InvokeMode::Fresh => None,
         InvokeMode::Resume(thread_id) => Some(thread_id.to_string()),
@@ -1302,6 +1370,7 @@ fn spawn_app_server_turn(
                         &approval_policy,
                         &model,
                         &effort,
+                        &collaboration_mode,
                         full_auto,
                         yolo,
                     );
@@ -1463,6 +1532,7 @@ impl CodexAdapter {
                 &req.approval_policy,
                 &req.model,
                 &req.effort,
+                &req.collaboration_mode,
                 req.full_auto.unwrap_or(false),
                 req.yolo.unwrap_or(false),
                 &req.mcp_env,
@@ -1527,6 +1597,7 @@ impl CodexAdapter {
                 &req.approval_policy,
                 &req.model,
                 &req.effort,
+                &req.collaboration_mode,
                 req.full_auto.unwrap_or(false),
                 req.yolo.unwrap_or(false),
                 &req.mcp_env,
@@ -2163,7 +2234,7 @@ pub fn load_codex_history_by_thread(thread_id: &str) -> Vec<HistoryMessage> {
                 if call_id.is_empty() {
                     continue;
                 }
-                let name = payload
+                let raw_name = payload
                     .get("name")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
@@ -2189,6 +2260,7 @@ pub fn load_codex_history_by_thread(thread_id: &str) -> Vec<HistoryMessage> {
                     } else {
                         serde_json::Value::Null
                     };
+                let (name, input) = normalize_codex_history_tool(&raw_name, input);
                 let tc = HistoryToolCall {
                     id: call_id.clone(),
                     name,
@@ -2231,9 +2303,9 @@ pub fn load_codex_history_by_thread(thread_id: &str) -> Vec<HistoryMessage> {
                     };
                     (display.to_string(), parsed)
                 } else if let Ok(parsed) = serde_json::from_str::<JsonValue>(raw_input) {
-                    (raw_name.to_string(), parsed)
+                    normalize_codex_history_tool(raw_name, parsed)
                 } else {
-                    (raw_name.to_string(), json!({ "input": raw_input }))
+                    normalize_codex_history_tool(raw_name, json!({ "input": raw_input }))
                 };
                 let tc = HistoryToolCall {
                     id: call_id.clone(),

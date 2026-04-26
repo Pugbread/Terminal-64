@@ -74,6 +74,7 @@ export async function runProviderTurn(input: ProviderTurnInput): Promise<Provide
       prompt,
       ...(input.selectedModel ? { model: input.selectedModel } : {}),
       ...(input.selectedEffort ? { effort: input.selectedEffort } : {}),
+      ...(input.codexCollaborationMode ? { collaboration_mode: input.codexCollaborationMode } : {}),
       ...codexPerm,
     };
     const codexSend: SendCodexPromptRequest = {
