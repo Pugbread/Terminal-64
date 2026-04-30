@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-30T04:00:00.896Z
-> Files: 521 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-30T11:50:35.787Z
+> Files: 523 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ./
 
@@ -757,6 +757,10 @@
 - `__init__.py` (~34 tok)
 - `_build_config.py` — _build_config.py.in is converted into _build_config.py during the meson build process. (~569 tok)
 - `bokeh_renderer.py` — BokehRenderer: filled, grid, lines, mask + 5 more (~3954 tok)
+
+## src/
+
+- `App.tsx` — appWindow (~7644 tok)
 
 ## src/lib/
 

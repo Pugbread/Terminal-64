@@ -2,12 +2,12 @@
   "version": 1,
   "created_at": "2026-04-15T19:28:19.690Z",
   "lifetime": {
-    "total_tokens_estimated": 151785,
-    "total_reads": 14,
-    "total_writes": 9,
-    "total_sessions": 7,
+    "total_tokens_estimated": 152062,
+    "total_reads": 17,
+    "total_writes": 10,
+    "total_sessions": 9,
     "anatomy_hits": 14,
-    "anatomy_misses": 0,
+    "anatomy_misses": 3,
     "repeated_reads_blocked": 14,
     "estimated_savings_vs_bare_cli": 147826
   },
@@ -372,6 +372,46 @@
         "writes_count": 1,
         "repeated_reads_blocked": 1,
         "anatomy_lookups": 1
+      }
+    },
+    {
+      "id": "session-2026-04-30-1249",
+      "started": "2026-04-30T11:49:40.143Z",
+      "ended": "2026-04-30T11:50:52.586Z",
+      "reads": [
+        {
+          "file": "C:/Users/bradl/OneDrive/GitHub/Terminal-64/src/lib/commands.ts",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "C:/Users/bradl/OneDrive/GitHub/Terminal-64/src/App.tsx",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "C:/Users/bradl/OneDrive/GitHub/Terminal-64/src/stores/providerSessionStore.ts",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "C:/Users/bradl/OneDrive/GitHub/Terminal-64/src/App.tsx",
+          "tokens_estimated": 277,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 0,
+        "output_tokens_estimated": 277,
+        "reads_count": 3,
+        "writes_count": 1,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 0
       }
     }
   ],

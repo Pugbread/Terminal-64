@@ -324,17 +324,19 @@ function App() {
 
     registerCommand({
       id: "claude.newSession",
-      label: "New Codex Session (same folder)",
+      label: "New Code Session (same folder)",
       category: "Codex",
       execute: () => {
         const canvas = useCanvasStore.getState();
         const active = canvas.terminals.find(t => t.terminalId === canvas.activeTerminalId);
         if (active?.panelType === "claude" && active.cwd) {
+          const parentSession = useProviderSessionStore.getState().sessions[active.terminalId];
+          const parentProvider = parentSession ? resolveSessionProviderState(parentSession).provider : "openai";
           canvas.addClaudeTerminal(active.cwd, false);
           const terminals = useCanvasStore.getState().terminals;
           const newest = terminals[terminals.length - 1];
           if (newest?.panelType === "claude") {
-            useProviderSessionStore.getState().createSession(newest.terminalId, undefined, false, undefined, active.cwd, "openai", false);
+            useProviderSessionStore.getState().createSession(newest.terminalId, undefined, false, undefined, active.cwd, parentProvider, false);
           }
         }
       },

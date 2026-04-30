@@ -21,7 +21,7 @@
     {
       "id": "bug-002",
       "timestamp": "2026-04-16",
-      "error_message": "RewindPromptDialog shows the whole path as 'dir' on Windows \u2014 path.split('/').pop() returns the entire string when separators are all backslashes",
+      "error_message": "RewindPromptDialog shows the whole path as 'dir' on Windows — path.split('/').pop() returns the entire string when separators are all backslashes",
       "file": "src/components/claude/ClaudeChat.tsx",
       "root_cause": "Basename computed via path.split('/').pop() only splits on forward slash. Windows paths use backslashes, so split returns [path] and pop gives the full path, leaving dir = '' and fileName = full path.",
       "fix": "Introduced src/lib/platform.ts helpers (baseName, dirName) that split on both separators, and replaced the inline split with baseName(path) + dirName(path).",
@@ -40,7 +40,7 @@
       "timestamp": "2026-04-16",
       "error_message": "FileTree produces mixed-separator paths on Windows (e.g. C:\\foo/bar/baz.txt) and fails to detect Windows absolute paths from semantic search",
       "file": "src/components/claude/FileTree.tsx",
-      "root_cause": "All fullPath construction used template-literal '${cwd}/${name}' \u2014 appends forward slash even when cwd uses backslashes. Absolute-path detection used relPath.startsWith('/') which misses drive letters (C:\\) and UNC (\\\\server\\share).",
+      "root_cause": "All fullPath construction used template-literal '${cwd}/${name}' — appends forward slash even when cwd uses backslashes. Absolute-path detection used relPath.startsWith('/') which misses drive letters (C:\\) and UNC (\\\\server\\share).",
       "fix": "Replaced hardcoded slash joins with joinPath(), replaced startsWith('/') with isAbsolutePath() (detects /, \\, drive letter, UNC), and replaced .split(/[/\\\\]/).pop() with baseName().",
       "tags": [
         "windows",
@@ -57,9 +57,9 @@
     {
       "id": "bug-004",
       "timestamp": "2026-04-16",
-      "error_message": "tauriApi.setT64DelegationEnv / clearT64DelegationEnv write .mcp.json with forward-slash paths baked in \u2014 MCP args[0] and path strings produce mixed separators on Windows",
+      "error_message": "tauriApi.setT64DelegationEnv / clearT64DelegationEnv write .mcp.json with forward-slash paths baked in — MCP args[0] and path strings produce mixed separators on Windows",
       "file": "src/lib/tauriApi.ts",
-      "root_cause": "scriptPath and mcpPath were built with template literals using '/' \u2014 on Windows appDir is a backslash path so the resulting script path is C:\\Users\\x/mcp/t64-server.mjs. Some downstream consumers (Claude CLI, node module resolution) don't normalize and can fail.",
+      "root_cause": "scriptPath and mcpPath were built with template literals using '/' — on Windows appDir is a backslash path so the resulting script path is C:\\Users\\x/mcp/t64-server.mjs. Some downstream consumers (Claude CLI, node module resolution) don't normalize and can fail.",
       "fix": "Imported joinPath from platform.ts and replaced the two templated joins in setT64DelegationEnv and clearT64DelegationEnv.",
       "tags": [
         "windows",
@@ -79,7 +79,7 @@
       "error_message": "navigator.platform is deprecated; no fallback detection on browsers that lock it to a placeholder (e.g. future privacy-reduced webviews)",
       "file": "src/lib/keybindingEngine.ts, src/lib/constants.ts, src/components/terminal/XTerminal.tsx",
       "root_cause": "Each call site did its own navigator.platform.includes('Mac'|'Win') check. That property is deprecated and, when the webview starts returning a reduced value, all three call sites would silently report the wrong platform.",
-      "fix": "Centralized detection in src/lib/platform.ts (IS_WIN / IS_MAC) \u2014 checks navigator.userAgentData.platform first, falls back to navigator.platform, then to navigator.userAgent. Replaced the three inline checks with the shared constants.",
+      "fix": "Centralized detection in src/lib/platform.ts (IS_WIN / IS_MAC) — checks navigator.userAgentData.platform first, falls back to navigator.platform, then to navigator.userAgent. Replaced the three inline checks with the shared constants.",
       "tags": [
         "windows",
         "mac",
@@ -93,7 +93,7 @@
     {
       "id": "bug-006",
       "timestamp": "2026-04-16",
-      "error_message": "ChatInput inline separator detection was fragile \u2014 /[\\\\]/.test(cwd) && !/[/]/.test(cwd) misses mixed-separator cwd values",
+      "error_message": "ChatInput inline separator detection was fragile — /[\\\\]/.test(cwd) && !/[/]/.test(cwd) misses mixed-separator cwd values",
       "file": "src/components/claude/ChatInput.tsx",
       "root_cause": "The prior Windows pass added an ad-hoc absolute-path + separator check. It still failed when cwd contained any forward slash (common after passing through APIs that normalize).",
       "fix": "Replaced the inline regex + sep detection with isAbsolutePath(file) + joinPath(cwd, file) from the centralized platform helper.",
@@ -115,8 +115,8 @@
       "timestamp": "2026-04-16",
       "error_message": "Windows production build fails or hangs because tauri.conf.json `targets: \"all\"` tries to build both NSIS and MSI; MSI requires WiX Toolset (~50MB extra dep) which is not installed on the dev machine and not declared in the build prerequisites.",
       "file": "src-tauri/tauri.conf.json",
-      "root_cause": "Tauri 2's `targets: \"all\"` enumerates every bundle format the host platform supports. On Windows that includes NSIS *and* MSI. MSI is generated by WiX, which Tauri downloads on demand only if it's already configured \u2014 otherwise the build aborts. CI / fresh dev machines hit this.",
-      "fix": "Replaced `targets: \"all\"` with explicit array `[\"app\", \"dmg\", \"deb\", \"appimage\", \"rpm\", \"nsis\"]`. Tauri silently skips formats not applicable to the current host, so macOS still builds app+dmg, Linux still builds deb+appimage+rpm, Windows builds NSIS only \u2014 and never tries MSI/WiX.",
+      "root_cause": "Tauri 2's `targets: \"all\"` enumerates every bundle format the host platform supports. On Windows that includes NSIS *and* MSI. MSI is generated by WiX, which Tauri downloads on demand only if it's already configured — otherwise the build aborts. CI / fresh dev machines hit this.",
+      "fix": "Replaced `targets: \"all\"` with explicit array `[\"app\", \"dmg\", \"deb\", \"appimage\", \"rpm\", \"nsis\"]`. Tauri silently skips formats not applicable to the current host, so macOS still builds app+dmg, Linux still builds deb+appimage+rpm, Windows builds NSIS only — and never tries MSI/WiX.",
       "tags": [
         "windows",
         "tauri",
@@ -134,7 +134,7 @@
       "timestamp": "2026-04-16",
       "error_message": "Older WebView2 runtimes on long-lived Windows installs render xterm.js / Monaco / CSS conic-gradient incorrectly, and there is no installer-side enforcement of a minimum.",
       "file": "src-tauri/tauri.conf.json",
-      "root_cause": "tauri.conf.json bundle.windows.nsis had no `minimumWebview2Version` \u2014 WebView2 is auto-updated by Edge in most cases, but enterprise / locked-down machines can stay on very old (sub-110) builds where modern Web APIs misbehave. Without the gate, the installer happily proceeds and runtime breaks silently.",
+      "root_cause": "tauri.conf.json bundle.windows.nsis had no `minimumWebview2Version` — WebView2 is auto-updated by Edge in most cases, but enterprise / locked-down machines can stay on very old (sub-110) builds where modern Web APIs misbehave. Without the gate, the installer happily proceeds and runtime breaks silently.",
       "fix": "Added `nsis.minimumWebview2Version: \"110.0.1587.40\"` so the NSIS installer triggers a WebView2 update if the local version is older. Also added `nsis.compression: \"lzma\"` (smaller installer), `webviewInstallMode.silent: true` (no extra UI on first install), and `allowDowngrades: true` (explicit, matches default).",
       "tags": [
         "windows",
@@ -152,7 +152,7 @@
     {
       "id": "bug-rust-win-001",
       "timestamp": "2026-04-16",
-      "error_message": "resolve_claude_path / resolve_openwolf_path_inner call `where claude.exe` / `where openwolf.exe` \u2014 explicit extension disables PATHEXT, so the .cmd shim installed by npm is not found. Then the candidate fallback works in most cases, but users who installed claude via a non-standard PATHEXT-only location get bare `claude` / `openwolf` as the binary name.",
+      "error_message": "resolve_claude_path / resolve_openwolf_path_inner call `where claude.exe` / `where openwolf.exe` — explicit extension disables PATHEXT, so the .cmd shim installed by npm is not found. Then the candidate fallback works in most cases, but users who installed claude via a non-standard PATHEXT-only location get bare `claude` / `openwolf` as the binary name.",
       "file": "src-tauri/src/claude_manager.rs",
       "root_cause": "Windows `where` respects PATHEXT only when the query has no extension. `where claude.exe` only looks for claude.exe, missing claude.cmd (the npm form).",
       "fix": "Changed the lookup to `where claude` / `where openwolf` (no extension) so PATHEXT finds .cmd shims. First match from `where` output is used.",
@@ -174,7 +174,7 @@
     {
       "id": "bug-rust-win-002",
       "timestamp": "2026-04-16",
-      "error_message": "resolve_claude_path() final fallback returns bare string \"claude\" on all platforms \u2014 on Windows Command::new(\"claude\") does NOT apply PATHEXT, so Claude CLI never launches if no candidate path exists.",
+      "error_message": "resolve_claude_path() final fallback returns bare string \"claude\" on all platforms — on Windows Command::new(\"claude\") does NOT apply PATHEXT, so Claude CLI never launches if no candidate path exists.",
       "file": "src-tauri/src/claude_manager.rs",
       "root_cause": "Unlike the shell, std::process::Command on Windows uses CreateProcessW without PATHEXT expansion. Bare name without extension fails to resolve .cmd shims even when they're on PATH.",
       "fix": "Fallback now returns \"claude.cmd\" on Windows (parallel to the existing openwolf fallback). Bare \"claude\" kept for Unix.",
@@ -195,7 +195,7 @@
     {
       "id": "bug-rust-win-003",
       "timestamp": "2026-04-16",
-      "error_message": "Five call sites (build_command, ensure_openwolf, and three Haiku subprocess spawners in lib.rs \u2014 rewrite_prompt, generate_theme, generate_rewind_summary) call Command::new(&claude_bin)/Command::new(&wolf_bin) directly. Per cerebrum, .cmd/.bat shims on Windows must go through `cmd /C` to get correct arg escaping and console-flash suppression.",
+      "error_message": "Five call sites (build_command, ensure_openwolf, and three Haiku subprocess spawners in lib.rs — rewrite_prompt, generate_theme, generate_rewind_summary) call Command::new(&claude_bin)/Command::new(&wolf_bin) directly. Per cerebrum, .cmd/.bat shims on Windows must go through `cmd /C` to get correct arg escaping and console-flash suppression.",
       "file": "src-tauri/src/claude_manager.rs, src-tauri/src/lib.rs",
       "root_cause": "Rust 1.77+ does spawn .cmd/.bat via cmd.exe internally, but arg escaping rules differ between direct exe and cmd-dispatched batch files, and PATHEXT resolution for bare names never applies. Uniformly wrapping in cmd /C avoids both pitfalls and keeps CREATE_NO_WINDOW applied in one place.",
       "fix": "Added pub fn shim_command(bin) in claude_manager.rs that returns `cmd /C <bin>` with CREATE_NO_WINDOW on Windows and a plain Command on Unix. Replaced all five Command::new(&bin) sites with claude_manager::shim_command(&bin). Removed redundant creation_flags blocks at call sites.",
@@ -217,9 +217,9 @@
     {
       "id": "bug-rust-win-004",
       "timestamp": "2026-04-16",
-      "error_message": "Discord attachment filenames sanitised against control chars and \\: * ? \" < > | but did not reject Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) or trailing dots/spaces \u2014 a Discord user sending \"CON.png\" or \"file.txt. \" causes fs::write to fail silently or collide on Windows.",
+      "error_message": "Discord attachment filenames sanitised against control chars and \\: * ? \" < > | but did not reject Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) or trailing dots/spaces — a Discord user sending \"CON.png\" or \"file.txt. \" causes fs::write to fail silently or collide on Windows.",
       "file": "src-tauri/src/discord_bot.rs",
-      "root_cause": "Windows kernel reserves DOS device names regardless of extension \u2014 \"CON.png\" tries to open the console device. Windows also silently strips trailing dots/spaces, so \"file.\" becomes \"file\" and \"file. \" becomes \"file\", which can collide with sibling files or confuse consumers.",
+      "root_cause": "Windows kernel reserves DOS device names regardless of extension — \"CON.png\" tries to open the console device. Windows also silently strips trailing dots/spaces, so \"file.\" becomes \"file\" and \"file. \" becomes \"file\", which can collide with sibling files or confuse consumers.",
       "fix": "After the existing separator/control-char filter, trim trailing dots and spaces, then upper-case the stem (pre-first-dot) and compare against the reserved set. Reserved or empty names fall back to literal \"file\".",
       "tags": [
         "windows",
@@ -235,10 +235,10 @@
     {
       "id": "bug-rewind-001",
       "timestamp": "2026-04-17",
-      "error_message": "Rewind does too much AND doesn't fully rewind delegation changes \u2014 git checkout HEAD wiped uncommitted work, and only the most recent delegation group's child files were tracked",
+      "error_message": "Rewind does too much AND doesn't fully rewind delegation changes — git checkout HEAD wiped uncommitted work, and only the most recent delegation group's child files were tracked",
       "file": "src/components/claude/ClaudeChat.tsx",
-      "root_cause": "Two bugs. (A) handleRewind called revertFilesGit on delegation children's modified files; revert_files_git uses `git checkout HEAD -- path` which restores tracked files to the LAST COMMIT \u2014 wiping user's pre-session uncommitted edits, other sessions' changes, or parent-session edits not in checkpoints. (B) handleRewind read delState.parentToGroup[sessionId], a single-slot map that each new delegation overwrites (delegationStore L100). If the parent did delegation 1 \u2192 completed \u2192 delegation 2, rewinding past delegation 1 couldn't find its child modifiedFiles \u2014 they were orphaned.",
-      "fix": "(A) Replaced revertFilesGit with filterUntrackedFiles \u2192 deleteFiles for child files (matches parent handling): only delete untracked/new files; leave tracked-but-modified files alone so user doesn't lose uncommitted work. Log the tracked-left list so user knows. (B) Replaced `parentToGroup[sessionId]` lookup with `Object.values(delState.groups).filter(g => g.parentSessionId === sessionId)` to collect child modifiedFiles from ALL groups ever spawned by this parent, not just the current one. Also end-cancel any still-active groups.",
+      "root_cause": "Two bugs. (A) handleRewind called revertFilesGit on delegation children's modified files; revert_files_git uses `git checkout HEAD -- path` which restores tracked files to the LAST COMMIT — wiping user's pre-session uncommitted edits, other sessions' changes, or parent-session edits not in checkpoints. (B) handleRewind read delState.parentToGroup[sessionId], a single-slot map that each new delegation overwrites (delegationStore L100). If the parent did delegation 1 → completed → delegation 2, rewinding past delegation 1 couldn't find its child modifiedFiles — they were orphaned.",
+      "fix": "(A) Replaced revertFilesGit with filterUntrackedFiles → deleteFiles for child files (matches parent handling): only delete untracked/new files; leave tracked-but-modified files alone so user doesn't lose uncommitted work. Log the tracked-left list so user knows. (B) Replaced `parentToGroup[sessionId]` lookup with `Object.values(delState.groups).filter(g => g.parentSessionId === sessionId)` to collect child modifiedFiles from ALL groups ever spawned by this parent, not just the current one. Also end-cancel any still-active groups.",
       "tags": [
         "rewind",
         "delegation",
@@ -255,9 +255,9 @@
     {
       "id": "bug-002",
       "timestamp": "2026-04-16",
-      "error_message": "Forked chat doesn't respond \u2014 sending a prompt in a newly forked session hangs with no streaming",
+      "error_message": "Forked chat doesn't respond — sending a prompt in a newly forked session hangs with no streaming",
       "file": "src/components/claude/ClaudeChat.tsx",
-      "root_cause": "handleFork calls claudeStore.loadFromDisk(newSessionId, forkedMessages), which sets hasBeenStarted=true whenever promptCount>0. actualSend then guarded the fork-first-send path with `if (forkParent && !started)` \u2014 so started=true made it fall through to the `--resume <newId>` branch against a session JSONL that the CLI hasn't created yet, causing the CLI to stall silently.",
+      "root_cause": "handleFork calls claudeStore.loadFromDisk(newSessionId, forkedMessages), which sets hasBeenStarted=true whenever promptCount>0. actualSend then guarded the fork-first-send path with `if (forkParent && !started)` — so started=true made it fall through to the `--resume <newId>` branch against a session JSONL that the CLI hasn't created yet, causing the CLI to stall silently.",
       "fix": "Reordered branches in actualSend: check `if (forkParent)` first (ignoring `started`). The presence of forkParentSessionId is the unambiguous signal that this is the fork's first send and must use --fork-session. After success the store clears forkParentSessionId so subsequent sends use the normal --resume path.",
       "tags": [
         "fork",
@@ -274,7 +274,7 @@
       "timestamp": "2026-04-18",
       "error_message": "Chat panel background flickers in/out at specific canvas positions; clicking the panel temporarily restores it",
       "file": "src/components/canvas/FloatingTerminal.css",
-      "root_cause": "`.floating-terminal` uses `overflow: hidden` + `border-radius: 8px` while its parent `.canvas-content` has `transform: scale(z)`. On WebKit, the rounded-corner clip is repainted non-atomically at fractional pixel positions caused by the scale, invalidating the panel's background paint. A click triggers `bringToFront` \u2192 zIndex change \u2192 repaint, briefly restoring it.",
+      "root_cause": "`.floating-terminal` uses `overflow: hidden` + `border-radius: 8px` while its parent `.canvas-content` has `transform: scale(z)`. On WebKit, the rounded-corner clip is repainted non-atomically at fractional pixel positions caused by the scale, invalidating the panel's background paint. A click triggers `bringToFront` → zIndex change → repaint, briefly restoring it.",
       "fix": "Promoted `.floating-terminal` to its own compositor layer: added `will-change: transform`, `transform: translateZ(0)`, `backface-visibility: hidden`, `contain: layout paint`, `isolation: isolate`. This keeps the rounded clip stable across subpixel-scaled positions.",
       "tags": [
         "rendering",
@@ -312,7 +312,7 @@
       "timestamp": "2026-04-18",
       "error_message": "Dictation feels laggy and partials stall during long utterances",
       "file": "src-tauri/src/voice/whisper.rs",
-      "root_cause": "partial_worker cloned the entire rolling audio buffer every 250ms tick and handed the full thing to whisper. Per-tick cost grew ~O(utterance length) and effectively O(n^2) across a multi-second dictation because each successive tick re-decoded everything from scratch (no_context + no cursor). A 12s utterance re-decoded 12s every tick \u2192 300-700ms decode under Metal \u2192 lag stacks, partials stop keeping up with speech, decode queue bloats.",
+      "root_cause": "partial_worker cloned the entire rolling audio buffer every 250ms tick and handed the full thing to whisper. Per-tick cost grew ~O(utterance length) and effectively O(n^2) across a multi-second dictation because each successive tick re-decoded everything from scratch (no_context + no cursor). A 12s utterance re-decoded 12s every tick → 300-700ms decode under Metal → lag stacks, partials stop keeping up with speech, decode queue bloats.",
       "fix": "Replaced full-buffer g.clone() in partial_worker with a trailing window slice g[buf_len - PARTIAL_WINDOW_SECS*SR ..]. Added a 120ms min-new-samples gate so ticks without fresh audio no-op. When the window slides (window_start advances), AgreementBuffer is reset so word-index LCP doesn't correlate across different audio spans. Added a decode watchdog that skips the next tick if a decode exceeds 2x the tick interval. Emits voice-telemetry { decode_ms, window_samples, window_start, buffer_samples, window_shifted, committed_len, tentative_len } per tick so regressions are visible.",
       "tags": [
         "voice",
@@ -329,9 +329,9 @@
     {
       "id": "bug-017",
       "timestamp": "2026-04-19",
-      "error_message": "Reopening Terminal 64 re-executes the last Bash command in an infinite loop \u2014 stuck forever",
+      "error_message": "Reopening Terminal 64 re-executes the last Bash command in an infinite loop — stuck forever",
       "file": "src-tauri/src/claude_manager.rs",
-      "root_cause": "Claude CLI's --resume treats the JSONL as the conversation source-of-truth. If the previous run died mid-tool (app force-quit while a heavy Bash was running), the JSONL contains an assistant tool_use record with no matching user tool_result. On resume, the CLI sees the dangling tool_use and re-executes the tool from scratch. Heavy bash freezes the app (bug-018), user force-quits, dangling tool_use on disk, reopen \u2192 retry \u2192 freeze \u2192 force-quit \u2192 replay. Infinite loop.",
+      "root_cause": "Claude CLI's --resume treats the JSONL as the conversation source-of-truth. If the previous run died mid-tool (app force-quit while a heavy Bash was running), the JSONL contains an assistant tool_use record with no matching user tool_result. On resume, the CLI sees the dangling tool_use and re-executes the tool from scratch. Heavy bash freezes the app (bug-018), user force-quits, dangling tool_use on disk, reopen → retry → freeze → force-quit → replay. Infinite loop.",
       "fix": "Added sanitize_dangling_tool_uses(cwd, session_id): before every cmd.spawn() in spawn_and_stream, scan the session JSONL for tool_use IDs with no matching tool_result block, and append synthetic user records with a cancelled tool_result (is_error: true, content explaining the interruption, preserving parentUuid / cwd / version / gitBranch metadata). This satisfies the CLI's pairing check so --resume skips the dangling calls instead of retrying them.",
       "tags": [
         "claude",
@@ -352,7 +352,7 @@
       "timestamp": "2026-04-19",
       "error_message": "Heavy bash commands run through Claude freeze the entire frontend and app",
       "file": "src-tauri/src/claude_manager.rs",
-      "root_cause": "The Claude CLI stdout reader emits each JSONL line directly as a single Tauri event. A heavy Bash tool_result can be tens to hundreds of MB. Frontend JSON.parse on megabytes of text, React render of the bubble, and Zustand's debounced localStorage persistence (JSON.stringify of the full sessions map) all run on the main thread \u2192 renderer freezes for seconds, appearing as a full-app hang.",
+      "root_cause": "The Claude CLI stdout reader emits each JSONL line directly as a single Tauri event. A heavy Bash tool_result can be tens to hundreds of MB. Frontend JSON.parse on megabytes of text, React render of the bubble, and Zustand's debounced localStorage persistence (JSON.stringify of the full sessions map) all run on the main thread → renderer freezes for seconds, appearing as a full-app hang.",
       "fix": "Added cap_event_size() wrapper around every emit in spawn_and_stream's stdout reader. If the line exceeds 512KB, parse JSON and rewrite oversized tool_result / text block content to 'head + truncation marker + tail' (96KB + 96KB, UTF-8 char-boundary safe via char_boundary_floor/ceil). If JSON parse fails, fall back to a hard byte-slice cap. The CLI's own JSONL keeps the full output for future turns; only the live UI stream is truncated.",
       "tags": [
         "claude",
@@ -374,7 +374,7 @@
       "error_message": "After rewinding or forking a Claude session, refreshing/reloading from JSONL shows all the 'deleted' messages back. Users reported rewind+fork as 'hella unreliable'.",
       "file": "src/components/claude/ClaudeChat.tsx, src-tauri/src/lib.rs",
       "root_cause": "Commit db0113b5 (2026-04-15 'lil update') removed the JSONL truncation call from handleRewind, leaving only the in-memory store truncation + --resume-session-at UUID recording for the next send. load_session_history reads every line in the JSONL sequentially (no parentUuid chain walking), so reload shows the original full history. Fork had a parallel bug: fork_session_jsonl copies the full parent JSONL to the new session but never truncates the copy, so the fork displays the entire parent history until a new prompt is sent.",
-      "fix": "1) Re-added the `truncateSessionJsonlByMessages` wrapper in src/lib/tauriApi.ts. 2) In handleRewind (both the undo-send fast path and the main rewind path), call truncateSessionJsonlByMessages after findRewindUuid succeeds \u2014 the --resume-session-at UUID is still inside the truncated file. 3) In fork_session_jsonl (Rust), after the std::fs::copy and chain-walk to find the fork UUID, call truncate_session_jsonl_by_messages on the destination so the fork shows only pre-fork messages on reload.",
+      "fix": "1) Re-added the `truncateSessionJsonlByMessages` wrapper in src/lib/tauriApi.ts. 2) In handleRewind (both the undo-send fast path and the main rewind path), call truncateSessionJsonlByMessages after findRewindUuid succeeds — the --resume-session-at UUID is still inside the truncated file. 3) In fork_session_jsonl (Rust), after the std::fs::copy and chain-walk to find the fork UUID, call truncate_session_jsonl_by_messages on the destination so the fork shows only pre-fork messages on reload.",
       "tags": [
         "rewind",
         "fork",
@@ -392,7 +392,7 @@
     {
       "id": "bug-020",
       "timestamp": "2026-04-22",
-      "error_message": "On bypass permission mode, Claude silently rejects edits to skills/widgets/MCP/MD files instead of allowing or prompting. Reason written to JSONL: 'Unknown session \u2014 denied for safety'.",
+      "error_message": "On bypass permission mode, Claude silently rejects edits to skills/widgets/MCP/MD files instead of allowing or prompting. Reason written to JSONL: 'Unknown session — denied for safety'.",
       "file": "src-tauri/src/permission_server.rs",
       "root_cause": "handle_connection looks up session_id from run_token BEFORE checking the bypassPermissions payload field. When a hook fires with a stale token (race between close_claude_session and an in-flight hook, OR a leftover child process after rewind/spawn), session_id is empty and the PreToolUse branch fail-closes with permissionDecision=deny. The bypass check at the top of the PreToolUse handler never runs for unknown-session cases. Common triggers: rewind (cancel+close unregisters token, new send registers a new token, any residual hook from the old CLI lands on the stale token), skill/widget spawn via spawnClaudeWithPrompt (new session id + timing), permission server port restart.",
       "fix": "Extract permission_mode from the hook payload BEFORE the session lookup gate. On PreToolUse with permission_mode=='bypassPermissions' AND empty session_id, respond with permissionDecision=allow (reason: 'bypassPermissions mode (session not registered)'). The secret in the URL already gates spoofing; an unknown run_token just means 'session unregistered', which shouldn't override user-opted bypass. Non-bypass modes still fail-closed because we need a session_id to route the frontend prompt.",
@@ -413,7 +413,7 @@
       "timestamp": "2026-04-22",
       "error_message": "In bypass permission mode, edits to Claude Code's hardcoded sensitive-file list (.mcp.json, .claude.json, .zshrc, .git/, .vscode/, .idea/, .claude/, .husky/) silently fail with 'Claude requested permissions to edit X which is a sensitive file.' in --print mode. Claude Code's TUI shows an approval prompt; --print cannot surface one, so the tool errors out and the user sees no actionable UI.",
       "file": "src/hooks/useClaudeEvents.ts, src/components/claude/ClaudeChat.tsx, src/stores/claudeStore.ts",
-      "root_cause": "Claude CLI's classifier (RC5/jtH in the minified binary) returns behavior:'ask' with decisionReason.type=='safetyCheck' for these paths. The check runs BEFORE PreToolUse hooks fire (confirmed via probe: no hook event, just an is_error tool_result). --permission-mode bypassPermissions, --dangerously-skip-permissions, and matching permissions.allow rules do not bypass it \u2014 the only bypass path is an allow rule whose ruleContent starts with '/.claude/' or '~/.claude/' AND ends with '/**' (YC5=[.git,.vscode,.idea,.claude,.husky]; wC5=[.gitconfig,.gitmodules,.bashrc,.bash_profile,.zshrc,.zprofile,.profile,.ripgreprc,.mcp.json,.claude.json]; allow prefixes lE_='/.claude/**', nE_='~/.claude/**'). No TUI prompt exists in --print mode.",
+      "root_cause": "Claude CLI's classifier (RC5/jtH in the minified binary) returns behavior:'ask' with decisionReason.type=='safetyCheck' for these paths. The check runs BEFORE PreToolUse hooks fire (confirmed via probe: no hook event, just an is_error tool_result). --permission-mode bypassPermissions, --dangerously-skip-permissions, and matching permissions.allow rules do not bypass it — the only bypass path is an allow rule whose ruleContent starts with '/.claude/' or '~/.claude/' AND ends with '/**' (YC5=[.git,.vscode,.idea,.claude,.husky]; wC5=[.gitconfig,.gitmodules,.bashrc,.bash_profile,.zshrc,.zprofile,.profile,.ripgreprc,.mcp.json,.claude.json]; allow prefixes lE_='/.claude/**', nE_='~/.claude/**'). No TUI prompt exists in --print mode.",
       "fix": "Layer our own approval flow on top: useClaudeEvents detects tool_result errors with is_error=true and content matching 'which is a sensitive file' OR 'requested permissions to (edit|write to)' for Write/Edit/MultiEdit tools; cached tool_input (new sessionToolInputMaps) plus the file_path are stored as session.pendingSensitiveEdit. ClaudeChat renders a permission-style card reusing .cc-permission styling with 'Allow & Apply' / 'Skip' actions. On Allow, applySensitiveEditAndContinue reads the file via Tauri readFile, applies Write/Edit/MultiEdit semantics locally (replace_all aware, MultiEdit sequential), writes via writeFile, records the path in session.sensitiveEditApprovedPaths, then sends Claude a follow-up user message telling it the edit was manually applied and not to re-issue the tool call. Genericized getSessionMap<V>/evictIfNeeded<V> so the input map can store Record<string, unknown>.",
       "tags": [
         "permissions",
@@ -3466,6 +3466,22 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-04-30T04:06:06Z"
+    },
+    {
+      "id": "bug-185",
+      "timestamp": "2026-04-30T11:50:35.798Z",
+      "error_message": "CSS fix: label",
+      "file": "src/App.tsx",
+      "root_cause": "label: \"New Codex Session (same folder)\", → \"New Code Session (same folder)\",",
+      "fix": "Changed label: \"New Codex Session (same folder)\", → \"New Code Session (same folder)\",",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-30T11:50:35.798Z"
     }
   ]
 }

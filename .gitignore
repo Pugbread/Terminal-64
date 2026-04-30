@@ -36,3 +36,8 @@ src-tauri/gen/
 scripts/.wake-venv/
 scripts/__pycache__/
 scripts/*.pyc
+.wolf/anatomy.md
+.wolf/buglog.json
+.wolf/hooks/_session.json
+.wolf/memory.md
+.wolf/token-ledger.json
