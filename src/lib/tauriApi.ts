@@ -35,7 +35,6 @@ import type {
   SkillInfo,
   ResolvedSkill,
   ProxyFetchResponse,
-  SpectrumData,
   ChatMessage,
   ToolCall,
   PermissionMode,
@@ -968,24 +967,6 @@ export function onThemeGenChunk(callback: (payload: { id: string; text: string }
 
 export function onThemeGenDone(callback: (payload: { id: string; text: string }) => void): Promise<UnlistenFn> {
   return listen<{ id: string; text: string }>("theme-gen-done", (event) => callback(event.payload));
-}
-
-// Party Mode commands
-
-export async function startPartyMode(): Promise<void> {
-  return invoke("start_party_mode");
-}
-
-export async function stopPartyMode(): Promise<void> {
-  return invoke("stop_party_mode");
-}
-
-export function onPartyModeSpectrum(
-  callback: (payload: SpectrumData) => void
-): Promise<UnlistenFn> {
-  return listen<SpectrumData>("party-mode-spectrum", (event) =>
-    callback(event.payload)
-  );
 }
 
 // OpenWolf daemon commands

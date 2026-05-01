@@ -13,7 +13,7 @@ export async function rewritePromptStream(
   let resolveDone!: () => void;
   const donePromise = new Promise<void>((r) => { resolveDone = r; });
 
-  // Set up listeners BEFORE invoke to avoid race condition with fast models (Haiku)
+  // Set up listeners BEFORE invoke to avoid races with fast CLI responses.
   let rewriteId: string | null = null;
   const pending: PendingEvent[] = [];
 

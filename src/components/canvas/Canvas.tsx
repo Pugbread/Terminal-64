@@ -5,7 +5,6 @@ import { useSettingsStore } from "../../stores/settingsStore";
 import { useShallow } from "zustand/react/shallow";
 import { readFileBase64 } from "../../lib/tauriApi";
 import FloatingTerminal from "./FloatingTerminal";
-import { PartyEqualizer } from "../party/PartyOverlay";
 import VoiceStatusBadge from "../provider-chat/VoiceStatusBadge";
 import VoiceLivePanel from "../provider-chat/VoiceLivePanel";
 import VoiceMascot from "../provider-chat/VoiceMascot";
@@ -297,8 +296,6 @@ export default function Canvas() {
           />
         ))}
       </div>
-
-      <PartyEqualizer />
 
       {terminals.length === 0 && (
         <div className="canvas-empty">

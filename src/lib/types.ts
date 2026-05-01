@@ -383,16 +383,6 @@ export interface ProxyFetchResponse {
   is_base64: boolean;
 }
 
-// Party mode types
-
-export interface SpectrumData {
-  bands: number[];
-  peak: number;
-  bass: number;
-  mid: number;
-  treble: number;
-}
-
 // Hook event types — lifecycle events emitted by Claude CLI hooks
 
 export type HookEventType =

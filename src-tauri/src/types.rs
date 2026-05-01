@@ -303,18 +303,6 @@ pub struct McpServer {
     pub headers: Option<std::collections::HashMap<String, String>>,
 }
 
-// Party Mode audio types
-
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpectrumData {
-    pub bands: Vec<f32>, // 64 frequency band magnitudes, normalized 0.0-1.0
-    pub peak: f32,       // overall peak amplitude
-    pub bass: f32,       // average of low bands (sub-bass + bass)
-    pub mid: f32,        // average of mid bands
-    pub treble: f32,     // average of high bands
-}
-
 // Session history types (used by list_disk_sessions / load_session_history commands)
 
 #[derive(Serialize)]

@@ -387,13 +387,14 @@ function ChatInputImpl({ onSend, onCancel, onAttach, onRewrite, isRewriting, isS
         // Keyboard path: `text` is undefined, use the textarea (user owns
         // whatever they typed there).
         const base = (committedBaseRef.current ?? "").trim();
+        const liveBeforeRollback = getTextDirect().trim();
         rollbackPartial();
         let payload: string;
         if (text !== undefined) {
           const current = text.trim();
           payload = base ? (current ? `${base} ${current}` : base) : current;
         } else {
-          payload = getTextDirect().trim();
+          payload = liveBeforeRollback || getTextDirect().trim();
         }
         setTextDirect("");
         if (payload) onSendRef.current(payload);

@@ -3525,6 +3525,93 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-05-01T20:42:13Z"
+    },
+    {
+      "id": "bug-185",
+      "timestamp": "2026-05-01T21:06:35Z",
+      "error_message": "Discord bot does not track every named provider session reliably.",
+      "file": "src/App.tsx",
+      "root_cause": "The Discord sync subscriber skipped newly-created provider session rows and only reacted to later name/cwd changes. Sessions that were created with a name, or panels opened for already-named sessions without a metadata mutation, could miss the rename_or_link call.",
+      "fix": "Added a shared syncNamedSessionToDiscord helper, invoke it for newly-created provider-session rows, and added a canvas-terminal subscriber that syncs already-named sessions when a provider panel opens.",
+      "tags": [
+        "discord",
+        "session-linking",
+        "provider-session",
+        "named-sessions"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-01T21:06:35Z"
+    },
+    {
+      "id": "bug-186",
+      "timestamp": "2026-05-01T21:06:35Z",
+      "error_message": "Voice/Whisper send flow can send a blank prompt, especially for one-utterance dictation followed by a send command.",
+      "file": "src/components/provider-chat/ChatInput.tsx",
+      "root_cause": "The voice send action rolled back the in-flight Whisper partial before snapshotting the live textarea. When the current utterance held the only usable transcript, rollback restored the pre-dictation base and the send payload became empty.",
+      "fix": "Snapshot the live textarea before rollback and use that snapshot when the backend did not provide a residual command payload.",
+      "tags": [
+        "voice",
+        "whisper",
+        "blank-prompt",
+        "chat-input"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-01T21:06:35Z"
+    },
+    {
+      "id": "bug-187",
+      "timestamp": "2026-05-01T21:06:35Z",
+      "error_message": "Discord voice-note attachments can emit an empty frontend prompt when Whisper transcription fails or returns an empty transcript.",
+      "file": "src-tauri/src/discord_bot.rs",
+      "root_cause": "The gateway branch treated attachment presence as enough to route a prompt. For voice notes, it deletes the audio after transcription, so a failed/empty transcript plus no text content produced an empty formatted_prompt that was still emitted as discord-prompt.",
+      "fix": "Count voice-note transcription failures/empty results, skip routing when the final prompt is empty, log the failure counts, and notify the Discord channel instead of sending an empty prompt.",
+      "tags": [
+        "discord",
+        "voice-note",
+        "whisper",
+        "blank-prompt"
+      ],
+      "related_bugs": [
+        "bug-186"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-01T21:06:35Z"
+    },
+    {
+      "id": "bug-188",
+      "timestamp": "2026-05-01T21:07:26Z",
+      "error_message": "openwolf designqc failed with `zsh:1: command not found: openwolf` during settings UI verification.",
+      "file": ".wolf/OPENWOLF.md",
+      "root_cause": "The OpenWolf CLI is required by the repo's design QC workflow but is not available on this shell's PATH.",
+      "fix": "Recorded the missing CLI and continued with TypeScript, Rust, and reference-sweep verification; no code fix was applied because this is an environment/tooling issue.",
+      "tags": [
+        "openwolf",
+        "designqc",
+        "environment",
+        "tooling"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-01T21:07:26Z"
+    },
+    {
+      "id": "bug-189",
+      "timestamp": "2026-05-01T21:14:24Z",
+      "error_message": "Changing the effort level on one unnamed provider session also changes the effort shown in other open unnamed sessions.",
+      "file": "src/components/provider-chat/ProviderChat.tsx",
+      "root_cause": "New/unnamed sessions without stored selectedControls rendered effort from mutable Settings defaults. The topbar control change also updated those Settings defaults, so every other open session still missing its own effort value redrew with the new default.",
+      "fix": "ProviderChat now stamps any missing provider controls with the defaults the session rendered with on mount/provider change, so open sessions get independent per-session selectedControls before later topbar changes update Settings defaults.",
+      "tags": [
+        "provider-controls",
+        "effort",
+        "unnamed-session",
+        "settings-defaults"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-01T21:14:24Z"
     }
   ]
 }

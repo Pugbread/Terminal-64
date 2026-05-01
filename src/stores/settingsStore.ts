@@ -129,14 +129,6 @@ interface Settings {
   recentDirs: string[];
   discordBotToken: string;
   discordServerId: string;
-  partyModeEnabled: boolean;
-  partyEdgeGlow: boolean;
-  partyEqualizer: boolean;
-  partyBackgroundPulse: boolean;
-  partyColorCycling: boolean;
-  partyEqualizerDance: boolean;
-  partyEqualizerRotation: boolean;
-  partyIntensity: number;
   autoCompactEnabled: boolean;
   autoCompactThreshold: number; // 0-100, percentage of context window
   backgroundImage: string; // absolute file path or empty
@@ -170,14 +162,6 @@ const defaultSettings: Settings = {
   recentDirs: [],
   discordBotToken: "",
   discordServerId: "",
-  partyModeEnabled: false,
-  partyEdgeGlow: true,
-  partyEqualizer: false,
-  partyBackgroundPulse: true,
-  partyColorCycling: false,
-  partyEqualizerDance: true,
-  partyEqualizerRotation: true,
-  partyIntensity: 0.7,
   autoCompactEnabled: false,
   autoCompactThreshold: 80,
   backgroundImage: "",

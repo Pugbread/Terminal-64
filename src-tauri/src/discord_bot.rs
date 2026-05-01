@@ -865,6 +865,8 @@ async fn run_gateway(
                                 // can't play.
                                 let mut attachment_lines = Vec::new();
                                 let mut voice_transcripts: Vec<String> = Vec::new();
+                                let mut voice_note_count = 0usize;
+                                let mut voice_transcription_failures = 0usize;
                                 if let Some(atts) = attachments {
                                     let att_dir = if session_cwd.is_empty() { std::env::temp_dir() } else {
                                         let d = std::path::PathBuf::from(&session_cwd).join(".t64-attachments");
@@ -924,6 +926,7 @@ async fn run_gateway(
                                                     if std::fs::write(&dest, &bytes).is_ok() {
                                                         safe_eprintln!("[discord] Downloaded attachment: {} -> {}", filename, dest.display());
                                                         if is_voice_note {
+                                                            voice_note_count += 1;
                                                             // Transcribe on the blocking pool so whisper.cpp
                                                             // doesn't stall the gateway's tokio runtime.
                                                             let path_owned = dest.clone();
@@ -986,10 +989,17 @@ async fn run_gateway(
                                                                         voice_transcripts.push(trimmed.to_string());
                                                                     } else {
                                                                         safe_eprintln!("[discord] Voice note transcription empty");
+                                                                        voice_transcription_failures += 1;
                                                                     }
                                                                 }
-                                                                Ok(Err(e)) => safe_eprintln!("[discord] Voice note transcription failed: {}", e),
-                                                                Err(e) => safe_eprintln!("[discord] Voice note task panicked: {}", e),
+                                                                Ok(Err(e)) => {
+                                                                    voice_transcription_failures += 1;
+                                                                    safe_eprintln!("[discord] Voice note transcription failed: {}", e);
+                                                                }
+                                                                Err(e) => {
+                                                                    voice_transcription_failures += 1;
+                                                                    safe_eprintln!("[discord] Voice note task panicked: {}", e);
+                                                                }
                                                             }
                                                             // Always clean up the .ogg — we've extracted what we need.
                                                             let _ = std::fs::remove_file(&dest);
@@ -1019,6 +1029,23 @@ async fn run_gateway(
                                     let files = attachment_lines.join("\n");
                                     if merged_text.is_empty() { files } else { format!("{}\n\n{}", files, merged_text) }
                                 };
+                                if formatted_prompt.trim().is_empty() {
+                                    safe_eprintln!(
+                                        "[discord] Skipping empty prompt for session {} (voice notes: {}, failed/empty transcripts: {})",
+                                        sid,
+                                        voice_note_count,
+                                        voice_transcription_failures
+                                    );
+                                    if voice_note_count > 0 {
+                                        let _ = send_discord_message(
+                                            typing_http,
+                                            token,
+                                            channel_id,
+                                            "I couldn't transcribe that voice message, so I didn't send an empty prompt.",
+                                        ).await;
+                                    }
+                                    continue;
+                                }
                                 safe_eprintln!("[discord] Routing to session {} (cwd: {}): {}", sid, session_cwd, &formatted_prompt[..formatted_prompt.len().min(100)]);
 
                                 // Route through the frontend — emit discord-prompt so the

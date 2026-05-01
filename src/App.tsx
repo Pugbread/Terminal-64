@@ -13,11 +13,9 @@ import { useTheme } from "./hooks/useTheme";
 import { useKeybindings } from "./hooks/useKeybindings";
 import { useProviderEvents } from "./hooks/useProviderEvents";
 import { useDelegationOrchestrator } from "./hooks/useDelegationOrchestrator";
-import { usePartyMode } from "./hooks/usePartyMode";
 import { useVoiceControl } from "./hooks/useVoiceControl";
 import { usePerformanceMonitor } from "./hooks/usePerformanceMonitor";
 import { useVoiceStore } from "./stores/voiceStore";
-import { PartyEqualizer, PartyEdgeGlow } from "./components/party/PartyOverlay";
 import { useCanvasStore } from "./stores/canvasStore";
 import { useThemeStore } from "./stores/themeStore";
 import { useSettingsStore } from "./stores/settingsStore";
@@ -52,6 +50,24 @@ type UpdateButtonState =
   | { kind: "installing"; update: UpdateInfo }
   | { kind: "restarting"; update: UpdateInfo }
   | { kind: "failed"; update: UpdateInfo; error: string };
+
+type DiscordSyncSession = {
+  name?: string;
+  cwd?: string;
+};
+
+function syncNamedSessionToDiscord(sessionId: string, session: DiscordSyncSession | undefined) {
+  const name = session?.name?.trim();
+  if (!name) return;
+  const hasOpenProviderPanel = useCanvasStore
+    .getState()
+    .terminals
+    .some((t) => t.panelType === "claude" && t.terminalId === sessionId);
+  if (!hasOpenProviderPanel) return;
+  renameDiscordSession(sessionId, name, session?.cwd || "").catch((err) => {
+    console.warn("[discord] Failed to sync session:", sessionId, err);
+  });
+}
 
 function updateButtonText(state: UpdateButtonState): string {
   switch (state.kind) {
@@ -107,7 +123,6 @@ function App() {
   useKeybindings();
   useProviderEvents();
   useDelegationOrchestrator();
-  usePartyMode();
   useVoiceControl();
   usePerformanceMonitor();
 
@@ -357,12 +372,28 @@ function App() {
     const unsub = useProviderSessionStore.subscribe((state, prev) => {
       for (const [sid, sess] of Object.entries(state.sessions)) {
         const before = prev.sessions[sid];
-        if (!before) continue;
+        if (!before) {
+          syncNamedSessionToDiscord(sid, sess);
+          continue;
+        }
         const nameChanged = before.name !== sess.name;
         const cwdChanged = before.cwd !== sess.cwd;
-        if ((nameChanged || cwdChanged) && sess.name && sess.name.trim()) {
-          renameDiscordSession(sid, sess.name, sess.cwd || "").catch(() => {});
-        }
+        if (nameChanged || cwdChanged) syncNamedSessionToDiscord(sid, sess);
+      }
+    });
+    return unsub;
+  }, []);
+
+  // If a provider panel is opened for an already-named session, make sure the
+  // bot sees it even when the session metadata itself did not change.
+  useEffect(() => {
+    const unsub = useCanvasStore.subscribe((state, prev) => {
+      const previousIds = new Set(
+        prev.terminals.filter((t) => t.panelType === "claude").map((t) => t.terminalId)
+      );
+      for (const t of state.terminals) {
+        if (t.panelType !== "claude" || previousIds.has(t.terminalId)) continue;
+        syncNamedSessionToDiscord(t.terminalId, useProviderSessionStore.getState().sessions[t.terminalId]);
       }
     });
     return unsub;
@@ -560,9 +591,6 @@ function App() {
 
       {/* Canvas */}
       <Canvas />
-
-      {/* Party mode edge glow — fixed overlay on top */}
-      <PartyEdgeGlow />
 
       {/* Overlays */}
       <CommandPalette isOpen={paletteOpen} onClose={() => setPaletteOpen(false)} />

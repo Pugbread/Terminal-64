@@ -653,25 +653,42 @@ export function ProviderChat({ sessionId, cwd, skipPermissions, isActive }: Prov
     useProviderSessionStore.getState().switchProviderBeforeStart(sessionId, defaultAvailableProvider);
   }, [defaultAvailableProvider, hasStreamingText, providerAvailability, selectedProvider, session, sessionId]);
 
-  // Snap selected controls onto the active provider's declared option lists.
-  // This keeps legacy settings or edited localStorage from sending invalid
-  // provider-specific values.
+  // Stamp missing controls with the defaults this session rendered with. That
+  // makes already-open unnamed sessions independent when another session later
+  // updates the Settings defaults from its topbar.
   useEffect(() => {
+    const currentSession = useProviderSessionStore.getState().sessions[sessionId];
+    const sessionControls = currentSession?.providerState?.selectedControls[selectedProvider]
+      ?? currentSession?.selectedControls?.[selectedProvider]
+      ?? EMPTY_PROVIDER_CONTROL_VALUES;
+    const settings = useSettingsStore.getState();
+    const seedValues = selectedControlValuesForUi({
+      provider: selectedProvider,
+      persisted: sessionControls,
+      settingsDefaults: settings.providerControlDefaults[selectedProvider],
+      globalModel: settings.claudeModel,
+      globalEffort: settings.claudeEffort,
+    });
     for (const control of listProviderControls(selectedProvider)) {
-      const value = selectedControlValues[control.id];
-      if (!isProviderControlValue(selectedProvider, control.id, value)) {
+      const persistedValue = sessionControls[control.id];
+      if (isProviderControlValue(selectedProvider, control.id, persistedValue)) continue;
+      const seedValue = seedValues[control.id];
+      const nextValue = isProviderControlValue(selectedProvider, control.id, seedValue)
+        ? seedValue
+        : control.defaultValue;
+      if (isProviderControlValue(selectedProvider, control.id, nextValue)) {
         useProviderSessionStore.getState().setProviderControl(
           sessionId,
           selectedProvider,
           control.id,
-          control.defaultValue,
+          nextValue,
         );
       }
     }
-    // Only re-evaluate on provider change — selected controls are user-driven
-    // and shouldn't bounce back to defaults every time they change.
+    // Only re-evaluate on session/provider change — selected controls are
+    // user-driven and shouldn't bounce back to defaults every time they change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProvider]);
+  }, [selectedProvider, sessionId]);
   const t64Commands = useRef<SlashCommand[]>([
     { name: "loop", description: "Run a prompt on a loop (e.g. /loop 5m improve the code)", usage: "/loop [interval] <prompt> — default 10m. /loop stop to cancel.", source: "Terminal 64" },
     { name: "delegate", description: "Split work into parallel sub-sessions", usage: "/delegate <prompt> — Plans the task split, spawns agents with MCP team chat.", source: "Terminal 64" },

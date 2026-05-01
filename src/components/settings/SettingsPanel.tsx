@@ -29,11 +29,13 @@ import {
   getNoisyWidgetDefault,
   type WidgetHostProtectionMode,
 } from "../../lib/widgetHostProtection";
-import type { ProviderId } from "../../lib/providers";
+import type { ProviderControlValue, ProviderId } from "../../lib/providers";
 import {
   getProviderSnapshotCapabilityLabels,
   getProviderSnapshotModelSummary,
+  listProviderSnapshotControls,
   listProviderSnapshotDisplays,
+  providerSnapshotOptionValue,
   useProviderSnapshots,
 } from "../../lib/providerSnapshots";
 import { ProviderLogo } from "../ui/BrandLogos";
@@ -461,16 +463,6 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
 
   const [newCommand, setNewCommand] = useState("");
 
-  // Party Mode
-  const partyEnabled = useSettingsStore((s) => s.partyModeEnabled);
-  const partyEdgeGlow = useSettingsStore((s) => s.partyEdgeGlow);
-  const partyEqualizer = useSettingsStore((s) => s.partyEqualizer);
-  const partyBackgroundPulse = useSettingsStore((s) => s.partyBackgroundPulse);
-  const partyColorCycling = useSettingsStore((s) => s.partyColorCycling);
-  const partyEqualizerDance = useSettingsStore((s) => s.partyEqualizerDance);
-  const partyEqualizerRotation = useSettingsStore((s) => s.partyEqualizerRotation);
-  const partyIntensity = useSettingsStore((s) => s.partyIntensity);
-
   const addTheme = useThemeStore((s) => s.addTheme);
 
   // Background
@@ -484,6 +476,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
 
   // Provider availability
   const providerAvailability = useSettingsStore((s) => s.providerAvailability);
+  const providerControlDefaults = useSettingsStore((s) => s.providerControlDefaults);
   const providerSnapshots = useProviderSnapshots();
   const providerDisplays = listProviderSnapshotDisplays(providerSnapshots);
   const enabledProviderCount = providerDisplays.filter((display) =>
@@ -497,6 +490,22 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
         [providerId]: enabled,
       },
     });
+  };
+  const handleProviderDefaultChange = (providerId: ProviderId, controlId: string, value: ProviderControlValue) => {
+    const control = listProviderSnapshotControls(providerId, providerSnapshots)
+      .find((candidate) => candidate.id === controlId);
+    if (!control) return;
+    const nextDefaults = {
+      ...providerControlDefaults,
+      [providerId]: {
+        ...(providerControlDefaults[providerId] ?? {}),
+        [controlId]: value,
+      },
+    };
+    const legacyPatch: { claudeModel?: string; claudeEffort?: string } = {};
+    if (providerId === "anthropic" && typeof value === "string" && control.legacySlot === "model") legacyPatch.claudeModel = value;
+    if (providerId === "anthropic" && typeof value === "string" && control.legacySlot === "effort") legacyPatch.claudeEffort = value;
+    setSetting({ providerControlDefaults: nextDefaults, ...legacyPatch });
   };
 
   // Claude window defaults
@@ -820,170 +829,232 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
 
           {/* Providers */}
           <Section label="Providers" icon="◇">
+            <div className="sp-section-intro">
+              <span>Choose which providers appear in new-session pickers and set the defaults each one starts with.</span>
+            </div>
             <div className="sp-provider-list">
               {providerDisplays.map((display) => {
                 const enabled = isProviderAvailable(display.provider, providerAvailability);
                 const disableLocked = enabled && enabledProviderCount <= 1;
                 const modelSummary = getProviderSnapshotModelSummary(display.provider, providerSnapshots);
                 const capabilitySummary = getProviderSnapshotCapabilityLabels(display.provider, providerSnapshots).join(", ");
+                const controls = listProviderSnapshotControls(display.provider, providerSnapshots);
                 return (
                   <div
                     className={`sp-provider-row ${enabled ? "" : "sp-provider-row--disabled"}`}
                     key={display.provider}
                   >
-                    <div className="sp-provider-info">
-                      <ProviderLogo provider={display.provider} size={16} />
-                      <div className="sp-provider-copy">
-                        <span className="sp-provider-name">{display.label}</span>
-                        <span className="sp-hint-inline">{display.defaultSessionName}</span>
-                        <span className="sp-provider-meta">
-                          {modelSummary && <span>Models: {modelSummary}</span>}
-                          {capabilitySummary && <span>Capabilities: {capabilitySummary}</span>}
-                        </span>
-                        <span className="sp-provider-badges">
-                          <span className={`sp-provider-badge ${enabled ? "sp-provider-badge--ok" : "sp-provider-badge--muted"}`}>
-                            {enabled ? "Enabled" : "Hidden"}
-                          </span>
-                          {display.installed !== null && (
-                            <span className={`sp-provider-badge ${display.installed ? "sp-provider-badge--ok" : "sp-provider-badge--warn"}`}>
-                              {display.installed ? "Installed" : "Not installed"}
-                            </span>
-                          )}
-                          {display.statusLabel && (
-                            <span className={`sp-provider-badge ${display.enabled === false ? "sp-provider-badge--warn" : "sp-provider-badge--muted"}`}>
-                              {display.statusLabel}
-                            </span>
-                          )}
-                        </span>
+                    <div className="sp-provider-card-head">
+                      <div className="sp-provider-info">
+                        <ProviderLogo provider={display.provider} size={18} />
+                        <div className="sp-provider-copy">
+                          <span className="sp-provider-name">{display.label}</span>
+                          <span className="sp-hint-inline">{display.defaultSessionName}</span>
+                        </div>
                       </div>
+                      <Toggle
+                        checked={enabled}
+                        disabled={disableLocked}
+                        {...(disableLocked ? { title: "Keep at least one provider enabled" } : {})}
+                        onChange={(v) => handleProviderAvailabilityChange(display.provider, v)}
+                      />
                     </div>
-                    <Toggle
-                      checked={enabled}
-                      disabled={disableLocked}
-                      {...(disableLocked ? { title: "Keep at least one provider enabled" } : {})}
-                      onChange={(v) => handleProviderAvailabilityChange(display.provider, v)}
-                    />
+                    <span className="sp-provider-meta">
+                      {modelSummary && <span>Models: {modelSummary}</span>}
+                      {capabilitySummary && <span>Capabilities: {capabilitySummary}</span>}
+                    </span>
+                    <span className="sp-provider-badges">
+                      <span className={`sp-provider-badge ${enabled ? "sp-provider-badge--ok" : "sp-provider-badge--muted"}`}>
+                        {enabled ? "Enabled" : "Hidden"}
+                      </span>
+                      {display.installed !== null && (
+                        <span className={`sp-provider-badge ${display.installed ? "sp-provider-badge--ok" : "sp-provider-badge--warn"}`}>
+                          {display.installed ? "Installed" : "Not installed"}
+                        </span>
+                      )}
+                      {display.statusLabel && (
+                        <span className={`sp-provider-badge ${display.enabled === false ? "sp-provider-badge--warn" : "sp-provider-badge--muted"}`}>
+                          {display.statusLabel}
+                        </span>
+                      )}
+                    </span>
+                    {controls.length > 0 && (
+                      <div className="sp-provider-controls">
+                        {controls.map((control) => {
+                          const currentValue = providerControlDefaults[display.provider]?.[control.id] ?? control.defaultValue;
+                          if (control.kind === "boolean") {
+                            return (
+                              <div className="sp-row" key={control.id}>
+                                <label className="sp-label">{control.label}</label>
+                                <Toggle
+                                  checked={currentValue === true}
+                                  onChange={(v) => handleProviderDefaultChange(display.provider, control.id, v)}
+                                />
+                              </div>
+                            );
+                          }
+                          if (control.kind === "number") {
+                            return (
+                              <div className="sp-row" key={control.id}>
+                                <label className="sp-label">{control.label}</label>
+                                <input
+                                  className="sp-input sp-input--compact"
+                                  type="number"
+                                  value={typeof currentValue === "number" ? currentValue : Number(control.defaultValue) || 0}
+                                  onChange={(e) => handleProviderDefaultChange(display.provider, control.id, Number(e.currentTarget.value))}
+                                />
+                              </div>
+                            );
+                          }
+                          if (control.kind === "text") {
+                            return (
+                              <div className="sp-row" key={control.id}>
+                                <label className="sp-label">{control.label}</label>
+                                <input
+                                  className="sp-input sp-input--compact"
+                                  value={typeof currentValue === "string" ? currentValue : ""}
+                                  onChange={(e) => handleProviderDefaultChange(display.provider, control.id, e.currentTarget.value)}
+                                />
+                              </div>
+                            );
+                          }
+                          return (
+                            <div className="sp-row" key={control.id}>
+                              <label className="sp-label">{control.label}</label>
+                              <select
+                                className="sp-select sp-select--wide"
+                                value={String(currentValue ?? control.defaultValue)}
+                                onChange={(e) => handleProviderDefaultChange(display.provider, control.id, e.currentTarget.value)}
+                              >
+                                {control.options.map((option) => (
+                                  <option key={option.id} value={String(providerSnapshotOptionValue(option))}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {display.provider === "anthropic" && (
+                      <div className="sp-provider-advanced">
+                        <div className="sp-row">
+                          <label className="sp-label">
+                            New Window Permission
+                            <span className="sp-hint-inline">Claude-only startup mode</span>
+                          </label>
+                          <select
+                            className="sp-select sp-select--wide"
+                            value={claudeDefaultPermMode}
+                            onChange={(e) => setSetting({ claudeDefaultPermMode: e.target.value })}
+                          >
+                            <option value="">Remember last used</option>
+                            <option value="default">Default (ask)</option>
+                            <option value="plan">Plan</option>
+                            <option value="auto">Auto</option>
+                            <option value="accept_edits">Accept Edits</option>
+                            <option value="bypass_all">YOLO (bypass)</option>
+                          </select>
+                        </div>
+
+                        <div className="sp-row">
+                          <label className="sp-label">
+                            Auto-Compact
+                            <span className="sp-hint-inline">Send /compact when context is high</span>
+                          </label>
+                          <Toggle checked={autoCompactEnabled} onChange={(v) => setSetting({ autoCompactEnabled: v })} />
+                        </div>
+
+                        {autoCompactEnabled && (
+                          <div className="sp-sub">
+                            <div className="sp-row sp-row--col">
+                              <div className="sp-row">
+                                <label className="sp-label">Threshold</label>
+                                <span className="sp-value">{autoCompactThreshold}%</span>
+                              </div>
+                              <input
+                                type="range"
+                                className="sp-range"
+                                min={10}
+                                max={95}
+                                step={5}
+                                value={autoCompactThreshold}
+                                onChange={(e) => setSetting({ autoCompactThreshold: Number(e.target.value) })}
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="sp-provider-subhead">OpenWolf</div>
+                        <div className="sp-row">
+                          <label className="sp-label">
+                            Enabled
+                            <span className="sp-hint-inline">Project intelligence via .wolf/</span>
+                          </label>
+                          <Toggle checked={openwolfEnabled} onChange={(v) => setSetting({ openwolfEnabled: v })} />
+                        </div>
+
+                        {openwolfEnabled && (
+                          <div className="sp-sub">
+                            <div className="sp-row">
+                              <label className="sp-label">
+                                Auto-Init
+                                <span className="sp-hint-inline">Create .wolf/ on session start</span>
+                              </label>
+                              <Toggle checked={openwolfAutoInit} onChange={(v) => setSetting({ openwolfAutoInit: v })} />
+                            </div>
+
+                            <div className="sp-row">
+                              <label className="sp-label">
+                                Design QC Hooks
+                                <span className="sp-hint-inline">Pre/PostToolUse quality checks</span>
+                              </label>
+                              <Toggle checked={openwolfDesignQC} onChange={(v) => setSetting({ openwolfDesignQC: v })} />
+                            </div>
+
+                            <div className="sp-row">
+                              <label className="sp-label">
+                                Daemon
+                                <span className={`sp-dot ${wolfDaemonRunning ? "sp-dot--on" : ""}`} />
+                              </label>
+                              <span className="sp-value">{wolfDaemonRunning ? "Running" : "Stopped"}</span>
+                            </div>
+
+                            <button
+                              className={`sp-btn sp-btn--wide ${wolfDaemonRunning ? "sp-btn--danger" : ""}`}
+                              disabled={wolfDaemonLoading || !wolfCwd}
+                              title={!wolfCwd ? "Open an AI session first so the daemon knows which project to watch" : ""}
+                              onClick={async () => {
+                                setWolfDaemonLoading(true);
+                                try {
+                                  if (wolfDaemonRunning) {
+                                    await stopOpenwolfDaemon(wolfCwd);
+                                    setWolfDaemonRunning(false);
+                                    setSetting({ openwolfDaemon: false });
+                                  } else {
+                                    await startOpenwolfDaemon(wolfCwd);
+                                    setWolfDaemonRunning(true);
+                                    setSetting({ openwolfDaemon: true });
+                                  }
+                                } catch (err) {
+                                  alert(String(err));
+                                } finally {
+                                  setWolfDaemonLoading(false);
+                                }
+                              }}
+                            >
+                              {wolfDaemonLoading ? "..." : wolfDaemonRunning ? "Stop Daemon" : "Start Daemon"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
-          </Section>
-
-          {/* Claude */}
-          <Section label="Claude" icon="⬡">
-            <div className="sp-row">
-              <label className="sp-label">
-                New Window Permission Mode
-                <span className="sp-hint-inline">Mode each new Claude window starts in</span>
-              </label>
-              <select
-                className="sp-select"
-                value={claudeDefaultPermMode}
-                onChange={(e) => setSetting({ claudeDefaultPermMode: e.target.value })}
-              >
-                <option value="">Remember last used</option>
-                <option value="default">Default (ask)</option>
-                <option value="plan">Plan</option>
-                <option value="auto">Auto</option>
-                <option value="accept_edits">Accept Edits</option>
-                <option value="bypass_all">YOLO (bypass)</option>
-              </select>
-            </div>
-
-            <div className="sp-row">
-              <label className="sp-label">
-                Auto-Compact
-                <span className="sp-hint-inline">Send /compact when context is high</span>
-              </label>
-              <Toggle checked={autoCompactEnabled} onChange={(v) => setSetting({ autoCompactEnabled: v })} />
-            </div>
-
-            {autoCompactEnabled && (
-              <div className="sp-sub">
-                <div className="sp-row sp-row--col">
-                  <div className="sp-row">
-                    <label className="sp-label">Threshold</label>
-                    <span className="sp-value">{autoCompactThreshold}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    className="sp-range"
-                    min={10}
-                    max={95}
-                    step={5}
-                    value={autoCompactThreshold}
-                    onChange={(e) => setSetting({ autoCompactThreshold: Number(e.target.value) })}
-                  />
-                  <span className="sp-hint">Triggers /compact when context usage exceeds this percentage</span>
-                </div>
-              </div>
-            )}
-          </Section>
-
-          {/* OpenWolf */}
-          <Section label="OpenWolf" icon="◈" defaultOpen={false}>
-            <div className="sp-row">
-              <label className="sp-label">
-                Enabled
-                <span className="sp-hint-inline">Project intelligence via .wolf/</span>
-              </label>
-              <Toggle checked={openwolfEnabled} onChange={(v) => setSetting({ openwolfEnabled: v })} />
-            </div>
-
-            {openwolfEnabled && (
-              <div className="sp-sub">
-                <div className="sp-row">
-                  <label className="sp-label">
-                    Auto-Init
-                    <span className="sp-hint-inline">Create .wolf/ on session start</span>
-                  </label>
-                  <Toggle checked={openwolfAutoInit} onChange={(v) => setSetting({ openwolfAutoInit: v })} />
-                </div>
-
-                <div className="sp-row">
-                  <label className="sp-label">
-                    Design QC Hooks
-                    <span className="sp-hint-inline">Pre/PostToolUse quality checks</span>
-                  </label>
-                  <Toggle checked={openwolfDesignQC} onChange={(v) => setSetting({ openwolfDesignQC: v })} />
-                </div>
-
-                <div className="sp-row">
-                  <label className="sp-label">
-                    Daemon
-                    <span className={`sp-dot ${wolfDaemonRunning ? "sp-dot--on" : ""}`} />
-                  </label>
-                  <span className="sp-value">{wolfDaemonRunning ? "Running" : "Stopped"}</span>
-                </div>
-
-                <button
-                  className={`sp-btn sp-btn--wide ${wolfDaemonRunning ? "sp-btn--danger" : ""}`}
-                  disabled={wolfDaemonLoading || !wolfCwd}
-                  title={!wolfCwd ? "Open an AI session first so the daemon knows which project to watch" : ""}
-                  onClick={async () => {
-                    setWolfDaemonLoading(true);
-                    try {
-                      if (wolfDaemonRunning) {
-                        await stopOpenwolfDaemon(wolfCwd);
-                        setWolfDaemonRunning(false);
-                        setSetting({ openwolfDaemon: false });
-                      } else {
-                        await startOpenwolfDaemon(wolfCwd);
-                        setWolfDaemonRunning(true);
-                        setSetting({ openwolfDaemon: true });
-                      }
-                    } catch (err) {
-                      alert(String(err));
-                    } finally {
-                      setWolfDaemonLoading(false);
-                    }
-                  }}
-                >
-                  {wolfDaemonLoading ? "..." : wolfDaemonRunning ? "Stop Daemon" : "Start Daemon"}
-                </button>
-                <span className="sp-hint">Background daemon for continuous project analysis</span>
-              </div>
-            )}
           </Section>
 
           {/* Quick Pastes */}
@@ -1011,60 +1082,6 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
               />
               <button className="sp-btn" onClick={handleAddQuickPaste} disabled={!newCommand.trim()}>Add</button>
             </div>
-          </Section>
-
-          {/* Party Mode */}
-          <Section label="Party Mode" icon="♫" defaultOpen={false}>
-            <div className="sp-row">
-              <label className="sp-label">
-                Enabled
-                <span className={`sp-dot ${partyEnabled ? "sp-dot--on" : ""}`} />
-              </label>
-              <Toggle checked={partyEnabled} onChange={(v) => setSetting({ partyModeEnabled: v })} />
-            </div>
-
-            {partyEnabled && (
-              <div className="sp-sub">
-                <div className="sp-row sp-row--col">
-                  <div className="sp-row">
-                    <label className="sp-label">Intensity</label>
-                    <span className="sp-value">{Math.round(partyIntensity * 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    className="sp-range"
-                    min={10}
-                    max={100}
-                    value={Math.round(partyIntensity * 100)}
-                    onChange={(e) => setSetting({ partyIntensity: Number(e.target.value) / 100 })}
-                  />
-                </div>
-                <div className="sp-row">
-                  <label className="sp-label">Edge Glow</label>
-                  <Toggle checked={partyEdgeGlow} onChange={(v) => setSetting({ partyEdgeGlow: v })} />
-                </div>
-                <div className="sp-row">
-                  <label className="sp-label">Equalizer Bars</label>
-                  <Toggle checked={partyEqualizer} onChange={(v) => setSetting({ partyEqualizer: v })} />
-                </div>
-                <div className="sp-row">
-                  <label className="sp-label">Background Pulse</label>
-                  <Toggle checked={partyBackgroundPulse} onChange={(v) => setSetting({ partyBackgroundPulse: v })} />
-                </div>
-                <div className="sp-row">
-                  <label className="sp-label">Color Cycling</label>
-                  <Toggle checked={partyColorCycling} onChange={(v) => setSetting({ partyColorCycling: v })} />
-                </div>
-                <div className="sp-row">
-                  <label className="sp-label">Equalizer Dance</label>
-                  <Toggle checked={partyEqualizerDance} onChange={(v) => setSetting({ partyEqualizerDance: v })} />
-                </div>
-                <div className="sp-row">
-                  <label className="sp-label">Equalizer Rotation</label>
-                  <Toggle checked={partyEqualizerRotation} onChange={(v) => setSetting({ partyEqualizerRotation: v })} />
-                </div>
-              </div>
-            )}
           </Section>
 
           {/* Voice Control */}

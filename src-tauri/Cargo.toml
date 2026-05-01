@@ -32,8 +32,6 @@ async-trait = "0.1"
 reqwest = { version = "0.12", features = ["json", "native-tls", "stream"], default-features = false }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
-spectrum-analyzer = "1.5"
-ringbuf = "0.4"
 base64 = "0.22"
 rand = "0.8"
 zip = "2"
@@ -74,7 +72,6 @@ voice-command-grammar = []
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-screencapturekit = "1.5"
 
 # Enable the Metal GPU backend for whisper.cpp only on macOS; unions with the base optional entry above.
 [target.'cfg(target_os = "macos")'.dependencies.whisper-rs]

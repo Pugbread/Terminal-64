@@ -17,7 +17,7 @@
 }
 
 .settings-panel {
-  width: clamp(290px, 85vw, 340px);
+  width: clamp(340px, 72vw, 520px);
   height: 100%;
   background: var(--bg-secondary, #181825);
   border-left: 1px solid var(--border, #313244);
@@ -139,6 +139,16 @@
   animation: sp-expand 0.15s ease-out;
 }
 
+.sp-section-intro {
+  padding: 8px 10px;
+  border: 1px solid rgba(137, 180, 250, 0.12);
+  border-radius: 6px;
+  background: rgba(137, 180, 250, 0.055);
+  color: var(--fg-muted, #6c7086);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 @keyframes sp-expand {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
@@ -241,11 +251,11 @@
 
 .sp-provider-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   min-height: 38px;
-  padding: 7px 8px;
+  padding: 10px;
   border: 1px solid rgba(137, 180, 250, 0.14);
   border-radius: 6px;
   background: rgba(17, 17, 27, 0.45);
@@ -253,6 +263,14 @@
 
 .sp-provider-row--disabled {
   opacity: 0.64;
+}
+
+.sp-provider-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
 }
 
 .sp-provider-info {
@@ -334,6 +352,24 @@
   background: rgba(108, 112, 134, 0.08);
 }
 
+.sp-provider-controls,
+.sp-provider-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(205, 214, 244, 0.08);
+}
+
+.sp-provider-subhead {
+  padding-top: 2px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 10px;
+  color: var(--accent, #89b4fa);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 /* ---- Status Dot ---- */
 
 .sp-dot {
@@ -397,6 +433,11 @@
   width: 100%;
   box-sizing: border-box;
   transition: border-color 0.15s;
+}
+
+.sp-input--compact {
+  width: 150px;
+  flex: 0 0 150px;
 }
 
 .sp-input:focus {
