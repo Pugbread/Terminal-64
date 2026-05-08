@@ -88,6 +88,22 @@ function resultSummary(tc: ToolCall): string {
   return `${chars} chars`;
 }
 
+function parseMcpName(name: string, input: ProviderToolInput): { server: string; tool: string } {
+  const claudeStyle = name.match(/^mcp__(.+?)__(.+)$/i);
+  if (claudeStyle?.[1] && claudeStyle[2]) {
+    return { server: claudeStyle[1], tool: claudeStyle[2] };
+  }
+
+  const slashStyle = name.match(/^([^/]+)\/(.+)$/);
+  if (slashStyle?.[1] && slashStyle[2]) {
+    return { server: slashStyle[1], tool: slashStyle[2] };
+  }
+
+  const server = firstString(input, ["server", "mcp_server", "serverName"]);
+  const tool = firstString(input, ["tool_name", "toolName", "name"]);
+  return { server, tool: tool || name };
+}
+
 const TOOL_PRESENTATION_DEFINITIONS = [
   {
     name: "Bash",
@@ -234,8 +250,22 @@ export const GROUPABLE_TOOLS = new Set(
     .map((definition) => definition.name),
 );
 
+function isMcpToolCall(tc: ToolCall): boolean {
+  return Boolean(tc.name.includes("__") || tc.name.includes("/") || tc.input.server || tc.input.tool_name || tc.input.toolName);
+}
+
 export function isGroupableToolCall(tc: ToolCall): boolean {
-  return GROUPABLE_TOOLS.has(tc.name);
+  return GROUPABLE_TOOLS.has(tc.name) || isMcpToolCall(tc);
+}
+
+export function toolGroupKey(tc: ToolCall): string {
+  const definition = TOOL_PRESENTATION_BY_NAME.get(tc.name);
+  if (definition) return `tool:${definition.name}`;
+  if (isMcpToolCall(tc)) {
+    const { server, tool } = parseMcpName(tc.name, tc.input);
+    return `mcp:${server}:${tool}`;
+  }
+  return `tool:${tc.name}`;
 }
 
 export function toolHeader(tc: ToolCall): ToolHeaderPresentation {
@@ -252,12 +282,13 @@ export function toolHeader(tc: ToolCall): ToolHeaderPresentation {
     };
   }
 
-  if (tc.name.includes("__") || tc.input.server || tc.input.tool_name) {
-    const title = tc.name.includes("__") ? tc.name.replace(/__/g, "/") : tc.name;
+  if (isMcpToolCall(tc)) {
+    const mcpName = parseMcpName(tc.name, tc.input);
     const args = tc.input.arguments && typeof tc.input.arguments === "object"
       ? summarizeFallback(tc.input.arguments as ProviderToolInput)
       : summarizeFallback(tc.input);
-    return { icon: "⊛", title, detail: args, kind: "mcp" };
+    const detail = compactList([mcpName.server ? `MCP ${mcpName.server}` : "", args], 2, 60);
+    return { icon: "⊛", title: mcpName.tool, detail, kind: "mcp" };
   }
 
   return { icon: "⚙", title: tc.name, detail: summarizeFallback(tc.input), kind: "other" };
@@ -278,6 +309,20 @@ export function toolGroupLabel(tcs: ToolCall[]): ToolGroupPresentation {
         toolNames,
       };
     }
+  }
+
+  const firstTool = tcs[0];
+  if (firstTool && tcs.every((tc) => toolGroupKey(tc) === toolGroupKey(firstTool))) {
+    const header = toolHeader(firstTool);
+    const details = compactList(tcs.map((tc) => toolHeader(tc).detail), 3, 44);
+    return {
+      icon: header.icon,
+      name: `${header.title} x${tcs.length}`,
+      details,
+      kind: header.kind,
+      count: tcs.length,
+      toolNames,
+    };
   }
 
   const counts = toolNames.map((name) => `${name} x${tcs.filter((tc) => tc.name === name).length}`);

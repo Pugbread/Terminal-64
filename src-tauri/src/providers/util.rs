@@ -17,6 +17,7 @@
 //!   the char-boundary helpers) are shared.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::{Child, Command};
 
 /// PATH used for app-spawned shells and provider CLIs. macOS GUI launches and
@@ -31,16 +32,79 @@ pub fn expanded_tool_path() -> String {
         let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
         let program_files =
             std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
-        format!(
-            "{appdata}\\npm;{home}\\.cargo\\bin;{home}\\.npm-global\\bin;{home}\\.aftman\\bin;{home}\\.rokit\\bin;{home}\\.foreman\\bin;{home}\\.wally\\bin;{localappdata}\\Programs\\nodejs;{program_files}\\nodejs;{existing}"
-        )
+        let mut entries = vec![
+            format!("{appdata}\\npm"),
+            format!("{home}\\.cargo\\bin"),
+            format!("{home}\\.npm-global\\bin"),
+            format!("{home}\\.bun\\bin"),
+            format!("{home}\\.aftman\\bin"),
+            format!("{home}\\.rokit\\bin"),
+            format!("{home}\\.foreman\\bin"),
+            format!("{home}\\.wally\\bin"),
+            format!("{localappdata}\\pnpm"),
+            format!("{localappdata}\\Yarn\\bin"),
+            format!("{localappdata}\\Programs\\nodejs"),
+            format!("{program_files}\\nodejs"),
+        ];
+        push_npx_openwolf_bins(
+            &mut entries,
+            &[
+                PathBuf::from(format!("{home}\\AppData\\Local\\npm-cache\\_npx")),
+                PathBuf::from(format!("{localappdata}\\npm-cache\\_npx")),
+            ],
+        );
+        entries.push(existing);
+        entries
+            .into_iter()
+            .filter(|entry| !entry.is_empty())
+            .collect::<Vec<_>>()
+            .join(";")
     }
     #[cfg(not(target_os = "windows"))]
     {
         let home = std::env::var("HOME").unwrap_or_default();
-        format!(
-            "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:{home}/.local/bin:{home}/.cargo/bin:{home}/.npm-global/bin:{home}/.aftman/bin:{home}/.rokit/bin:{home}/.foreman/bin:{home}/.wally/bin:/opt/homebrew/lib/node_modules/.bin:{existing}"
-        )
+        let mut entries = vec![
+            "/opt/homebrew/bin".to_string(),
+            "/opt/homebrew/sbin".to_string(),
+            "/usr/local/bin".to_string(),
+            "/usr/local/sbin".to_string(),
+            format!("{home}/.local/bin"),
+            format!("{home}/.cargo/bin"),
+            format!("{home}/.npm-global/bin"),
+            format!("{home}/.bun/bin"),
+            format!("{home}/.pnpm"),
+            format!("{home}/.yarn/bin"),
+            format!("{home}/.config/yarn/global/node_modules/.bin"),
+            format!("{home}/.aftman/bin"),
+            format!("{home}/.rokit/bin"),
+            format!("{home}/.foreman/bin"),
+            format!("{home}/.wally/bin"),
+            "/opt/homebrew/lib/node_modules/.bin".to_string(),
+        ];
+        push_npx_openwolf_bins(&mut entries, &[PathBuf::from(format!("{home}/.npm/_npx"))]);
+        entries.push(existing);
+        entries
+            .into_iter()
+            .filter(|entry| !entry.is_empty())
+            .collect::<Vec<_>>()
+            .join(":")
+    }
+}
+
+fn push_npx_openwolf_bins(entries: &mut Vec<String>, roots: &[PathBuf]) {
+    for root in roots {
+        let Ok(children) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for child in children.flatten() {
+            let bin_dir = child.path().join("node_modules").join(".bin");
+            let has_openwolf = ["openwolf", "openwolf.cmd", "openwolf.exe", "openwolf.ps1"]
+                .iter()
+                .any(|name| bin_dir.join(name).exists());
+            if has_openwolf {
+                entries.push(bin_dir.to_string_lossy().to_string());
+            }
+        }
     }
 }
 
@@ -481,15 +545,51 @@ mod tests {
         let path = expanded_tool_path();
         #[cfg(target_os = "windows")]
         {
+            assert!(path.contains(".npm-global\\bin"));
+            assert!(path.contains(".bun\\bin"));
             assert!(path.contains(".aftman\\bin"));
             assert!(path.contains(".rokit\\bin"));
             assert!(path.contains(".foreman\\bin"));
         }
         #[cfg(not(target_os = "windows"))]
         {
+            assert!(path.contains(".local/bin"));
+            assert!(path.contains(".npm-global/bin"));
+            assert!(path.contains(".bun/bin"));
+            assert!(path.contains(".pnpm"));
             assert!(path.contains(".aftman/bin"));
             assert!(path.contains(".rokit/bin"));
             assert!(path.contains(".foreman/bin"));
         }
+    }
+
+    #[test]
+    fn npx_openwolf_bin_discovery_adds_cli_bin_dir() {
+        let unique = format!(
+            "terminal64-openwolf-path-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let bin = root.join("hash").join("node_modules").join(".bin");
+        std::fs::create_dir_all(&bin).unwrap();
+
+        #[cfg(target_os = "windows")]
+        let shim = bin.join("openwolf.cmd");
+        #[cfg(not(target_os = "windows"))]
+        let shim = bin.join("openwolf");
+
+        std::fs::write(&shim, "").unwrap();
+
+        let mut entries = Vec::new();
+        push_npx_openwolf_bins(&mut entries, std::slice::from_ref(&root));
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(entries
+            .iter()
+            .any(|entry| entry.contains("node_modules") && entry.contains(".bin")));
     }
 }

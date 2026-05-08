@@ -76,6 +76,10 @@ function delegationLogFilename(group: DelegationGroup): string {
   return `terminal64-delegation-${created}-${group.id.slice(0, 8)}.md`;
 }
 
+function delegationLogPath(cwd: string, group: DelegationGroup): string {
+  return joinPath(cwd, ".t64", delegationLogFilename(group));
+}
+
 function renderDelegationChatLog(group: DelegationGroup, messages: DelegationMsg[]): string {
   const lines = [
     "# Terminal 64 Delegation Team Chat",
@@ -114,7 +118,7 @@ async function exportDelegationChatLog(group: DelegationGroup, cwd: string): Pro
   if (!cwd || cwd === ".") return null;
   const messages = await getDelegationMessages(group.id);
   const markdown = renderDelegationChatLog(group, messages);
-  const path = joinPath(cwd, delegationLogFilename(group));
+  const path = delegationLogPath(cwd, group);
   await writeFile(path, markdown);
   useDelegationStore.getState().setGroupTeamChatLogPath(group.id, path);
   return { path, markdown };

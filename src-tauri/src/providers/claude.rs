@@ -866,9 +866,14 @@ fn build_command(
     // `.zshrc`, `.git/*`, and `.claude/settings.json`, BEFORE bypass mode or
     // any PreToolUse hook can intervene. `--permission-prompt-tool` is the
     // only documented escape hatch.
+    let primary_config_has_approver = mcp_config
+        .as_deref()
+        .is_some_and(|path| mcp_config_has_server(path, "t64"));
     if let Some(amc) = approver_mcp_config {
         if !amc.is_empty() {
-            cmd.arg("--mcp-config").arg(amc);
+            if !primary_config_has_approver {
+                cmd.arg("--mcp-config").arg(amc);
+            }
             cmd.arg("--permission-prompt-tool").arg("mcp__t64__approve");
         }
     }
@@ -938,6 +943,75 @@ fn write_provider_payload_string_field(
     };
     object.insert(field.to_string(), serde_json::Value::String(value));
     Ok(())
+}
+
+fn mcp_config_has_server(path: &str, server_name: &str) -> bool {
+    if path.trim().is_empty() {
+        return false;
+    }
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
+        .and_then(|config| {
+            config
+                .get("mcpServers")
+                .and_then(serde_json::Value::as_object)
+                .map(|servers| servers.contains_key(server_name))
+        })
+        .unwrap_or(false)
+}
+
+fn merge_approver_server_into_primary_mcp_config(
+    primary_path: &str,
+    approver_path: &str,
+) -> Result<(), String> {
+    if primary_path.trim().is_empty() || approver_path.trim().is_empty() {
+        return Ok(());
+    }
+
+    let mut primary = std::fs::read_to_string(primary_path)
+        .map_err(|e| format!("read primary MCP config {}: {}", primary_path, e))
+        .and_then(|data| {
+            serde_json::from_str::<serde_json::Value>(&data)
+                .map_err(|e| format!("parse primary MCP config {}: {}", primary_path, e))
+        })?;
+    let approver = std::fs::read_to_string(approver_path)
+        .map_err(|e| format!("read approver MCP config {}: {}", approver_path, e))
+        .and_then(|data| {
+            serde_json::from_str::<serde_json::Value>(&data)
+                .map_err(|e| format!("parse approver MCP config {}: {}", approver_path, e))
+        })?;
+    let Some(approver_server) = approver
+        .get("mcpServers")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|servers| servers.get("t64"))
+        .cloned()
+    else {
+        return Ok(());
+    };
+
+    let Some(primary_root) = primary.as_object_mut() else {
+        return Err(format!(
+            "primary MCP config {} root must be an object",
+            primary_path
+        ));
+    };
+    let servers_value = primary_root
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(servers) = servers_value.as_object_mut() else {
+        return Err(format!(
+            "primary MCP config {} mcpServers must be an object",
+            primary_path
+        ));
+    };
+    servers.insert("t64".to_string(), approver_server);
+
+    std::fs::write(
+        primary_path,
+        serde_json::to_string_pretty(&primary).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("write primary MCP config {}: {}", primary_path, e))
 }
 
 /// Map frontend permission_mode strings to the CLI's internal names. Anything
@@ -1020,6 +1094,9 @@ fn prepare_claude_command(
     let cleanup_tokens = registration
         .map(|(token, _, _)| vec![token])
         .unwrap_or_default();
+    let primary_mcp_config = provider_payload_string_field(&req.payload, "mcp_config")
+        .filter(|path| !path.trim().is_empty())
+        .map(str::to_string);
 
     if let Some(cwd) = provider_payload_cwd(&req.payload) {
         if let Err(e) = crate::ensure_t64_mcp_impl(lifecycle.app_handle, cwd) {
@@ -1031,6 +1108,19 @@ fn prepare_claude_command(
             {
                 safe_eprintln!(
                     "[claude:mcp] failed to merge existing MCP servers into approver config before {}: {}",
+                    command_label,
+                    e
+                );
+            }
+        }
+        if let (Some(primary_path), Some(approver_path)) =
+            (primary_mcp_config.as_deref(), approver_path.as_deref())
+        {
+            if let Err(e) =
+                merge_approver_server_into_primary_mcp_config(primary_path, approver_path)
+            {
+                safe_eprintln!(
+                    "[claude:mcp] failed to merge approver MCP server into primary config before {}: {}",
                     command_label,
                     e
                 );
@@ -1625,6 +1715,20 @@ impl ProviderAdapter for ClaudeAdapter {
 mod tests {
     use super::*;
 
+    fn temp_json_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "t64-claude-{}-{}.json",
+            label,
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    fn command_args(cmd: &Command) -> Vec<String> {
+        cmd.get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect()
+    }
+
     fn mapped(mapper: &mut ClaudeRuntimeEventMapper, line: Value) -> Vec<Value> {
         mapper
             .runtime_events_from_data("claude-session", &line.to_string())
@@ -1632,6 +1736,135 @@ mod tests {
             .into_iter()
             .map(ProviderRuntimeEvent::into_value)
             .collect()
+    }
+
+    #[test]
+    fn claude_delegation_mcp_merge_keeps_active_terminal64_server() {
+        let primary = temp_json_path("primary-mcp");
+        let approver = temp_json_path("approver-mcp");
+        std::fs::write(
+            &primary,
+            json!({
+                "mcpServers": {
+                    "terminal-64": {
+                        "command": "node",
+                        "args": ["t64-server.mjs"],
+                        "env": {
+                            "T64_DELEGATION_PORT": "53023",
+                            "T64_DELEGATION_SECRET": "secret",
+                            "T64_GROUP_ID": "group-1",
+                            "T64_AGENT_LABEL": "Builder"
+                        }
+                    },
+                    "roblox-studio": { "command": "roblox-mcp" }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            &approver,
+            json!({
+                "mcpServers": {
+                    "terminal-64": {
+                        "command": "old-node",
+                        "args": ["old-t64-server.mjs"]
+                    },
+                    "t64": {
+                        "command": "terminal-64",
+                        "env": { "T64_PERMISSION_SHIM": "1" }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        merge_approver_server_into_primary_mcp_config(
+            primary.to_str().unwrap(),
+            approver.to_str().unwrap(),
+        )
+        .unwrap();
+        let merged: Value =
+            serde_json::from_str(&std::fs::read_to_string(&primary).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&primary);
+        let _ = std::fs::remove_file(&approver);
+
+        assert_eq!(
+            merged["mcpServers"]["terminal-64"]["env"]["T64_GROUP_ID"].as_str(),
+            Some("group-1")
+        );
+        assert_eq!(
+            merged["mcpServers"]["terminal-64"]["command"].as_str(),
+            Some("node")
+        );
+        assert_eq!(
+            merged["mcpServers"]["t64"]["env"]["T64_PERMISSION_SHIM"].as_str(),
+            Some("1")
+        );
+        assert_eq!(
+            merged["mcpServers"]["roblox-studio"]["command"].as_str(),
+            Some("roblox-mcp")
+        );
+    }
+
+    #[test]
+    fn claude_command_uses_single_mcp_config_when_primary_has_approver() {
+        let primary = temp_json_path("single-config-primary");
+        let approver = temp_json_path("single-config-approver");
+        std::fs::write(
+            &primary,
+            json!({
+                "mcpServers": {
+                    "terminal-64": {
+                        "env": {
+                            "T64_DELEGATION_PORT": "53023",
+                            "T64_DELEGATION_SECRET": "secret",
+                            "T64_GROUP_ID": "group-1"
+                        }
+                    },
+                    "t64": { "env": { "T64_PERMISSION_SHIM": "1" } }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            &approver,
+            json!({ "mcpServers": { "t64": {} } }).to_string(),
+        )
+        .unwrap();
+
+        let none_string: Option<String> = None;
+        let none_u32: Option<u32> = None;
+        let none_f64: Option<f64> = None;
+        let none_bool: Option<bool> = None;
+        let cmd = build_command(
+            "--session-id",
+            "session-1",
+            "bypass_all",
+            &none_string,
+            &none_string,
+            ".",
+            &none_string,
+            &none_string,
+            &none_string,
+            &Some(primary.to_string_lossy().to_string()),
+            &Some(approver.to_string_lossy().to_string()),
+            &none_string,
+            &none_u32,
+            &none_f64,
+            &none_bool,
+            &none_string,
+        );
+        let args = command_args(&cmd);
+        let _ = std::fs::remove_file(&primary);
+        let _ = std::fs::remove_file(&approver);
+
+        assert_eq!(args.iter().filter(|arg| *arg == "--mcp-config").count(), 1);
+        assert!(args.windows(2).any(|pair| {
+            pair[0] == "--permission-prompt-tool" && pair[1] == "mcp__t64__approve"
+        }));
     }
 
     #[test]

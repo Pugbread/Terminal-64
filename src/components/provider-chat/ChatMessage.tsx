@@ -575,21 +575,40 @@ function ToolBody({ tc, onEditClick }: { tc: ToolCall; onEditClick?: (tcId: stri
 }
 
 const EXPAND_BY_DEFAULT = new Set(["Write", "Edit", "MultiEdit"]);
+type ToolUiStatus = "done" | "error" | "running";
 
-function ToolCallCard({ tc, onEditClick }: { tc: ToolCall; onEditClick?: (tcId: string, filePath: string, oldStr: string, newStr: string) => void }) {
+function toolUiStatus(hasResult: boolean, isError?: boolean): ToolUiStatus {
+  if (!hasResult) return "running";
+  return isError ? "error" : "done";
+}
+
+function toolUiStatusLabel(status: ToolUiStatus): string {
+  if (status === "running") return "Running";
+  if (status === "error") return "Failed";
+  return "Done";
+}
+
+function toolStatusClass(status: ToolUiStatus): string {
+  return status === "done" ? "cc-tc-status--ok" : status === "error" ? "cc-tc-status--err" : "cc-tc-status--pending";
+}
+
+export function ToolCallCard({ tc, onEditClick }: { tc: ToolCall; onEditClick?: (tcId: string, filePath: string, oldStr: string, newStr: string) => void }) {
   const [expanded, setExpanded] = useState(EXPAND_BY_DEFAULT.has(tc.name));
   const hasResult = tc.result !== undefined;
   const hdr = toolHeader(tc);
+  const status = toolUiStatus(hasResult, tc.isError);
+  const statusLabel = toolUiStatusLabel(status);
 
   return (
-    <div className={`cc-tc ${tc.isError ? "cc-tc--error" : ""}`}>
+    <div className={`cc-tc cc-tc--${hdr.kind} cc-tc--${status} ${tc.isError ? "cc-tc--error" : ""}`}>
       <button className="cc-tc-header" onClick={() => setExpanded((v) => !v)}>
-        <span className={`cc-tc-status ${hasResult ? (tc.isError ? "cc-tc-status--err" : "cc-tc-status--ok") : "cc-tc-status--pending"}`}>
-          {hasResult ? (tc.isError ? "✕" : "✓") : "⋯"}
+        <span className={`cc-tc-status ${toolStatusClass(status)}`} aria-label={statusLabel} />
+        <span className="cc-tc-icon" aria-hidden="true">{String(hdr.icon)}</span>
+        <span className="cc-tc-main">
+          <span className="cc-tc-name">{hdr.title}</span>
+          {hdr.detail && <span className="cc-tc-detail">{hdr.detail}</span>}
         </span>
-        <span className="cc-tc-icon">{String(hdr.icon)}</span>
-        <span className="cc-tc-name">{hdr.title}</span>
-        <span className="cc-tc-detail">{hdr.detail}</span>
+        <span className={`cc-tc-status-pill cc-tc-status-pill--${status}`}>{statusLabel}</span>
         <span className="cc-tc-expand">{expanded ? "▾" : "▸"}</span>
       </button>
       {expanded && <ToolBody tc={tc} {...(onEditClick && { onEditClick })} />}
@@ -602,33 +621,38 @@ export function ToolGroupCard({ tcs }: { tcs: ToolCall[] }) {
   const allDone = tcs.every((tc) => tc.result !== undefined);
   const anyError = tcs.some((tc) => tc.isError);
   const lbl = toolGroupLabel(tcs);
+  const status = toolUiStatus(allDone, anyError);
+  const statusLabel = allDone ? (anyError ? "Failed" : "Done") : "Running";
 
   return (
-    <div className={`cc-tc ${anyError ? "cc-tc--error" : ""}`}>
+    <div className={`cc-tc cc-tc--group cc-tc--${lbl.kind} cc-tc--${status} ${anyError ? "cc-tc--error" : ""}`}>
       <button className="cc-tc-header" onClick={() => setExpanded((v) => !v)}>
-        <span className={`cc-tc-status ${allDone ? (anyError ? "cc-tc-status--err" : "cc-tc-status--ok") : "cc-tc-status--pending"}`}>
-          {allDone ? (anyError ? "✕" : "✓") : "⋯"}
+        <span className={`cc-tc-status ${toolStatusClass(status)}`} aria-label={statusLabel} />
+        <span className="cc-tc-icon" aria-hidden="true">{lbl.icon}</span>
+        <span className="cc-tc-main">
+          <span className="cc-tc-name">{lbl.name}</span>
+          {lbl.details && <span className="cc-tc-detail">{lbl.details}</span>}
         </span>
-        <span className="cc-tc-icon">{lbl.icon}</span>
-        <span className="cc-tc-name">{lbl.name}</span>
-        <span className="cc-tc-detail">{lbl.details}</span>
+        <span className={`cc-tc-status-pill cc-tc-status-pill--${status}`}>{statusLabel}</span>
         <span className="cc-tc-expand">{expanded ? "▾" : "▸"}</span>
       </button>
       {expanded && (
         <div className="cc-tc-body">
           {tcs.map((tc) => {
             const item = toolGroupItem(tc);
+            const itemStatus = item.status === "pending" ? "running" : item.status;
             return (
-              <div key={tc.id} className={`cc-tc-group-item cc-tc-group-item--${item.status}`}>
-                <span className={`cc-tc-status ${item.status === "error" ? "cc-tc-status--err" : item.status === "done" ? "cc-tc-status--ok" : "cc-tc-status--pending"}`}>
-                  {item.status === "pending" ? "⋯" : item.status === "error" ? "✕" : "✓"}
-                </span>
-                <span className="cc-tc-icon">{item.icon}</span>
+              <div key={tc.id} className={`cc-tc-group-item cc-tc-group-item--${itemStatus} cc-tc-group-item--${item.kind}`}>
+                <span className={`cc-tc-status ${toolStatusClass(itemStatus)}`} aria-label={item.statusLabel} />
+                <span className="cc-tc-icon" aria-hidden="true">{item.icon}</span>
                 <span className="cc-tc-group-main">
                   <span className="cc-tc-group-title">{item.title}</span>
                   <span className="cc-tc-group-file">{item.detail || item.statusLabel}</span>
                 </span>
-                <span className="cc-tc-group-meta">{item.resultSummary}</span>
+                <span className="cc-tc-group-meta">
+                  <span className={`cc-tc-group-status cc-tc-group-status--${itemStatus}`}>{item.statusLabel}</span>
+                  <span>{item.resultSummary}</span>
+                </span>
               </div>
             );
           })}

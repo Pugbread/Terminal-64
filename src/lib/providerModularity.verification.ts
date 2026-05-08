@@ -119,10 +119,12 @@ import {
 } from "../stores/settingsStore";
 import {
   isGroupableToolCall,
+  toolGroupKey,
   toolGroupItem,
   toolGroupLabel,
   toolHeader,
 } from "../components/provider-chat/toolPresentation";
+import { buildChatVisualRows } from "../components/provider-chat/useChatRows";
 import type { CreateCodexRequest, ProviderCreateRequest, ProviderSendRequest } from "../contracts/providerIpc";
 import type { ChatMessage } from "./types";
 
@@ -1570,6 +1572,7 @@ export function verifyDelegationWorkflowFixtures(): VerificationResult {
   assertEqual(openAiPlan.displayText, "/delegate split frontend and backend work", "delegation plan keeps user-facing command text");
   assert(openAiPlan.providerPrompt.includes("StartDelegation"), "delegation planner prompt asks for the MCP StartDelegation tool");
   assert(openAiPlan.providerPrompt.includes("<T64_START_DELEGATION>"), "delegation planner prompt includes provider-neutral fallback tag");
+  assert(openAiPlan.providerPrompt.includes("Do not try to load deferred tool schemas"), "delegation planner prompt avoids deferred-tool stalls");
   assert(!Object.prototype.hasOwnProperty.call(openAiPlan, "permissionOverride"), "OpenAI delegation planner does not invent an override");
 
   const cursorPlan = buildDelegationPlanRequest({
@@ -1922,6 +1925,9 @@ export function verifyProviderEventNormalizationFixtures(): VerificationResult {
   });
   assert(codexMcpCall, "Codex MCP tool call normalizes into a provider tool call");
   assertEqual(codexMcpCall.name, "mcp__terminal-64__send_to_team", "Codex MCP tool call uses Claude MCP naming");
+  const codexMcpPresentation = toolHeader(codexMcpCall);
+  assertEqual(codexMcpPresentation.title, "send_to_team", "MCP presentation shows the concrete tool as the title");
+  assert(codexMcpPresentation.detail.includes("MCP terminal-64"), "MCP presentation keeps the server in secondary detail");
 
   const failedResult = codexItemToProviderToolResult({
     id: "codex-failed",
@@ -1977,6 +1983,7 @@ export function verifyProviderEventNormalizationFixtures(): VerificationResult {
   assertEqual(cursorToolEvent.toolCall.name, "mcp__terminal-64__StartDelegation", "Cursor MCP tool name normalizes to Claude MCP naming");
   assertEqual(cursorToolEvent.toolCall.input.context, "shared context", "Cursor MCP nested args unwrap into provider input");
   assert(Array.isArray(cursorToolEvent.toolCall.input.tasks), "Cursor MCP nested task array is visible to delegation parser");
+  assertEqual(toolHeader(cursorToolEvent.toolCall).title, "StartDelegation", "Cursor MCP presentation uses the normalized tool name");
 
   const cursorRuntimeToolEnvelope = {
     type: "provider.tool",
@@ -2064,6 +2071,37 @@ export function verifyProviderEventNormalizationFixtures(): VerificationResult {
   const shellPresentation = toolGroupItem(shellCall);
   assertEqual(shellPresentation.status, "done", "presentation expanded group items expose tool status metadata");
   assertEqual(shellPresentation.resultSummary, "2 chars", "presentation expanded group items expose output summary metadata");
+  assertEqual(toolGroupKey(shellCall), "tool:Bash", "presentation grouping key uses normalized tool identity");
+  assertEqual(toolGroupKey(codexMcpCall), "mcp:terminal-64:send_to_team", "MCP grouping key uses server and concrete tool identity");
+
+  const groupedRows = buildChatVisualRows({
+    messages: [
+      { id: "user-grouping", role: "user", content: "inspect", timestamp: 1 },
+      { id: "read-one", role: "assistant", content: "", timestamp: 2, toolCalls: [
+        buildProviderToolCall({ id: "read-a", name: "read_file", input: { file: "src/a.ts" } }),
+      ] },
+      { id: "grep-one", role: "assistant", content: "", timestamp: 3, toolCalls: [
+        buildProviderToolCall({ id: "grep-a", name: "grep", input: { pattern: "alpha" } }),
+      ] },
+      { id: "grep-two", role: "assistant", content: "", timestamp: 4, toolCalls: [
+        buildProviderToolCall({ id: "grep-b", name: "grep", input: { pattern: "beta" } }),
+      ] },
+      { id: "bash-one", role: "assistant", content: "", timestamp: 5, toolCalls: [
+        buildProviderToolCall({ id: "bash-a", name: "exec_command", input: { cmd: "npm test" } }),
+      ] },
+    ] satisfies ChatMessage[],
+    autoCompactStatus: "idle",
+    autoCompactStartedAt: null,
+    isStreaming: false,
+  }, false, false);
+  const toolRows = groupedRows.filter((row) => row.kind === "tool" || row.kind === "group");
+  assertEqual(toolRows.length, 3, "mixed tool-only bursts split into ordered same-identity rows");
+  assert(toolRows[0]?.kind === "tool", "single Read remains its own tool row");
+  assert(toolRows[1]?.kind === "group", "consecutive Grep calls collapse together");
+  if (toolRows[1]?.kind === "group") {
+    assert(toolRows[1].tcs.every((tc) => tc.name === "Grep"), "grouped row contains only matching tool identities");
+  }
+  assert(toolRows[2]?.kind === "tool", "Bash does not merge into the Grep group");
 
   const cursorMcpStatus = cursorDecoder.decode("cursor-session", JSON.stringify({
     type: "mcp_status",

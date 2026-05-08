@@ -7,7 +7,7 @@ const CODE_EXTS = new Set([
   "ts", "tsx", "js", "jsx", "rs", "py", "go", "java", "json", "css", "scss",
   "html", "md", "yaml", "yml", "toml", "sh", "bash", "zsh", "sql", "xml",
   "swift", "kt", "rb", "c", "cpp", "h", "hpp", "vue", "svelte", "astro",
-  "lua", "zig", "hs", "ml", "ex", "exs", "php", "cs", "fs", "lock",
+  "lua", "luau", "zig", "hs", "ml", "ex", "exs", "php", "cs", "fs", "lock",
   "cfg", "ini", "conf", "env", "txt", "csv", "makefile", "dockerfile",
 ]);
 

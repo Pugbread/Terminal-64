@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-05-03T16:00:00.946Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-05-05T10:00:00.373Z
 > Files: 527 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ./
@@ -766,3 +766,51 @@
 
 - `__init__.py` (~34 tok)
 - `_build_config.py` — _build_config.py.in is converted into _build_config.py during the meson build process. (~569 tok)
+
+## src/
+
+- `App.tsx` — Main React app shell: mounts global hooks, command registrations, update/settings/dialog overlays, Discord session sync, and global Discord prompt fallback routing (~2400 tok)
+
+## src/components/canvas/
+
+- `Canvas.tsx` — Zoomable canvas renderer for floating panels, focus mode, empty state, zoom badge, and panel composition (~1800 tok)
+
+## src/components/provider-chat/
+
+- `ProviderChat.tsx` — Provider chat shell for Discord prompt intake, provider send/queue/reload/delegation flow, topbar, side panels, edit overlay, message list, and ChatInput wiring (~9000 tok)
+- `ChatInput.tsx` — Provider chat input with slash/file autocomplete, attachments, rewrite, queue/status display, and legacy dictation text helpers (~2500 tok)
+- `VoiceStatusBadge.tsx` — Legacy voice assistant status badge component, currently unused after wake-word assistant removal (~200 tok)
+- `VoiceLivePanel.tsx` — Legacy live voice assistant transcript/status panel, currently unused after wake-word assistant removal (~500 tok)
+- `VoiceMascot.tsx` — Legacy voice assistant mascot/status component, currently unused after wake-word assistant removal (~650 tok)
+
+## src/components/settings/
+
+- `SettingsPanel.tsx` — Settings dialog for appearance, providers, widgets/performance, Discord bot, Discord voice-message Whisper model download, theme generation, and OpenWolf daemon controls (~6500 tok)
+
+## src/lib/
+
+- `keybindingEngine.ts` — Default keyboard shortcuts and command-dispatch matcher for the app (~450 tok)
+- `languageDiagnostics.ts` — Shared frontend language diagnostics registry/helpers, currently Luau-backed, for file support, lint dispatch, badge summaries, and Monaco markers (~620 tok)
+- `luauMonacoLanguage.ts` — Monaco Lua/Luau language registration bridge for Luau LSP completion, hover, signature-help, and semantic-token requests from editor models (~900 tok)
+- `voiceApi.ts` — Tauri event/command wrappers for legacy voice assistant events and shared Whisper model download/status APIs used by Discord voice-message transcription (~500 tok)
+
+## src/hooks/
+
+- `useVoiceControl.ts` — Legacy wake-word voice assistant hook that starts/stops backend voice control and maps voice events into ChatInput actions; no longer mounted in App (~1200 tok)
+- `useLanguageDiagnostics.ts` — React hook and store bridge for editor diagnostics, provider modified-file linting, and diagnostics badge projection (~430 tok)
+
+## src/stores/
+
+- `voiceStore.ts` — Legacy voice assistant Zustand store plus ChatInput action registry and persisted voice model/wake-word metadata (~900 tok)
+
+## src-tauri/src/
+
+- `discord_bot.rs` — Discord gateway/bot manager: links channels to provider sessions, forwards provider output to Discord, downloads attachments, transcribes Discord voice notes with Whisper, and emits `discord-prompt` (~8000 tok)
+- `lib.rs` — Tauri command registry and app setup, including provider commands, rewrite prompt, file ops, widget/skill APIs, Discord bot commands, and legacy voice commands/model download (~12000 tok)
+- `mic_manager.rs` — Legacy local microphone capture manager for wake-word voice assistant audio frames (~1200 tok)
+- `voice_manager.rs` — Legacy backend wake-word/dictation state machine and voice intent orchestrator (~4500 tok)
+
+## src-tauri/src/language_tools/
+
+- `mod.rs` — Language tooling module entrypoint (~5 tok)
+- `luau.rs` — Luau diagnostics and editor language backend using luau-lsp stdio/analyze with read-only temp settings, cached Roblox definitions, temporary current Ro Sync sourcemap generation when available, and LSP completion/hover/signature help/semantic tokens (~3500 tok)

@@ -132,7 +132,12 @@ export function useDelegationSpawn({
                 agentLabel: childSpawn.agentLabel,
               },
             });
-            await runProviderTurn(turnInput);
+            const result = await runProviderTurn(turnInput);
+            const store = useProviderSessionStore.getState();
+            if (result.clearSeedTranscript) store.clearSeedTranscript(childSessionId);
+            if (result.clearResumeAtUuid) store.setResumeAtUuid(childSessionId, null);
+            if (result.clearForkParentSessionId) store.setForkParentSessionId(childSessionId, null);
+            store.incrementPromptCount(childSessionId);
           };
 
           startChild().catch((err) => {

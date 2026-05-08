@@ -222,6 +222,25 @@ export interface McpTool {
   description?: string;
 }
 
+export type LuauDiagnosticSeverity = "error" | "warning" | "info";
+
+export interface LuauDiagnostic {
+  path: string;
+  line: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+  code: string;
+  message: string;
+  severity: LuauDiagnosticSeverity;
+}
+
+export interface LuauLintResult {
+  path: string;
+  analyzer: string;
+  diagnostics: LuauDiagnostic[];
+}
+
 export interface ToolCall {
   id: string;
   name: string;

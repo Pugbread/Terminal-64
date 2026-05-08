@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { v4 as uuidv4 } from "uuid";
-import type { ChatMessage, ToolCall, McpTool, HookEvent, PermissionMode } from "../lib/types";
+import type { ChatMessage, ToolCall, McpTool, HookEvent, PermissionMode, LuauDiagnostic } from "../lib/types";
 import {
   normalizeProviderToolCall,
   normalizeProviderToolPatch,
@@ -915,6 +915,7 @@ export interface ProviderSession {
   ephemeral: boolean;
   mcpServers: McpServerStatus[];
   modifiedFiles: string[];
+  luauDiagnostics: LuauDiagnostic[];
   autoCompactStatus: "idle" | "compacting" | "done";
   autoCompactStartedAt: number | null;
   resumeAtUuid: string | null;
@@ -1025,6 +1026,7 @@ export interface ProviderSessionStoreState {
   setName: (sessionId: string, name: string) => void;
   setCwd: (sessionId: string, cwd: string) => void;
   setMcpServers: (sessionId: string, servers: McpServerStatus[]) => void;
+  setLuauDiagnostics: (sessionId: string, diagnostics: LuauDiagnostic[]) => void;
   enqueuePrompt: (sessionId: string, prompt: string | QueuedPromptInput) => void;
   dequeuePrompt: (sessionId: string) => QueuedPrompt | undefined;
   removeQueuedPrompt: (sessionId: string, promptId: string) => void;
@@ -1939,6 +1941,7 @@ const providerSessionStore = create<ProviderSessionStoreState>((set, get) => ({
           ephemeral: !!ephemeral,
           mcpServers: [],
           modifiedFiles: [],
+          luauDiagnostics: [],
           autoCompactStatus: "idle" as const,
           autoCompactStartedAt: null,
           resumeAtUuid: null,
@@ -2294,6 +2297,10 @@ const providerSessionStore = create<ProviderSessionStoreState>((set, get) => ({
 
   setMcpServers: (sessionId, servers) => {
     set((s) => ({ sessions: updateSession(s.sessions, sessionId, { mcpServers: servers }) }));
+  },
+
+  setLuauDiagnostics: (sessionId, diagnostics) => {
+    set((s) => ({ sessions: updateSession(s.sessions, sessionId, { luauDiagnostics: diagnostics }) }));
   },
 
   setProviderRuntimeMetadata: (sessionId, provider, patch) => {

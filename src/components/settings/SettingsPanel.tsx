@@ -19,7 +19,6 @@ import {
   readProviderSessionMetadataSnapshot,
   useProviderSessionStore,
 } from "../../stores/providerSessionStore";
-import { useVoiceStore } from "../../stores/voiceStore";
 import { useWidgetMetricsStore, type WidgetMetrics } from "../../stores/widgetMetricsStore";
 import { usePerformanceStore, type PerformanceDebugEvent } from "../../stores/performanceStore";
 import {
@@ -39,7 +38,7 @@ import {
   useProviderSnapshots,
 } from "../../lib/providerSnapshots";
 import { ProviderLogo } from "../ui/BrandLogos";
-import { downloadVoiceModel, voiceModelsStatus, onVoiceDownloadProgress, setVoiceSensitivity as setVoiceSensitivityBackend, type VoiceModelKind } from "../../lib/voiceApi";
+import { downloadVoiceModel, voiceModelsStatus, onVoiceDownloadProgress } from "../../lib/voiceApi";
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -527,23 +526,9 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
     return "";
   });
 
-  // Voice Control
-  const voiceEnabled = useVoiceStore((s) => s.enabled);
-  const voiceState = useVoiceStore((s) => s.state);
-  const voiceError = useVoiceStore((s) => s.error);
-  const voiceModels = useVoiceStore((s) => s.modelsDownloaded);
-  const setVoiceEnabled = useVoiceStore((s) => s.setEnabled);
-  const setVoiceModelsDownloaded = useVoiceStore((s) => s.setModelsDownloaded);
-  const voiceWakeWord = useVoiceStore((s) => s.wakeWord);
-  const setVoiceWakeWord = useVoiceStore((s) => s.setWakeWord);
-  const [voiceProgress, setVoiceProgress] = useState<Record<VoiceModelKind, number>>({ wake: 0, command: 0, dictation: 0 });
-  const [voiceDownloading, setVoiceDownloading] = useState<Record<VoiceModelKind, boolean>>({ wake: false, command: false, dictation: false });
-  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
-  const [voiceSensitivity, setVoiceSensitivity] = useState<number>(() => {
-    const v = Number(localStorage.getItem("terminal64-voice-sensitivity"));
-    return Number.isFinite(v) && v > 0 ? v : 0.5;
-  });
-  const [micDeviceId, setMicDeviceId] = useState<string>(() => localStorage.getItem("terminal64-voice-mic-device") || "default");
+  const [discordVoiceModelInstalled, setDiscordVoiceModelInstalled] = useState(false);
+  const [discordVoiceProgress, setDiscordVoiceProgress] = useState(0);
+  const [discordVoiceDownloading, setDiscordVoiceDownloading] = useState(false);
 
   const discordToken = useSettingsStore((s) => s.discordBotToken);
   const discordServerId = useSettingsStore((s) => s.discordServerId);
@@ -561,43 +546,35 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
       discordBotStatus().then(setBotConnected).catch(() => {});
       openwolfDaemonStatus().then(setWolfDaemonRunning).catch(() => {});
       voiceModelsStatus()
-        .then((m) => setVoiceModelsDownloaded(m))
+        .then((m) => setDiscordVoiceModelInstalled(!!m.dictation))
         .catch(() => {});
-      if (navigator.mediaDevices?.enumerateDevices) {
-        navigator.mediaDevices.enumerateDevices()
-          .then((all) => setMicDevices(all.filter((d) => d.kind === "audioinput")))
-          .catch(() => {});
-      }
     }
-  }, [isOpen, setVoiceModelsDownloaded]);
+  }, [isOpen]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     onVoiceDownloadProgress((p) => {
-      setVoiceProgress((prev) => ({ ...prev, [p.kind]: p.progress }));
+      if (p.kind !== "dictation") return;
+      setDiscordVoiceProgress(p.progress);
       if (p.progress >= 1) {
-        setVoiceDownloading((prev) => ({ ...prev, [p.kind]: false }));
+        setDiscordVoiceDownloading(false);
+        setDiscordVoiceModelInstalled(true);
       }
     }).then((un) => { unlisten = un; }).catch(() => {});
     return () => { if (unlisten) unlisten(); };
   }, []);
 
-  const handleDownloadVoiceModel = async (kind: VoiceModelKind) => {
-    setVoiceDownloading((prev) => ({ ...prev, [kind]: true }));
-    setVoiceProgress((prev) => ({ ...prev, [kind]: 0 }));
+  const handleDownloadDiscordVoiceModel = async () => {
+    setDiscordVoiceDownloading(true);
+    setDiscordVoiceProgress(0);
     try {
-      await downloadVoiceModel(kind);
+      await downloadVoiceModel("dictation");
+      setDiscordVoiceModelInstalled(true);
     } catch (err) {
-      alert(`Failed to download ${kind} model: ${err}`);
-      setVoiceDownloading((prev) => ({ ...prev, [kind]: false }));
+      alert(`Failed to download Discord voice transcription model: ${err}`);
+      setDiscordVoiceDownloading(false);
     }
   };
-
-  const voiceModelMeta: { kind: VoiceModelKind; label: string; sizeMB: number }[] = [
-    { kind: "wake", label: "Wake Word (Jarvis)", sizeMB: 2 },
-    { kind: "command", label: "Command STT (Moonshine)", sizeMB: 40 },
-    { kind: "dictation", label: "Dictation (whisper.cpp)", sizeMB: 80 },
-  ];
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1084,115 +1061,6 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
             </div>
           </Section>
 
-          {/* Voice Control */}
-          <Section label="Voice Control" icon="🎤" defaultOpen={false}>
-            <div className="sp-row">
-              <label className="sp-label">
-                Enabled
-                <span className={`sp-dot ${voiceEnabled ? "sp-dot--on" : ""}`} />
-                <span className="sp-hint-inline">Always-on wake word ("Jarvis")</span>
-              </label>
-              <Toggle checked={voiceEnabled} onChange={(v) => setVoiceEnabled(v)} />
-            </div>
-
-            {voiceEnabled && (
-              <div className="sp-sub">
-                <div className="sp-row">
-                  <label className="sp-label">Status</label>
-                  <span className="sp-value" style={voiceError ? { color: "#f38ba8" } : undefined}>
-                    {voiceError ? `Error: ${voiceError}` : voiceState === "listening" ? "Listening for 'Jarvis'" : voiceState === "dictating" ? "Dictating" : "Idle"}
-                  </span>
-                </div>
-
-                <div className="sp-row sp-row--col">
-                  <label className="sp-label">Wake Word</label>
-                  <select
-                    className="sp-select"
-                    value={voiceWakeWord}
-                    onChange={(e) => setVoiceWakeWord(e.target.value as "jarvis" | "t64")}
-                  >
-                    <option value="jarvis">Hey Jarvis (stock)</option>
-                    <option value="t64">T Six Four (custom, requires training)</option>
-                  </select>
-                  <span className="sp-hint">
-                    {voiceWakeWord === "t64"
-                      ? "Drop t_six_four.onnx into ~/.terminal64/stt-models/wake/t64/ — see docs/wake-training.md. Falls back to Jarvis if missing."
-                      : "Built-in openWakeWord model."}
-                  </span>
-                </div>
-
-                <div className="sp-row sp-row--col">
-                  <div className="sp-row">
-                    <label className="sp-label">Wake Sensitivity</label>
-                    <span className="sp-value">{Math.round(voiceSensitivity * 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    className="sp-range"
-                    min={10}
-                    max={100}
-                    value={Math.round(voiceSensitivity * 100)}
-                    onChange={(e) => {
-                      const v = Number(e.target.value) / 100;
-                      setVoiceSensitivity(v);
-                      localStorage.setItem("terminal64-voice-sensitivity", String(v));
-                      // Push live to the backend so the change takes effect
-                      // without restarting voice. Ignored if voice is off.
-                      void setVoiceSensitivityBackend(v).catch(() => {});
-                    }}
-                  />
-                  <span className="sp-hint">Higher = more triggers, but more false positives</span>
-                </div>
-
-                <div className="sp-row sp-row--col">
-                  <label className="sp-label">Microphone</label>
-                  <select
-                    className="sp-select"
-                    value={micDeviceId}
-                    onChange={(e) => {
-                      setMicDeviceId(e.target.value);
-                      localStorage.setItem("terminal64-voice-mic-device", e.target.value);
-                    }}
-                  >
-                    <option value="default">System Default</option>
-                    {micDevices.map((d) => (
-                      <option key={d.deviceId} value={d.deviceId}>
-                        {d.label || `Microphone ${d.deviceId.slice(0, 6)}`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            )}
-
-            <div className="sp-sub">
-              <span className="sp-hint">Models (downloaded to ~/.terminal64/stt-models/)</span>
-              {voiceModelMeta.map((m) => {
-                const downloaded = voiceModels[m.kind];
-                const downloading = voiceDownloading[m.kind];
-                const progress = voiceProgress[m.kind];
-                return (
-                  <div key={m.kind} className="sp-row" style={{ gap: 8 }}>
-                    <label className="sp-label" style={{ flex: 1 }}>
-                      {m.label}
-                      <span className={`sp-dot ${downloaded ? "sp-dot--on" : ""}`} />
-                      <span className="sp-hint-inline">~{m.sizeMB} MB</span>
-                    </label>
-                    <button
-                      className="sp-btn sp-btn--small"
-                      disabled={downloading || downloaded}
-                      onClick={() => handleDownloadVoiceModel(m.kind)}
-                    >
-                      {downloaded ? "Installed" : downloading ? `${Math.round(progress * 100)}%` : "Download"}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-
-            <span className="sp-hint">Toggle with Ctrl+Shift+V. Commands: "Jarvis send", "Jarvis exit", "Jarvis rewrite", "Jarvis switch to &lt;session&gt;".</span>
-          </Section>
-
           {/* Discord */}
           <Section label="Discord Bot" icon="⊕" defaultOpen={false}>
             <div className="sp-row">
@@ -1201,6 +1069,28 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                 <span className={`sp-dot ${botConnected ? "sp-dot--on" : ""}`} />
               </label>
               <span className="sp-value">{botConnected ? "Connected" : "Disconnected"}</span>
+            </div>
+
+            <div className="sp-sub">
+              <div className="sp-row" style={{ gap: 8 }}>
+                <label className="sp-label" style={{ flex: 1 }}>
+                  Voice Message Transcription
+                  <span className={`sp-dot ${discordVoiceModelInstalled ? "sp-dot--on" : ""}`} />
+                  <span className="sp-hint-inline">Whisper model, ~80 MB</span>
+                </label>
+                <button
+                  className="sp-btn sp-btn--small"
+                  disabled={discordVoiceDownloading || discordVoiceModelInstalled}
+                  onClick={handleDownloadDiscordVoiceModel}
+                >
+                  {discordVoiceModelInstalled
+                    ? "Installed"
+                    : discordVoiceDownloading
+                      ? `${Math.round(discordVoiceProgress * 100)}%`
+                      : "Download"}
+                </button>
+              </div>
+              <span className="sp-hint">Discord voice messages are transcribed locally, echoed back to Discord, then routed into the linked chat as a normal prompt.</span>
             </div>
 
             <input

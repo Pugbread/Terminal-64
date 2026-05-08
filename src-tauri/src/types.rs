@@ -78,6 +78,28 @@ pub struct ProviderEventEnvelope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LuauDiagnostic {
+    pub path: String,
+    pub line: u32,
+    #[serde(rename = "startColumn")]
+    pub start_column: u32,
+    #[serde(rename = "endLine")]
+    pub end_line: u32,
+    #[serde(rename = "endColumn")]
+    pub end_column: u32,
+    pub code: String,
+    pub message: String,
+    pub severity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LuauLintResult {
+    pub path: String,
+    pub analyzer: String,
+    pub diagnostics: Vec<LuauDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSnapshot {
     pub id: String,

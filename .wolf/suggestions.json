@@ -1,35 +1,44 @@
 {
-  "generated_at": "2026-04-27T02:00:42.981Z",
+  "generated_at": "2026-05-04T02:00:40.376Z",
   "achievements": [
-    "Shipped Windows compatibility pass across backend (PATHEXT/cmd shim, reserved-name sanitize), frontend (platform.ts, path helpers), and bundle config (NSIS lzma, webview2 min version)",
-    "Built end-to-end voice control: VAD hysteresis, whisper.cpp Metal-prewarmed dictation, LocalAgreement-2 two-span render (committed + tentative), windowed incremental decode with 500ms watchdog, jarvis-as-boundary command parsing",
-    "Reverse skill bridge syncs ~/.claude/skills into ~/.terminal64/skills with symlinks, sidecar metadata, and Haiku-backfilled descriptions",
-    "Big-workflow stability sweep: PTY/provider/permission/widget cleanup paths, JSONL truncate-by-message audit fixes, canvas/claude/delegation store persistence with idle/quota fallback",
-    "Renderer hot-path patch: chat drag-drop routed by cursor proximity, guarded pan/zoom subscriptions, embedded widget-browser RAF loop replaced with event-coalesced ResizeObserver",
-    "Event parser hardening: top-level error handler, stream_request_start, thinking-block aware deltas, stop_reason surface for refusal/max_tokens",
-    "Codex MCP connected-status mapping + dropdown dedupe of T64 aliases across live/config entries"
+    "Provider abstraction overhaul: generic control descriptors, providerOptions buckets, runtime metadata, adapter-owned snapshots/capabilities, ProviderRuntimeEvent envelopes, and conformance fixtures across Claude/Codex/Cursor",
+    "Fixed multiple persistence regressions: row-level provider metadata writes, synchronous transcript saves on Codex/Cursor, quota fallback chain, and Codex stale resume id recovery",
+    "Cursor delegation child MCP wiring: child turns now write real T64 delegation env into .cursor/mcp.json with auto-approval",
+    "Removed party-mode (frontend + backend + audio deps) and reorganized Settings into provider-owned cards",
+    "Added focus mode for provider chats (X keybind) with screen-centered geometry, inverse-zoom counter-scaling, 65vw width, and snap geometry to avoid scale tween artifacts",
+    "Skill integration: bounded skill catalog + matched SKILL.md bodies injected into prompts; system-reminder blocks stripped from visible chat/history",
+    "Tightened prompt rewriter to Sonnet high-effort with concise structured guidance and source_prompt boundaries",
+    "External link handler: chat markdown links now open in OS default browser instead of inside the Tauri WebView",
+    "Roblox toolchain PATH expansion (Aftman/Rokit/Foreman/Wally) so luau-lsp resolves under provider CLIs",
+    "MCP config insertion now merges instead of clobbering unrelated provider MCP entries"
   ],
   "improvements": [
-    "Dirty working tree across 22 files (browser_manager, lib.rs, permission_server, providers/*, pty_manager, widget_server, Canvas, ClaudeChat, XTerminal, BrowserPanel, WidgetPanel, useClaudeEvents, canvasStore, claudeStore, delegationStore) — split into reviewable commits before more work lands",
-    "lib.rs is ~70k tokens; the recent stability tests were placed there per buglog note — extract command handlers into per-domain modules (file_ops, history, checkpoints, theme, party) to reduce cognitive load and recompile times",
-    "Test coverage is thin given the surface area: only 8 intent tests + 7 command_stt tests + new JSONL/util guards. Add provider-event golden fixtures and a permission_server integration test",
-    "Voice subsystem has many tunable thresholds (VAD 0.5/0.35, silence frames 9, min_new_samples 120ms, decode watchdog 500ms) — promote to a single tuning struct + `voice_run_fixtures` regression run on PR",
-    "Memory/anatomy.md is dominated by venv contents — exclude scripts/.wake-venv/ from anatomy scanner to keep the index actionable"
+    "Drop legacy compatibility mirrors (selectedModel/selectedEffort/selectedCodexPermission/codexThreadId) once all call sites are migrated — currently kept as shims, ripe for removal",
+    "Frontend providerSnapshots still has static manifest fallback duplicating backend descriptors; collapse to single backend-owned source like t3code",
+    "Hydrate server PATH from login shell/launchctl/PowerShell at startup (per t3code research) instead of only patching at provider spawn",
+    "Per-provider binary/env override settings (t3code parity) — currently providers use a single shared resolver",
+    "Vite build still emits chunk-size and dynamic-import warnings; address with manualChunks and consistent import strategy",
+    "Consolidate the many delegation team-chat .md files at repo root into a subdirectory or .gitignore them — they pollute the root",
+    "Replace deprecated ProviderTurnInput legacy field reads with explicit selectedControls/runtimeMetadata-only paths (TypeScript can enforce)"
   ],
   "next_tasks": [
-    "Stage and commit the 22 dirty files in 3-4 logical commits: (a) backend lifecycle cleanup, (b) frontend hot-path + store persistence, (c) provider/event/MCP fixes, (d) widget/browser panel patches",
-    "Run cargo clippy --all-targets across the dirty Rust files; the 03:19 entry noted Clippy was blocked by parallel edits — confirm clean now before pushing",
-    "Verify CI invariants locally: tsc --noEmit, cargo fmt --check, cargo clippy -D warnings, cargo check for all 3 targets if possible",
-    "Backfill an integration test for the new permission_server pending-cleanup path (bug-046) — easy regression target",
-    "Add anatomy.md ignore rule for scripts/.wake-venv/** so future scans don't waste tokens on venv internals",
-    "Tag a release candidate once committed — release.yml is already wired for draft releases; signing is still TODO per CLAUDE.md so note that in the draft"
+    "Remove ProviderTurnInput legacy fields and the selectedModel/selectedEffort compatibility mirrors; rely on selectedControls/providerOptions exclusively",
+    "Make providerSnapshots fully backend-owned (drop frontend static fallback) and add a snapshot-versioning/cache-invalidation contract",
+    "Implement startup PATH hydration (shell/launchctl/PowerShell) and per-provider binary/env settings UI",
+    "Long-path manifest for Windows (was deferred during Windows compat pass) — revisit now that tauri-build behavior is understood",
+    "Add CI job to run cargo test providers:: and the providerConformance/providerModularity verification fixtures so regressions surface before merge",
+    "Move root-level terminal64-delegation-*.md logs into a dedicated directory (e.g. .terminal64-logs/) and gitignore",
+    "Sign macOS/Windows builds (Apple notarytool + Azure Trusted Signing) — release workflow ships unsigned today",
+    "Audit remaining hardcoded model/effort references in delegation child runtime and provider scaffold script"
   ],
   "risks": [
-    "Unsigned macOS/Windows builds — Apple notarytool + Azure Trusted Signing secrets still missing; first-launch UX is right-click→Open. Decide whether to ship vN unsigned or hold for signing keys",
-    "voice/whisper.rs is flagged as load-bearing in CLAUDE.md (anti-hallucination reconciliation); recent windowed-decode + AgreementBuffer rewrite is large and lightly tested — high risk of subtle regression in long-utterance dictation",
-    "permission_server, widget_server, PTY spawning, and Discord bot are the exposed surfaces in SECURITY.md; recent lifecycle fixes touched all four — schedule a focused security review (or run /security-review) before tagging",
-    "claudeStore + delegationStore now have quota-fallback persistence with pruning logic — if pruning is too aggressive, users lose session metadata silently. Add telemetry/log when prune fires",
-    "lib.rs concentration is a bus factor + merge-conflict risk; the 03:30 entry already had a duplicate buglog id from parallel agent edits — likely to repeat",
-    "Codex provider (~55k tok) is the largest single file and changed recently; provider events, rollback/fork, and exec transport in one module is hard to reason about for incident response"
+    "Compatibility shims (selectedCodexPermission, codexThreadId, selectedModel/effort) are still read in fallback paths — silent regressions possible if a new provider forgets to populate the canonical fields",
+    "Provider metadata persistence has 4-tier quota fallback (full → compact → active-only → no-transcript); complex code path with high test surface, fragile under localStorage pressure",
+    "Frontend snapshot static fallback can drift from backend descriptors — already observed during provider-control schema migrations",
+    "voice/whisper.rs and useVoiceControl.ts marked load-bearing in CLAUDE.md but have grown complex (windowed decode, AgreementBuffer, jarvis word-eat) — regression risk on any voice edit",
+    "Unsigned binaries: macOS gatekeeper friction for end users until Apple notarytool secrets are added",
+    "Widget HTTP server, permission server, PTY spawn, and Discord bot are the exposed surfaces per SECURITY.md — recent edits to permission server and Discord session tracking need a focused security review",
+    "Delegation team-chat .md files are accumulating at repo root and being committed; potential to leak conversational content from past sessions",
+    "buglog.json now has 180+ entries — without periodic consolidation, future sessions waste tokens scanning it before fixes"
   ]
 }

@@ -23,6 +23,7 @@ macro_rules! safe_println {
 mod browser_manager;
 mod claude_manager;
 mod discord_bot;
+mod language_tools;
 mod mic_manager;
 mod permission_mcp;
 mod permission_server;
@@ -168,6 +169,7 @@ const SKIP_DIRS: &[&str] = &[
     "__pycache__",
     ".venv",
     "vendor",
+    ".t64",
 ];
 
 fn session_project_dir(cwd: &str) -> Result<std::path::PathBuf, String> {
@@ -2505,7 +2507,64 @@ fn read_file(path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn write_file(path: String, content: String) -> Result<(), String> {
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
+        }
+    }
     std::fs::write(&path, &content).map_err(|e| format!("Failed to write {}: {}", path, e))
+}
+
+#[tauri::command]
+async fn lint_luau_file(
+    path: String,
+    content: Option<String>,
+    cwd: Option<String>,
+) -> Result<LuauLintResult, String> {
+    language_tools::luau::lint_luau_file(path, content, cwd).await
+}
+
+#[tauri::command]
+async fn luau_lsp_completion(
+    path: String,
+    content: String,
+    cwd: Option<String>,
+    line: u32,
+    column: u32,
+) -> Result<serde_json::Value, String> {
+    language_tools::luau::luau_lsp_completion(path, content, cwd, line, column).await
+}
+
+#[tauri::command]
+async fn luau_lsp_hover(
+    path: String,
+    content: String,
+    cwd: Option<String>,
+    line: u32,
+    column: u32,
+) -> Result<serde_json::Value, String> {
+    language_tools::luau::luau_lsp_hover(path, content, cwd, line, column).await
+}
+
+#[tauri::command]
+async fn luau_lsp_signature_help(
+    path: String,
+    content: String,
+    cwd: Option<String>,
+    line: u32,
+    column: u32,
+) -> Result<serde_json::Value, String> {
+    language_tools::luau::luau_lsp_signature_help(path, content, cwd, line, column).await
+}
+
+#[tauri::command]
+async fn luau_lsp_semantic_tokens(
+    path: String,
+    content: String,
+    cwd: Option<String>,
+) -> Result<serde_json::Value, String> {
+    language_tools::luau::luau_lsp_semantic_tokens(path, content, cwd).await
 }
 
 #[tauri::command]
@@ -6231,6 +6290,11 @@ pub fn run() {
             delete_session_jsonl,
             read_file,
             write_file,
+            lint_luau_file,
+            luau_lsp_completion,
+            luau_lsp_hover,
+            luau_lsp_signature_help,
+            luau_lsp_semantic_tokens,
             list_mcp_servers,
             list_directory,
             get_delegation_port,

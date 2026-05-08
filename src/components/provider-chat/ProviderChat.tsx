@@ -52,7 +52,6 @@ import ChatMessageList from "./ChatMessageList";
 import { findPromptVisualRowIndex, useChatRows } from "./useChatRows";
 import { PlanFinishedActions, PlanViewer } from "./PlanViewer";
 import { parseCodexPlanCommand, useChatPlanMode } from "./useChatPlanMode";
-import { registerChatInputVoiceActions, unregisterChatInputVoiceActions, useVoiceStore, type ChatInputVoiceActions } from "../../stores/voiceStore";
 import { useDelegationStore } from "../../stores/delegationStore";
 import { endDelegation } from "../../hooks/useDelegationOrchestrator";
 import { useChatSend } from "../../hooks/useChatSend";
@@ -1143,22 +1142,6 @@ export function ProviderChat({ sessionId, cwd, skipPermissions, isActive, initia
     }
   }, [sessionId]);
 
-  // Voice control — register/unregister ChatInput actions for this session
-  const handleRegisterVoiceActions = useCallback((actions: ChatInputVoiceActions | null) => {
-    if (actions) {
-      registerChatInputVoiceActions(sessionId, actions);
-    } else {
-      unregisterChatInputVoiceActions(sessionId);
-    }
-  }, [sessionId]);
-  useEffect(() => {
-    return () => { unregisterChatInputVoiceActions(sessionId); };
-  }, [sessionId]);
-
-  // Keep voiceStore's activeSessionId in sync so voice intents target this chat
-  useEffect(() => {
-    if (isActive) useVoiceStore.getState().setActiveSessionId(sessionId);
-  }, [isActive, sessionId]);
   const extractAffectedFiles = useCallback((messageId: string): AffectedFile[] => {
     const sess = useProviderSessionStore.getState().sessions[sessionId];
     if (!sess) return [];
@@ -1476,12 +1459,15 @@ export function ProviderChat({ sessionId, cwd, skipPermissions, isActive, initia
   const lastDelegationParsed = useRef<string | null>(null);
   useEffect(() => {
     return subscribeProviderDelegationRequests((event) => {
-      if (event.sessionId !== sessionId || !delegateRequested.current) return;
+      if (event.sessionId !== sessionId) return;
+      if (!delegateRequested.current && event.source !== "tool") return;
       const eventKey = event.toolId ?? `${event.source}:${event.request.tasks.map((task) => task.description).join("|")}`;
       if (lastDelegationParsed.current === eventKey) return;
       lastDelegationParsed.current = eventKey;
       delegateRequested.current = false;
-      spawnDelegation(event.request.tasks, event.request.context);
+      spawnDelegation(event.request.tasks, event.request.context).catch((err) => {
+        useProviderSessionStore.getState().setError(sessionId, `Delegation spawn failed: ${err}`);
+      });
     });
   }, [sessionId, spawnDelegation]);
 
@@ -1634,82 +1620,84 @@ export function ProviderChat({ sessionId, cwd, skipPermissions, isActive, initia
       data-session-id={sessionId}
     >
       {/* Topbar */}
-      <div className="cc-topbar">
-        <button className={`cc-filetree-toggle ${showFileTree ? "cc-filetree-toggle--open" : ""}`} onClick={() => setShowFileTree((v) => !v)} title="Toggle file browser">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1L7 5L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-        </button>
-        <div className="cc-topbar-center">
-          <ProviderControls
-            configuredMcpServers={configMcpServers}
-            liveMcpServers={liveMcp}
-            provider={selectedProvider}
-            selectedControls={selectedControlValues}
-            onSelectControl={handleSelectControl}
-            onMcpOpen={() => {
-              if (effectiveCwd) listMcpServers(effectiveCwd).then(setConfigMcpServers).catch(() => {});
-            }}
-          />
-        </div>
+      {!editOverlay && (
+        <div className="cc-topbar">
+          <button className={`cc-filetree-toggle ${showFileTree ? "cc-filetree-toggle--open" : ""}`} onClick={() => setShowFileTree((v) => !v)} title="Toggle file browser">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1L7 5L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </button>
+          <div className="cc-topbar-center">
+            <ProviderControls
+              configuredMcpServers={configMcpServers}
+              liveMcpServers={liveMcp}
+              provider={selectedProvider}
+              selectedControls={selectedControlValues}
+              onSelectControl={handleSelectControl}
+              onMcpOpen={() => {
+                if (effectiveCwd) listMcpServers(effectiveCwd).then(setConfigMcpServers).catch(() => {});
+              }}
+            />
+          </div>
 
-        <div className="cc-topbar-right">
-          {totalToolCalls > 0 && (
-            <span className="ch-tool-badge" title={`${totalToolCalls} tool calls this session`}>
-              {totalToolCalls} tools
-            </span>
-          )}
-          {compactionCount > 0 && (
-            <span className="ch-compact-badge" title={`Compacted ${compactionCount} time${compactionCount > 1 ? "s" : ""}`}>
-              {compactionCount}×
-            </span>
-          )}
-          {/* Context % moved to bottom-right status line in ChatInput */}
-          {providerSupports(selectedProvider, "hookLog") && (
+          <div className="cc-topbar-right">
+            {totalToolCalls > 0 && (
+              <span className="ch-tool-badge" title={`${totalToolCalls} tool calls this session`}>
+                {totalToolCalls} tools
+              </span>
+            )}
+            {compactionCount > 0 && (
+              <span className="ch-compact-badge" title={`Compacted ${compactionCount} time${compactionCount > 1 ? "s" : ""}`}>
+                {compactionCount}×
+              </span>
+            )}
+            {/* Context % moved to bottom-right status line in ChatInput */}
+            {providerSupports(selectedProvider, "hookLog") && (
+              <button
+                className={`ch-log-toggle ${showHookLog ? "ch-log-toggle--active" : ""}`}
+                onClick={() => setShowHookLog((v) => !v)}
+                title="Toggle hook activity log"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 3h8M2 6h6M2 9h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                </svg>
+                {hookEventLog.length > 0 && <span className="ch-log-count">{hookEventLog.length}</span>}
+              </button>
+            )}
+            {hasSideContent && (
+              <button
+                className={`cc-panel-toggle ${sidePanelOpen ? "cc-panel-toggle--active" : ""}`}
+                onClick={() => setSidePanelOpen((v) => !v)}
+                title="Toggle side panel"
+              >
+                ☰
+              </button>
+            )}
             <button
-              className={`ch-log-toggle ${showHookLog ? "ch-log-toggle--active" : ""}`}
-              onClick={() => setShowHookLog((v) => !v)}
-              title="Toggle hook activity log"
+              className="cc-refresh-btn"
+              onClick={() => {
+                // Cancel running process + reset UI state, then reload the
+                // active provider's persisted transcript.
+                {
+                  const rp = sessionProviderFor(sessionId);
+                  cancelByProvider(sessionId, rp).catch(() => {});
+                  closeByProvider(sessionId, rp).catch(() => {});
+                }
+                const store = useProviderSessionStore.getState();
+                store.setStreaming(sessionId, false);
+                store.setError(sessionId, null);
+                store.clearStreamingText(sessionId);
+                if (!store.sessions[sessionId] || !effectiveCwd) return;
+                store.refreshFromHistory(sessionId, effectiveCwd).catch(() => {});
+              }}
+              title="Refresh chat (cancel in-flight request, reload provider history)"
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M2 3h8M2 6h6M2 9h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                <path d="M1.5 6A4.5 4.5 0 0 1 10 3.5M10.5 6A4.5 4.5 0 0 1 2 8.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                <path d="M10 1v3h-3M2 11V8h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
-              {hookEventLog.length > 0 && <span className="ch-log-count">{hookEventLog.length}</span>}
             </button>
-          )}
-          {hasSideContent && (
-            <button
-              className={`cc-panel-toggle ${sidePanelOpen ? "cc-panel-toggle--active" : ""}`}
-              onClick={() => setSidePanelOpen((v) => !v)}
-              title="Toggle side panel"
-            >
-              ☰
-            </button>
-          )}
-          <button
-            className="cc-refresh-btn"
-            onClick={() => {
-              // Cancel running process + reset UI state, then reload the
-              // active provider's persisted transcript.
-              {
-                const rp = sessionProviderFor(sessionId);
-                cancelByProvider(sessionId, rp).catch(() => {});
-                closeByProvider(sessionId, rp).catch(() => {});
-              }
-              const store = useProviderSessionStore.getState();
-              store.setStreaming(sessionId, false);
-              store.setError(sessionId, null);
-              store.clearStreamingText(sessionId);
-              if (!store.sessions[sessionId] || !effectiveCwd) return;
-              store.refreshFromHistory(sessionId, effectiveCwd).catch(() => {});
-            }}
-            title="Refresh chat (cancel in-flight request, reload provider history)"
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M1.5 6A4.5 4.5 0 0 1 10 3.5M10.5 6A4.5 4.5 0 0 1 2 8.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-              <path d="M10 1v3h-3M2 11V8h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {showHookLog && (
         <div className="ch-log-panel">
@@ -1751,6 +1739,7 @@ export function ProviderChat({ sessionId, cwd, skipPermissions, isActive, initia
               saveFileContent={writeFile}
               rememberContent={rememberEditOverlayContent}
               onClose={closeEditOverlay}
+              cwd={effectiveCwd}
             />
           ) : showPlanViewer && planContent ? (
             <PlanViewer content={planContent} variant="main" />
@@ -1940,7 +1929,6 @@ export function ProviderChat({ sessionId, cwd, skipPermissions, isActive, initia
                   supportsImages={providerSupports(selectedProvider, "images")}
                   contextPct={session.contextMax > 0 ? Math.min(100, Math.max(0, Math.round((session.contextUsed / session.contextMax) * 100))) : 0}
                   autoCompactAt={autoCompactEnabled && supportsCompact ? autoCompactThreshold : 0}
-                  {...(isActive ? { onRegisterVoiceActions: handleRegisterVoiceActions } : {})}
                   sessionId={sessionId}
                 />
               </>

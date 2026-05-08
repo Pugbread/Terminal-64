@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Toaster } from "sonner";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import Canvas from "./components/canvas/Canvas";
 import CommandPalette from "./components/command-palette/CommandPalette";
 import SettingsPanel from "./components/settings/SettingsPanel";
@@ -13,9 +13,7 @@ import { useTheme } from "./hooks/useTheme";
 import { useKeybindings } from "./hooks/useKeybindings";
 import { useProviderEvents } from "./hooks/useProviderEvents";
 import { useDelegationOrchestrator } from "./hooks/useDelegationOrchestrator";
-import { useVoiceControl } from "./hooks/useVoiceControl";
 import { usePerformanceMonitor } from "./hooks/usePerformanceMonitor";
-import { useVoiceStore } from "./stores/voiceStore";
 import { useCanvasStore } from "./stores/canvasStore";
 import { useThemeStore } from "./stores/themeStore";
 import { useSettingsStore } from "./stores/settingsStore";
@@ -125,7 +123,6 @@ function App() {
   useKeybindings();
   useProviderEvents();
   useDelegationOrchestrator();
-  useVoiceControl();
   usePerformanceMonitor();
 
   const [widgetDropOver, setWidgetDropOver] = useState(false);
@@ -332,13 +329,6 @@ function App() {
     });
 
     registerCommand({
-      id: "voice.toggle",
-      label: "Toggle Voice Control",
-      category: "Voice",
-      execute: () => useVoiceStore.getState().toggleEnabled(),
-    });
-
-    registerCommand({
       id: "claude.newSession",
       label: "New Provider Session (same folder)",
       category: "Provider",
@@ -379,6 +369,38 @@ function App() {
         execute: () => useThemeStore.getState().setTheme(theme.name),
       });
     }
+  }, []);
+
+  // Discord voice/text prompts normally route through the mounted ProviderChat
+  // listener. If the linked panel is closed, reopen it and replay the same
+  // event so it still enters the normal handleSend path.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen<{ session_id: string; username: string; prompt: string }>(
+      "discord-prompt",
+      (event) => {
+        const { session_id, username } = event.payload;
+        const canvas = useCanvasStore.getState();
+        const hasMountedPanel = canvas.terminals.some(
+          (t) => t.panelType === "claude" && t.terminalId === session_id && !t.poppedOut,
+        );
+        if (hasMountedPanel) return;
+
+        const session = useProviderSessionStore.getState().sessions[session_id];
+        if (!session) {
+          console.warn("[discord] Prompt arrived for unknown session:", session_id);
+          return;
+        }
+
+        canvas.addClaudeTerminal(session.cwd || "", false, session.name || username, session_id);
+        window.setTimeout(() => {
+          emit("discord-prompt", event.payload).catch((err) => {
+            console.warn("[discord] Failed to replay prompt after opening panel:", err);
+          });
+        }, 250);
+      },
+    ).then((fn) => { unlisten = fn; }).catch((err) => console.warn("[discord] listener failed:", err));
+    return () => { if (unlisten) unlisten(); };
   }, []);
 
   // Reactively rename Discord channels when a provider-backed session's name/cwd changes.
@@ -441,18 +463,6 @@ function App() {
             closeTerminal(t.terminalId).catch(() => {});
           }
         }
-      }
-    });
-    return unsub;
-  }, []);
-
-  // Voice: when SelectSession intent flips activeSessionId, focus that panel on the canvas
-  useEffect(() => {
-    const unsub = useVoiceStore.subscribe((state, prev) => {
-      if (state.activeSessionId && state.activeSessionId !== prev.activeSessionId) {
-        const canvas = useCanvasStore.getState();
-        const target = canvas.terminals.find((t) => t.terminalId === state.activeSessionId);
-        if (target) canvas.setActive(target.terminalId);
       }
     });
     return unsub;

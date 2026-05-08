@@ -90,7 +90,7 @@ Call ${startToolName} with:
 - context: one paragraph of shared context all agents need
 - tasks: an array of 2-8 objects, each with a description field and optional agentName field
 
-If ${startToolName} is not available in your tool registry, output exactly this fallback shape and no other text:
+If ${startToolName} is not immediately callable, not available in your tool registry, deferred, or shown with an unloaded schema, output exactly this fallback shape and no other text:
 <${fallbackTagName}>
 {"context":"one paragraph of shared context","tasks":[{"agentName":"Builder","description":"specific independent task 1"},{"agentName":"Verifier","description":"specific independent task 2"}]}
 </${fallbackTagName}>
@@ -100,6 +100,7 @@ Rules:
 - Keep task descriptions specific and actionable
 - The context should include project info, constraints, and the overall goal
 - Fewer focused agents > many tiny agents. If two things are tightly coupled, keep them in one task
+- Do not try to load deferred tool schemas, use ToolSearch, or explain that a tool is unavailable
 - Call ${startToolName} immediately if available; otherwise use the fallback JSON tag immediately.`;
 }
 

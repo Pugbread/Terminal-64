@@ -3803,6 +3803,547 @@
       ],
       "occurrences": 1,
       "last_seen": "2026-05-03T18:03:36Z"
+    },
+    {
+      "id": "bug-200",
+      "timestamp": "2026-05-05T13:37:09Z",
+      "error_message": "Claude delegation children could start without active Terminal 64 team MCP tools, so agents saw no read_team/send_to_team/report_done path.",
+      "file": "src-tauri/src/providers/claude.rs, src/components/provider-chat/ProviderChat.tsx, src/hooks/useDelegationSpawn.ts, src/lib/delegationWorkflow.ts",
+      "root_cause": "Claude delegation child launches used a temp MCP config for active terminal-64 delegation and a separate approver MCP config for the t64 permission tool. The approver config was also merged with project .mcp.json, so duplicate --mcp-config handling could leave Claude using a standalone terminal-64 server instead of the active delegation server. Separately, the frontend ignored successful live StartDelegation MCP calls unless a local delegateRequested ref was still true. The planner prompt also allowed Claude to stall on deferred StartDelegation schema loading instead of using the JSON fallback.",
+      "fix": "Merged only the t64 approver server into the primary delegation MCP config, skipped the second --mcp-config when the primary already contains the approver server, and kept the active terminal-64 env untouched. Live StartDelegation MCP tool calls are now authoritative and spawn delegation even if the local /delegate flag was missed, while text fallback remains gated. Delegation child launches now increment prompt bookkeeping after spawning. The /delegate planner prompt now tells providers to use the fallback tag immediately when StartDelegation is deferred or schema-unloaded.",
+      "tags": [
+        "delegation",
+        "mcp",
+        "claude",
+        "team-chat",
+        "provider-runtime"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-05T13:37:09Z"
+    },
+    {
+      "id": "bug-201",
+      "timestamp": "2026-05-06T15:44:48Z",
+      "error_message": "Tool-call styling did not follow the active Terminal 64 theme and looked visually out of place.",
+      "file": "src/components/provider-chat/ProviderChat.css",
+      "root_cause": "The first Conductor-inspired pass used heavier card styling, larger badges, stronger fixed accent colors, gradients, and shadows instead of T64's flatter theme-variable panel language.",
+      "fix": "Retuned shared tool-call CSS to use T64 theme variables (`--bg-secondary`, `--bg-tertiary`, `--border`, `--fg-*`, `--ft-border`), removed the heavy shadow/gradient treatment, reduced header height, icon size, status pills, row padding, diff blocks, and accent rail weight.",
+      "tags": [
+        "provider-chat",
+        "tool-calls",
+        "theme",
+        "css",
+        "ui"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T15:44:48Z"
+    },
+    {
+      "id": "bug-202",
+      "timestamp": "2026-05-06T15:44:48Z",
+      "error_message": "`openwolf designqc --help` failed with `zsh:1: command not found: openwolf`.",
+      "file": ".wolf/OPENWOLF.md",
+      "root_cause": "The OpenWolf protocol asks for `openwolf designqc` during UI review, but the local CLI is not installed or not on PATH in this shell.",
+      "fix": "Recorded the missing tooling and proceeded with direct CSS verification via `npm run typecheck`, `npm run build`, and `git diff --check`.",
+      "tags": [
+        "openwolf",
+        "designqc",
+        "tooling",
+        "path"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T15:44:48Z"
+    },
+    {
+      "id": "bug-203",
+      "timestamp": "2026-05-06T16:13:03Z",
+      "error_message": "`cargo test providers::util::tests::expanded_tool_path_includes_roblox_toolchain_bins providers::util::tests::npx_openwolf_bin_discovery_adds_cli_bin_dir -- --nocapture` failed with `unexpected argument`.",
+      "file": "src-tauri/src/providers/util.rs",
+      "root_cause": "Cargo accepts only one test-name filter before `--`; this repeated an already documented test invocation gotcha.",
+      "fix": "Reran the provider util tests with a single module filter: `cargo test providers::util::tests -- --nocapture`.",
+      "tags": [
+        "cargo",
+        "tests",
+        "provider-util",
+        "tooling"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T16:13:03Z"
+    },
+    {
+      "id": "bug-204",
+      "timestamp": "2026-05-06T16:13:03Z",
+      "error_message": "`cargo clippy --all-targets -- -D warnings` failed with `this call to clone can be replaced with std::slice::from_ref`.",
+      "file": "src-tauri/src/providers/util.rs",
+      "root_cause": "The new npx OpenWolf path regression test cloned a temporary root path only to build a one-element slice.",
+      "fix": "Replaced `&[root.clone()]` with `std::slice::from_ref(&root)`.",
+      "tags": [
+        "clippy",
+        "rust",
+        "provider-util",
+        "openwolf"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T16:13:03Z"
+    },
+    {
+      "id": "bug-205",
+      "timestamp": "2026-05-06T16:29:49Z",
+      "error_message": "Provider chat tool-call grouping can merge unrelated tool types into one generic group.",
+      "file": "src/components/provider-chat/useChatRows.ts",
+      "root_cause": "`useChatRows` groups consecutive tool-only assistant messages when every tool is marked groupable, but it does not split the burst by concrete tool identity before creating a `ToolGroupCard`.",
+      "fix": "Added `toolGroupKey`, split tool-only bursts into ordered same-identity runs in `buildChatVisualRows`, render single tool rows with the same `ToolCallCard`, and group repeated same MCP server/tool calls separately. Added a regression fixture proving mixed Read/Grep/Bash bursts do not collapse into one generic group.",
+      "tags": [
+        "provider-chat",
+        "tool-calls",
+        "grouping",
+        "ux"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T16:38:36Z"
+    },
+    {
+      "id": "bug-206",
+      "timestamp": "2026-05-06T16:57:47Z",
+      "error_message": "`luau-lsp analyze --formatter=json` failed with `Invalid argument \"json\" - allowed options: {default, plain, gnu}`.",
+      "file": "src-tauri/src/lib.rs",
+      "root_cause": "The installed luau-lsp analyzer does not expose JSON diagnostics for `analyze`; only `default`, `plain`, and `gnu` formatters are available.",
+      "fix": "Implemented Luau diagnostic parsing against `--formatter=plain` output and ignored luau-lsp informational warning lines.",
+      "tags": [
+        "luau",
+        "luau-lsp",
+        "diagnostics",
+        "tooling"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T16:57:47Z"
+    },
+    {
+      "id": "bug-207",
+      "timestamp": "2026-05-06T16:57:47Z",
+      "error_message": "`cargo fmt --check` failed after adding the Luau lint IPC command.",
+      "file": "src-tauri/src/lib.rs",
+      "root_cause": "The new Rust error-formatting block exceeded rustfmt's preferred line shape.",
+      "fix": "Ran `cargo fmt` and rechecked with `cargo fmt --check`.",
+      "tags": [
+        "rust",
+        "formatting",
+        "luau-lint"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T16:57:47Z"
+    },
+    {
+      "id": "bug-208",
+      "timestamp": "2026-05-06T17:26:41Z",
+      "error_message": "Opening a Luau file shows the `Luau 5` diagnostics badge in yellow even when diagnostics are warning-only.",
+      "file": "src/lib/languageDiagnostics.ts, src/hooks/useLanguageDiagnostics.ts, src/components/provider-chat/ProviderChat.tsx, src/components/provider-chat/ChatEditOverlay.tsx, src/components/provider-chat/ProviderChat.css",
+      "root_cause": "The shared diagnostics badge treated every non-error diagnostic set as the warning visual tone, and the editor overlay used the same issue class for warning-only and error diagnostics.",
+      "fix": "Changed warning-only Luau diagnostics to use a neutral theme-driven tone, tracked editor diagnostic error counts separately, and reserved red/error styling for diagnostic sets with actual errors.",
+      "tags": [
+        "luau",
+        "diagnostics",
+        "provider-chat",
+        "monaco",
+        "ui"
+      ],
+      "related_bugs": [
+        "bug-206"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T17:26:41Z"
+    },
+    {
+      "id": "bug-209",
+      "timestamp": "2026-05-06T17:34:30Z",
+      "error_message": "The `Luau N` badge turned red and Monaco diagnostics were still backed by basic CLI analyze linting.",
+      "file": "src/lib/languageDiagnostics.ts, src-tauri/src/language_tools/luau.rs",
+      "root_cause": "The topbar diagnostics badge still reflected error severity, and buffer diagnostics were sent through temp-file `luau-lsp analyze` parsing instead of the real `luau-lsp lsp --stdio` language-server path.",
+      "fix": "Made the topbar badge neutral for all diagnostic counts, added an LSP-framed `luau-lsp lsp --stdio` diagnostics path for editor buffers, and kept plain analyze as a fallback if LSP startup or diagnostics fail.",
+      "tags": [
+        "luau",
+        "luau-lsp",
+        "lsp",
+        "monaco",
+        "diagnostics",
+        "ui"
+      ],
+      "related_bugs": [
+        "bug-206",
+        "bug-208"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T17:34:30Z"
+    },
+    {
+      "id": "bug-210",
+      "timestamp": "2026-05-06T17:42:55Z",
+      "error_message": "The Luau badge was still red and the editor still felt like basic linting after the first LSP pass.",
+      "file": "src/components/provider-chat/ProviderChat.css, src/lib/luauMonacoLanguage.ts, src/lib/tauriApi.ts, src-tauri/src/lib.rs, src-tauri/src/language_tools/luau.rs",
+      "root_cause": "The first fix left the editor-local `lint-error` CSS red and only used luau-lsp LSP for diagnostics; Monaco did not yet register completion or hover providers.",
+      "fix": "Made both topbar and editor-local Luau badge/error classes neutral, added Tauri commands for luau-lsp completion and hover, registered Monaco completion/hover providers for Lua/Luau models, and kept diagnostics as Monaco markers rather than badge severity.",
+      "tags": [
+        "luau",
+        "luau-lsp",
+        "monaco",
+        "completion",
+        "hover",
+        "ui"
+      ],
+      "related_bugs": [
+        "bug-208",
+        "bug-209"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T17:42:55Z"
+    },
+    {
+      "id": "bug-211",
+      "timestamp": "2026-05-06T17:50:31Z",
+      "error_message": "After restart, Luau still felt like basic linting and the edit overlay/topbar/editor appeared clipped with unnecessary right and left padding.",
+      "file": "src-tauri/src/language_tools/luau.rs, src-tauri/Cargo.toml, src/components/provider-chat/ProviderChat.css, src/components/provider-chat/ChatEditOverlay.tsx",
+      "root_cause": "Luau-lsp was running without Roblox definition files, so Roblox globals/types such as `Player` were still unknown; the edit overlay reused `.cc-messages` scroll-frame gutter/compositing styles and Monaco had a wide glyph gutter plus conservative suggestion options.",
+      "fix": "Cached RobloxScriptSecurity global type definitions under `~/.terminal64/luau-lsp`, passed them to luau-lsp via `--definitions:@roblox=...`, reset inherited message-scroller gutter/containment on edit overlays, tightened Monaco gutters, and enabled quick suggestions/hover/trigger-character suggestions.",
+      "tags": [
+        "luau",
+        "roblox",
+        "definitions",
+        "monaco",
+        "layout",
+        "ui"
+      ],
+      "related_bugs": [
+        "bug-209",
+        "bug-210"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T17:50:31Z"
+    },
+    {
+      "id": "bug-212",
+      "timestamp": "2026-05-06T17:52:24Z",
+      "error_message": "A local luau-lsp smoke-test command accidentally tried to execute the downloaded Roblox definitions file as JavaScript.",
+      "file": "n/a",
+      "root_cause": "The `node` heredoc command passed the definitions path before `-`, so Node treated the `.d.luau` file as the script argument.",
+      "fix": "Reran the smoke test with `node - \"$defs\"` so stdin provided the script and the definitions path stayed in `process.argv`.",
+      "tags": [
+        "verification",
+        "shell",
+        "luau-lsp"
+      ],
+      "related_bugs": [
+        "bug-211"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T17:52:24Z"
+    },
+    {
+      "id": "bug-213",
+      "timestamp": "2026-05-06T18:06:00Z",
+      "error_message": "Luau Monaco still felt like basic linting, and closing/editing Monaco appeared to save file contents without an explicit Save click.",
+      "file": "src-tauri/src/language_tools/luau.rs, src-tauri/src/lib.rs, src/lib/tauriApi.ts, src/lib/luauMonacoLanguage.ts, src/components/provider-chat/ChatEditOverlay.tsx, src/components/provider-chat/ProviderChat.css",
+      "root_cause": "The Luau integration spawned stateless luau-lsp requests without a read-only Roblox/Rojo workspace settings file, leaving sourcemap behavior to luau-lsp defaults; the editor close path also preserved unsaved Monaco text as a hidden draft, which made close/reopen behavior look like a save even though the backend write command was only called by the Save button.",
+      "fix": "Added read-only luau-lsp settings with Roblox platform mode, existing sourcemap consumption, sourcemap autogeneration disabled, strict DataModel diagnostics only when a sourcemap exists, and signature-help plumbing; changed Close to discard unsaved text and made Save await the backend write before marking the editor saved.",
+      "tags": [
+        "luau",
+        "monaco",
+        "luau-lsp",
+        "sourcemap",
+        "save",
+        "editor"
+      ],
+      "related_bugs": [
+        "bug-209",
+        "bug-210",
+        "bug-211"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T18:06:00Z"
+    },
+    {
+      "id": "bug-214",
+      "timestamp": "2026-05-06T18:06:00Z",
+      "error_message": "`npm run typecheck -- --pretty false` failed with `Property 'parameters' is missing in type '{ label: string; }' but required in type 'SignatureInformation'`.",
+      "file": "src/lib/luauMonacoLanguage.ts",
+      "root_cause": "Monaco 0.55's `SignatureInformation` type requires a `parameters` array even when the LSP signature omits parameters.",
+      "fix": "Initialized mapped Monaco signature items with `parameters: []` before copying optional LSP parameter metadata.",
+      "tags": [
+        "typescript",
+        "monaco",
+        "signature-help",
+        "typecheck"
+      ],
+      "related_bugs": [
+        "bug-213"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T18:06:00Z"
+    },
+    {
+      "id": "bug-215",
+      "timestamp": "2026-05-06T18:31:31Z",
+      "error_message": "A Ro Sync project with sourcemap.json still showed only basic/false Luau diagnostics in Monaco; MatchSelectors.luau reported unknown script.Parent require/type errors even though rosync lint was clean.",
+      "file": "src-tauri/src/language_tools/luau.rs",
+      "root_cause": "The editor-buffer path always tried short-lived luau-lsp first, so unchanged files bypassed the rosync lint path that has the live/current Ro Sync context. The generated luau-lsp settings also needed VSCode-style dotted keys, and luau-lsp analyze ignores sourcemap settings unless an explicit --sourcemap argument is passed. In the user's project the checked-in sourcemap.json was stale and missing the current MatchController files, while rosync lint generated/used the correct current map.",
+      "fix": "Added shared sourcemap resolution, wrote dotted luau-lsp settings, passed --sourcemap to analyze fallback, and made unchanged Monaco buffers use the saved-file rosync lint path before raw LSP diagnostics.",
+      "tags": [
+        "luau",
+        "monaco",
+        "rosync",
+        "sourcemap",
+        "luau-lsp",
+        "diagnostics"
+      ],
+      "related_bugs": [
+        "bug-213"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T18:31:31Z"
+    },
+    {
+      "id": "bug-216",
+      "timestamp": "2026-05-06T18:42:36Z",
+      "error_message": "Luau clean badge was fixed, but Monaco still showed weak LSP semantic data such as `*error-type*`; user clarified the editor must use LSP rather than rosync lint.",
+      "file": "src-tauri/src/language_tools/luau.rs",
+      "root_cause": "The previous fix made unchanged Monaco buffers return rosync lint diagnostics, which fixed false errors but bypassed LSP for the editor diagnostics path. Direct luau-lsp was still fed the stale project sourcemap, so completion/hover/signature-help had incomplete semantic context.",
+      "fix": "Removed rosync lint from the Luau diagnostics path. For Ro Sync projects, Terminal 64 now generates a temporary current sourcemap with `rosync repair sourcemap --output <tmp>` and feeds that file into `luau-lsp lsp` and `luau-lsp analyze`; all editor diagnostics and language features remain LSP-backed.",
+      "tags": [
+        "luau",
+        "monaco",
+        "luau-lsp",
+        "sourcemap",
+        "rosync",
+        "semantics"
+      ],
+      "related_bugs": [
+        "bug-215"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T18:42:36Z"
+    },
+    {
+      "id": "bug-217",
+      "timestamp": "2026-05-06T18:42:36Z",
+      "error_message": "`cargo fmt --check` failed after adding the temporary Ro Sync sourcemap helper.",
+      "file": "src-tauri/src/language_tools/luau.rs",
+      "root_cause": "The new cache and sourcemap fallback blocks needed rustfmt line wrapping and indentation.",
+      "fix": "Ran `cargo fmt`, then reran `cargo fmt --check` successfully.",
+      "tags": [
+        "rust",
+        "formatting",
+        "luau",
+        "verification"
+      ],
+      "related_bugs": [
+        "bug-216"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T18:42:36Z"
+    },
+    {
+      "id": "bug-218",
+      "timestamp": "2026-05-06T18:51:34Z",
+      "error_message": "Luau Monaco editor still looked mostly white even though diagnostics, hover, and completion were LSP-backed.",
+      "file": "src-tauri/src/language_tools/luau.rs, src-tauri/src/lib.rs, src/lib/tauriApi.ts, src/lib/luauMonacoLanguage.ts, src/components/provider-chat/ChatEditOverlay.tsx",
+      "root_cause": "Monaco was using basic Lua syntax tokenization only. LSP semantic intelligence was available for diagnostics/hover/completion, but Terminal 64 had not requested `textDocument/semanticTokens/full`, registered a Monaco semantic token provider, or enabled semantic token coloring in the editor theme/options.",
+      "fix": "Added a Luau semantic-token IPC command backed by `luau-lsp lsp --stdio`, registered a Monaco document semantic token provider using luau-lsp's legend, enabled semantic highlighting, and added semantic color rules for types, functions, methods, properties, parameters, strings, numbers, comments, operators, and keywords.",
+      "tags": [
+        "luau",
+        "monaco",
+        "semantic-tokens",
+        "syntax-highlighting",
+        "luau-lsp",
+        "ui"
+      ],
+      "related_bugs": [
+        "bug-216"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T18:51:34Z"
+    },
+    {
+      "id": "bug-219",
+      "timestamp": "2026-05-06T19:20:43Z",
+      "error_message": "Monaco hover tooltip appeared far down and to the right from the hovered Luau symbol inside the provider chat edit overlay.",
+      "file": "src/components/provider-chat/ChatEditOverlay.tsx",
+      "root_cause": "The Monaco editor had `fixedOverflowWidgets: true`, causing hover/suggest widgets to be positioned in fixed viewport coordinates while the editor lives inside Terminal 64's transformed canvas/panel layout.",
+      "fix": "Set `fixedOverflowWidgets` to false so hover/suggest widgets stay in the editor's local coordinate system.",
+      "tags": [
+        "monaco",
+        "hover",
+        "provider-chat",
+        "layout",
+        "ui"
+      ],
+      "related_bugs": [
+        "bug-218"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T19:20:43Z"
+    },
+    {
+      "id": "bug-220",
+      "timestamp": "2026-05-06T19:32:48Z",
+      "error_message": "Large Monaco tooltips in the provider chat edit overlay were clipped by the chat/editor box, making them hard to read.",
+      "file": "src/components/provider-chat/ProviderChat.css",
+      "root_cause": "The Monaco hover position was editor-relative after fixing coordinate drift, but `.cc-edit-overlay` and `.cc-edit-overlay-editor` still clipped overflow widgets inside the chat panel.",
+      "fix": "Allowed the edit overlay and editor wrapper to overflow visibly and raised Monaco hover, suggest, parameter-hints, and overflowing content widget layers above the chat/editor chrome.",
+      "tags": [
+        "monaco",
+        "hover",
+        "tooltip",
+        "provider-chat",
+        "layout",
+        "ui"
+      ],
+      "related_bugs": [
+        "bug-219"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T19:32:48Z"
+    },
+    {
+      "id": "bug-221",
+      "timestamp": "2026-05-06T19:40:03Z",
+      "error_message": "CSS-only Monaco tooltip overflow fix still left large hover widgets trapped inside the provider chat panel, and Luau semantic colors loaded inconsistently.",
+      "file": "src/components/provider-chat/ChatEditOverlay.tsx, src/components/provider-chat/ProviderChat.css, src/lib/luauMonacoLanguage.ts",
+      "root_cause": "Monaco overflow widgets were still mounted under the transformed/clipped editor subtree. The semantic token provider also had no `onDidChange` event, so if Monaco asked for semantic tokens before Terminal 64 attached the Luau file/cwd context, it could return null and not reliably retry.",
+      "fix": "Mounted Monaco overflow widgets into a body-level `overflowWidgetsDomNode`, enabled fixed overflow only for that portal, and added a Luau semantic-token change event fired when model context is attached.",
+      "tags": [
+        "monaco",
+        "hover",
+        "tooltip",
+        "semantic-tokens",
+        "provider-chat",
+        "layout",
+        "ui"
+      ],
+      "related_bugs": [
+        "bug-219",
+        "bug-220",
+        "bug-218"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T19:40:03Z"
+    },
+    {
+      "id": "bug-222",
+      "timestamp": "2026-05-06T19:44:21Z",
+      "error_message": "After moving Monaco hover widgets to a body-level portal, the Luau hover rendered without a visible background.",
+      "file": "src/components/provider-chat/ChatEditOverlay.tsx, src/components/provider-chat/ProviderChat.css",
+      "root_cause": "The body-level overflow root was outside Monaco's normal `.monaco-editor` themed subtree, so hover/suggest widget selectors and VS Code CSS variables did not apply consistently.",
+      "fix": "Gave the overflow root Monaco theme classes and explicit Terminal 64/Monaco widget CSS variables plus fallback backgrounds, borders, shadows, and transparent inner surfaces for hover, suggest, and parameter hint widgets.",
+      "tags": [
+        "monaco",
+        "hover",
+        "tooltip",
+        "theme",
+        "provider-chat",
+        "ui"
+      ],
+      "related_bugs": [
+        "bug-221"
+      ],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T19:44:21Z"
+    },
+    {
+      "id": "bug-223",
+      "timestamp": "2026-05-06T20:01:09Z",
+      "error_message": "User could not use Ctrl+Z in the Monaco provider chat edit overlay.",
+      "file": "src/components/provider-chat/ChatEditOverlay.tsx",
+      "root_cause": "The edit overlay relied on Monaco's default key handling while Terminal 64 has several window/app-level keyboard layers. Undo/redo shortcuts were not being reliably claimed by the editor while focus was inside Monaco.",
+      "fix": "Added a capture-phase keydown listener on the Monaco editor DOM that owns Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, and Ctrl/Cmd+Y while the editor is focused and triggers Monaco undo/redo directly.",
+      "tags": [
+        "monaco",
+        "keyboard",
+        "undo",
+        "redo",
+        "provider-chat",
+        "ui"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T20:01:09Z"
+    },
+    {
+      "id": "bug-224",
+      "timestamp": "2026-05-06T20:13:01Z",
+      "error_message": "Clicking normalized Edit/MultiEdit tool calls should mark newly added lines green and scroll the Monaco overlay to the middle of them, but it was not reliable.",
+      "file": "src/components/provider-chat/ChatEditOverlay.tsx",
+      "root_cause": "The edit overlay only searched for the whole `new_string` literally in the saved file. Normalized provider edit cards often pass unified diff text instead, so no real file line numbers were found. The reveal also ran immediately during mount before Monaco necessarily finished layout.",
+      "fix": "Added unified diff hunk parsing plus added-line fallback matching for changed-line detection, and deferred `revealLineInCenter` to the next animation frame with an immediate Monaco scroll type.",
+      "tags": [
+        "monaco",
+        "edit-overlay",
+        "tool-call",
+        "diff",
+        "highlight",
+        "scroll"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T20:13:01Z"
+    },
+    {
+      "id": "bug-225",
+      "timestamp": "2026-05-06T20:35:07Z",
+      "error_message": "Luau files did not count as code files in the provider chat file browser popup.",
+      "file": "src/components/provider-chat/FileTree.tsx",
+      "root_cause": "The provider chat file browser's local code-extension allowlist included `lua` but not `luau`, so `.luau` files rendered as dim non-code entries and were not clickable from the browser/search list.",
+      "fix": "Added `luau` to the code-extension set used by the provider chat file browser.",
+      "tags": [
+        "luau",
+        "provider-chat",
+        "file-browser",
+        "ui"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T20:35:07Z"
+    },
+    {
+      "id": "bug-226",
+      "timestamp": "2026-05-06T20:35:07Z",
+      "error_message": "Delegation summaries were saved directly into the project directory instead of a hidden Terminal 64 folder.",
+      "file": "src/hooks/useDelegationOrchestrator.ts, src-tauri/src/lib.rs",
+      "root_cause": "The delegation chat-log exporter joined the generated markdown filename directly onto `cwd`, and the backend write command did not create missing parent directories.",
+      "fix": "Changed delegation log paths to `cwd/.t64/<delegation-log>.md`, taught backend file writes to create parent folders, and excluded `.t64` from backend file search traversal.",
+      "tags": [
+        "delegation",
+        "summaries",
+        "file-output",
+        "project-metadata"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-06T20:35:07Z"
+    },
+    {
+      "id": "bug-227",
+      "timestamp": "2026-05-07T01:12:40Z",
+      "error_message": "Discord voice messages were transcribed and echoed back to Discord, but did not reliably enter the frontend as regular provider prompts; user also asked to remove the standalone voice assistant while keeping Discord voice messages.",
+      "file": "src/App.tsx, src/components/canvas/Canvas.tsx, src/components/settings/SettingsPanel.tsx, src/components/provider-chat/ProviderChat.tsx, src/lib/keybindingEngine.ts",
+      "root_cause": "The wake-word voice assistant was still mounted in the app shell/settings/canvas and shared the same voice/Whisper setup surface as Discord voice notes. Discord prompt routing also depended on a mounted ProviderChat listener, so a transcribed voice note for a linked-but-closed chat could emit `discord-prompt` with no frontend consumer.",
+      "fix": "Removed the standalone voice assistant hook, command, keybinding, canvas widgets, provider-chat voice action registration, and settings section. Kept a Discord-only Whisper model download in Discord settings, and added an App-level `discord-prompt` rerouter that opens the linked chat panel and replays the event into ProviderChat's normal handleSend path when needed.",
+      "tags": [
+        "discord",
+        "voice-message",
+        "whisper",
+        "provider-chat",
+        "voice-assistant"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-05-07T01:12:40Z"
     }
   ]
 }

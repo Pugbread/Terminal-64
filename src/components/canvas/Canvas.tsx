@@ -5,9 +5,6 @@ import { useSettingsStore } from "../../stores/settingsStore";
 import { useShallow } from "zustand/react/shallow";
 import { readFileBase64 } from "../../lib/tauriApi";
 import FloatingTerminal from "./FloatingTerminal";
-import VoiceStatusBadge from "../provider-chat/VoiceStatusBadge";
-import VoiceLivePanel from "../provider-chat/VoiceLivePanel";
-import VoiceMascot from "../provider-chat/VoiceMascot";
 import "./Canvas.css";
 
 const FOCUS_LAYER_Z = 2_000_000;
@@ -369,21 +366,15 @@ export default function Canvas() {
         </div>
       )}
 
-      {/* Bottom-right status cluster: mascot + state on left, mic + zoom stacked on right */}
-      <div className="canvas-status-cluster">
-        <div className="cc-voice-stack">
-          <VoiceMascot />
-          <VoiceLivePanel />
-        </div>
-        <div className="canvas-right-col">
-          <VoiceStatusBadge />
-          {zoom !== 1 && (
+      {zoom !== 1 && (
+        <div className="canvas-status-cluster">
+          <div className="canvas-right-col">
             <div className="canvas-zoom-badge">
               {Math.round(zoom * 100)}%
             </div>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
     </div>
   );

@@ -38,6 +38,7 @@ import type {
   ChatMessage,
   ToolCall,
   PermissionMode,
+  LuauLintResult,
 } from "./types";
 import { joinPath } from "./platform";
 import { getProviderDefaultControlValues, isClaudePermissionId, type ProviderId } from "./providers";
@@ -526,6 +527,77 @@ export async function readFile(path: string): Promise<string> {
 
 export async function writeFile(path: string, content: string): Promise<void> {
   return invoke("write_file", { path, content });
+}
+
+export async function lintLuauFile(path: string, content?: string, cwd?: string): Promise<LuauLintResult> {
+  const args: { path: string; content?: string; cwd?: string } = { path };
+  if (content !== undefined) args.content = content;
+  if (cwd !== undefined) args.cwd = cwd;
+  return invoke("lint_luau_file", args);
+}
+
+export async function luauLspCompletion(
+  path: string,
+  content: string,
+  cwd: string | undefined,
+  line: number,
+  column: number,
+): Promise<unknown> {
+  const args: { path: string; content: string; cwd?: string; line: number; column: number } = {
+    path,
+    content,
+    line,
+    column,
+  };
+  if (cwd !== undefined) args.cwd = cwd;
+  return invoke("luau_lsp_completion", args);
+}
+
+export async function luauLspHover(
+  path: string,
+  content: string,
+  cwd: string | undefined,
+  line: number,
+  column: number,
+): Promise<unknown> {
+  const args: { path: string; content: string; cwd?: string; line: number; column: number } = {
+    path,
+    content,
+    line,
+    column,
+  };
+  if (cwd !== undefined) args.cwd = cwd;
+  return invoke("luau_lsp_hover", args);
+}
+
+export async function luauLspSignatureHelp(
+  path: string,
+  content: string,
+  cwd: string | undefined,
+  line: number,
+  column: number,
+): Promise<unknown> {
+  const args: { path: string; content: string; cwd?: string; line: number; column: number } = {
+    path,
+    content,
+    line,
+    column,
+  };
+  if (cwd !== undefined) args.cwd = cwd;
+  return invoke("luau_lsp_signature_help", args);
+}
+
+export async function luauLspSemanticTokens(
+  path: string,
+  content: string,
+  cwd: string | undefined,
+): Promise<unknown> {
+  const args: { path: string; content: string; cwd?: string } = {
+    path,
+    content,
+  };
+  if (cwd !== undefined) args.cwd = cwd;
+  return invoke("luau_lsp_semantic_tokens", args);
 }
 
 export async function listMcpServers(cwd: string): Promise<McpServer[]> {

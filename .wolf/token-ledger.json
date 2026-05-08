@@ -379,14 +379,14 @@
   "waste_flags": [
     {
       "pattern": "memory_bloat",
-      "description": "memory.md is ~6204 tokens",
-      "tokens_wasted": 1204,
+      "description": "memory.md is ~40408 tokens",
+      "tokens_wasted": 35408,
       "suggestion": "memory.md is growing large. Consolidation should run more frequently.",
-      "detected_at": "2026-04-26T22:00:00.768Z"
+      "detected_at": "2026-05-03T22:00:00.171Z"
     }
   ],
   "optimization_report": {
-    "last_generated": "2026-04-26T22:00:00.768Z",
+    "last_generated": "2026-05-03T22:00:00.172Z",
     "patterns": [
       "memory_bloat"
     ]

@@ -29,7 +29,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "../ui/DropdownMenu";
-import ChatMessage, { ToolGroupCard } from "./ChatMessage";
+import ChatMessage, { ToolCallCard, ToolGroupCard } from "./ChatMessage";
 import PromptIsland from "./PromptIsland";
 import type { UserPromptRow, VisualRow } from "./useChatRows";
 
@@ -211,6 +211,15 @@ export default function ChatMessageList({
             <div data-msg-id={row.msgId} className="cc-message cc-message--assistant">
               <div className="cc-tc-list">
                 <ToolGroupCard tcs={row.tcs} />
+              </div>
+            </div>
+          );
+          break;
+        case "tool":
+          inner = (
+            <div data-msg-id={row.msgId} className="cc-message cc-message--assistant">
+              <div className="cc-tc-list">
+                <ToolCallCard tc={row.tc} onEditClick={onEditClick} />
               </div>
             </div>
           );
